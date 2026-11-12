@@ -94,10 +94,12 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("editor", &editor);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);
+    // The module is embedded under qrc:/VideoStudio (Qt 6.4-compatible
+    // resource prefix), which is not on the default import path of Qt >= 6.5.
+    engine.addImportPath(QStringLiteral("qrc:/"));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     engine.loadFromModule("VideoStudio", "Main");
 #else
-    engine.addImportPath(QStringLiteral("qrc:/"));
     engine.load(QUrl(QStringLiteral("qrc:/VideoStudio/qml/Main.qml")));
 #endif
     if (auto* root = engine.rootObjects().value(0)) {
