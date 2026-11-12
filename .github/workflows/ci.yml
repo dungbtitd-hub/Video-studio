@@ -39,6 +39,11 @@ jobs:
       - name: Desktop smoke test (screenshot)
         run: |
           xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudio a.mp4 b.mp4 --seek 5 --screenshot desktop.png
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudioWidgets a.mp4 b.mp4 --seek 5 --screenshot desktop-widgets.png
+      - name: Timeline smoothness, QML vs Widgets (3000 clips)
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudioWidgets --bench-timeline 3000 | tee timeline-bench.txt
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudio --bench-timeline 3000 | tee -a timeline-bench.txt
       - name: Benchmark (quick)
         run: ./build/bench/vstudio_bench --quick | tee bench.md
       - uses: actions/upload-artifact@v4
@@ -46,6 +51,8 @@ jobs:
           name: linux-results
           path: |
             desktop.png
+            desktop-widgets.png
+            timeline-bench.txt
             bench.md
             out.mp4
 
