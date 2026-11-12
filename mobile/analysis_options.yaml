@@ -1,0 +1,11 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+  errors:
+    # Flutter 3.47+ moves Material to package:material_ui; keep package:flutter/material.dart
+    # until the minimum supported Flutter version includes it.
+    deprecated_member_use: ignore

@@ -1,0 +1,5 @@
+add_executable(vstudio_bench bench_main.cpp)
+target_link_libraries(vstudio_bench PRIVATE vstudio::core)
+if(VSTUDIO_WITH_FFMPEG)
+  target_link_libraries(vstudio_bench PRIVATE vstudio::ffmpeg)
+endif()
