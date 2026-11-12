@@ -1,8 +1,7 @@
 # Builds libvstudio (core + C API) for Android through Gradle's externalNativeBuild:
 #   android/app/build.gradle:
 #     android { externalNativeBuild { cmake { path "../../native/CMakeLists.txt" } } }
-# Media on Android goes through the MediaCodec module (adapters/android, P0 week 3-4);
-# until it lands the session reports "no media module" for import.
+# Media on Android goes through the MediaCodec module (adapters/android).
 cmake_minimum_required(VERSION 3.21)
 project(vstudio_mobile LANGUAGES C CXX)
 set(VSTUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)

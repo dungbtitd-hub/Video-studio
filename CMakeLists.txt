@@ -48,6 +48,10 @@ if(VSTUDIO_WITH_FFMPEG)
   endif()
 endif()
 
+if(ANDROID)
+  add_subdirectory(adapters/android)
+endif()
+
 add_subdirectory(capi)
 
 if(VSTUDIO_BUILD_CLI AND VSTUDIO_WITH_FFMPEG)
