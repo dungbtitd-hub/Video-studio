@@ -1,0 +1,15 @@
+/build*/
+/out/
+.vs/
+.vscode/
+.idea/
+*.user
+CMakeUserPresets.json
+.DS_Store
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+mobile/.packages
+# Test media generated locally
+/testdata/generated/
