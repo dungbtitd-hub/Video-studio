@@ -1,1 +1,20 @@
+# Stable C API (Flutter dart:ffi, future plugins).
+if(VSTUDIO_BUILD_CAPI_SHARED)
+  add_library(vstudio_capi SHARED src/vstudio_c.cpp)
+else()
+  add_library(vstudio_capi STATIC src/vstudio_c.cpp)
+endif()
+target_include_directories(vstudio_capi PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_compile_definitions(vstudio_capi PRIVATE VSTUDIO_CAPI_BUILD)
+target_link_libraries(vstudio_capi PRIVATE vstudio::core)
+set_target_properties(vstudio_capi PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden
+                                              VISIBILITY_INLINES_HIDDEN ON OUTPUT_NAME vstudio)
+if(VSTUDIO_WITH_FFMPEG)
+  target_link_libraries(vstudio_capi PRIVATE vstudio::ffmpeg)
+endif()
 
+if(VSTUDIO_BUILD_TESTS)
+  add_executable(vstudio_capi_tests tests/test_capi.c)
+  target_link_libraries(vstudio_capi_tests PRIVATE vstudio_capi)
+  add_test(NAME capi_tests COMMAND vstudio_capi_tests)
+endif()

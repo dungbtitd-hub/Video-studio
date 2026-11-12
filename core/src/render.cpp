@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 
 #include "detail/paths.hpp"
@@ -35,6 +36,31 @@ Transform Transform::fromJson(const Json& j) {
     return t;
 }
 
+namespace {
+
+// Blends one straight-alpha pixel `c` (alpha already multiplied by opacity: a in 0..255) over `d`.
+inline void blendPixel(std::uint8_t* d, const std::uint8_t* c, unsigned a) {
+    if (a == 255) {
+        d[0] = c[0];
+        d[1] = c[1];
+        d[2] = c[2];
+        d[3] = 255;
+        return;
+    }
+    if (a == 0) return;
+    if (d[3] == 255) {  // common case: opaque canvas
+        const unsigned ia = 255 - a;
+        for (int k = 0; k < 3; ++k) d[k] = static_cast<std::uint8_t>((c[k] * a + d[k] * ia + 127) / 255);
+        return;
+    }
+    const unsigned da = d[3] * (255 - a) / 255;
+    const unsigned oa = a + da;
+    for (int k = 0; k < 3; ++k) d[k] = static_cast<std::uint8_t>(oa ? (c[k] * a + d[k] * da) / oa : 0);
+    d[3] = static_cast<std::uint8_t>(oa);
+}
+
+}  // namespace
+
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) {
     if (src.empty() || dst.empty() || tr.opacity <= 0.0 || tr.scale <= 0.0) return;
     // Fit (contain) then scale, centred, then offset.
@@ -43,46 +69,74 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     const double w = src.width * s, h = src.height * s;
     const double left = (dst.width - w) / 2.0 + tr.x;
     const double top = (dst.height - h) / 2.0 + tr.y;
+    const unsigned opacity = static_cast<unsigned>(std::lround(std::clamp(tr.opacity, 0.0, 1.0) * 255.0));
+    const int sw = src.width, sh = src.height;
+    const std::uint8_t* sp = src.rgba.data();
+
+    // Fast path: the decoder already produced the exact output size (preview
+    // decodes to the preview box), so no resampling is needed - copy/blend rows.
+    const int ileft = static_cast<int>(std::lround(left)), itop = static_cast<int>(std::lround(top));
+    if (std::abs(s - 1.0) < 1e-9 && std::abs(left - ileft) < 1e-6 && std::abs(top - itop) < 1e-6) {
+        const int x0 = std::max(0, ileft), x1 = std::min(dst.width, ileft + sw);
+        const int y0 = std::max(0, itop), y1 = std::min(dst.height, itop + sh);
+        if (x1 <= x0) return;
+        for (int y = y0; y < y1; ++y) {
+            const std::uint8_t* srow = sp + (static_cast<std::size_t>(y - itop) * sw + (x0 - ileft)) * 4;
+            std::uint8_t* drow = dst.rgba.data() + (static_cast<std::size_t>(y) * dst.width + x0) * 4;
+            if (opacity == 255) {
+                bool opaque = true;
+                for (int x = 0; x < x1 - x0 && opaque; ++x) opaque = srow[x * 4 + 3] == 255;
+                if (opaque) {
+                    std::memcpy(drow, srow, static_cast<std::size_t>(x1 - x0) * 4);
+                    continue;
+                }
+            }
+            for (int x = 0; x < x1 - x0; ++x) blendPixel(drow + x * 4, srow + x * 4, srow[x * 4 + 3] * opacity / 255);
+        }
+        return;
+    }
+
+    // General path: bilinear resampling in 8.8 fixed point with per-column tables.
     const int x0 = std::max(0, static_cast<int>(std::floor(left)));
     const int y0 = std::max(0, static_cast<int>(std::floor(top)));
     const int x1 = std::min(dst.width, static_cast<int>(std::ceil(left + w)));
     const int y1 = std::min(dst.height, static_cast<int>(std::ceil(top + h)));
+    if (x1 <= x0 || y1 <= y0) return;
     const double inv = 1.0 / s;
-    const int sw = src.width, sh = src.height;
-    const std::uint8_t* sp = src.rgba.data();
+    struct Col {
+        int i0, i1;
+        unsigned f;  // 0..256
+        bool inside;
+    };
+    std::vector<Col> cols(static_cast<std::size_t>(x1 - x0));
+    for (int x = x0; x < x1; ++x) {
+        const double sx = (x + 0.5 - left) * inv - 0.5;
+        Col& c = cols[static_cast<std::size_t>(x - x0)];
+        c.inside = sx >= -0.5 && sx <= sw - 0.5;
+        const int ix = std::clamp(static_cast<int>(std::floor(sx)), 0, sw - 1);
+        c.i0 = ix * 4;
+        c.i1 = std::min(ix + 1, sw - 1) * 4;
+        c.f = static_cast<unsigned>(std::lround(std::clamp(sx - ix, 0.0, 1.0) * 256));
+    }
     for (int y = y0; y < y1; ++y) {
-        // Bilinear sample position (pixel centres).
         const double sy = (y + 0.5 - top) * inv - 0.5;
         if (sy < -0.5 || sy > sh - 0.5) continue;
         const int iy = std::clamp(static_cast<int>(std::floor(sy)), 0, sh - 1);
         const int iy1 = std::min(iy + 1, sh - 1);
-        const double fy = std::clamp(sy - iy, 0.0, 1.0);
+        const unsigned fy = static_cast<unsigned>(std::lround(std::clamp(sy - iy, 0.0, 1.0) * 256));
+        const std::uint8_t* r0 = sp + static_cast<std::size_t>(iy) * sw * 4;
+        const std::uint8_t* r1 = sp + static_cast<std::size_t>(iy1) * sw * 4;
         std::uint8_t* drow = dst.rgba.data() + static_cast<std::size_t>(y) * dst.width * 4;
         for (int x = x0; x < x1; ++x) {
-            const double sx = (x + 0.5 - left) * inv - 0.5;
-            if (sx < -0.5 || sx > sw - 0.5) continue;
-            const int ix = std::clamp(static_cast<int>(std::floor(sx)), 0, sw - 1);
-            const int ix1 = std::min(ix + 1, sw - 1);
-            const double fx = std::clamp(sx - ix, 0.0, 1.0);
-            const std::uint8_t* p00 = sp + (static_cast<std::size_t>(iy) * sw + ix) * 4;
-            const std::uint8_t* p01 = sp + (static_cast<std::size_t>(iy) * sw + ix1) * 4;
-            const std::uint8_t* p10 = sp + (static_cast<std::size_t>(iy1) * sw + ix) * 4;
-            const std::uint8_t* p11 = sp + (static_cast<std::size_t>(iy1) * sw + ix1) * 4;
-            double c[4];
+            const Col& c = cols[static_cast<std::size_t>(x - x0)];
+            if (!c.inside) continue;
+            std::uint8_t px[4];
             for (int k = 0; k < 4; ++k) {
-                const double top_ = p00[k] + (p01[k] - p00[k]) * fx;
-                const double bot = p10[k] + (p11[k] - p10[k]) * fx;
-                c[k] = top_ + (bot - top_) * fy;
+                const unsigned t = r0[c.i0 + k] * (256 - c.f) + r0[c.i1 + k] * c.f;
+                const unsigned b = r1[c.i0 + k] * (256 - c.f) + r1[c.i1 + k] * c.f;
+                px[k] = static_cast<std::uint8_t>((t * (256 - fy) + b * fy + 32768) >> 16);
             }
-            const double a = (c[3] / 255.0) * tr.opacity;
-            std::uint8_t* d = drow + static_cast<std::size_t>(x) * 4;
-            const double da = d[3] / 255.0;
-            const double oa = a + da * (1.0 - a);
-            for (int k = 0; k < 3; ++k) {
-                const double v = oa > 0 ? (c[k] * a + d[k] * da * (1.0 - a)) / oa : 0.0;
-                d[k] = static_cast<std::uint8_t>(std::clamp(v + 0.5, 0.0, 255.0));
-            }
-            d[3] = static_cast<std::uint8_t>(std::clamp(oa * 255.0 + 0.5, 0.0, 255.0));
+            blendPixel(drow + static_cast<std::size_t>(x) * 4, px, px[3] * opacity / 255);
         }
     }
 }
@@ -155,7 +209,7 @@ void Renderer::warn(std::string w) {
 VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::string& purpose) {
     VideoFrame out;
     out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height);
-    for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;
+    for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
     out.pts = t;
     for (const auto& layer : evaluateVideo(project_, t)) {
         auto frame = sourceFrame(layer, out.width, out.height, purpose);
