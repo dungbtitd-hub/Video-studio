@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-linux:
+    name: Core + FFmpeg + Qt (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nlohmann-json3-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window qml6-module-qtqml-workerscript qml6-module-qtquick-templates \
+            qml6-module-qtquick-dialogs qml6-module-qtcore xvfb ffmpeg
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVSTUDIO_BUILD_DESKTOP=ON
+      - name: Build
+        run: cmake --build build
+      - name: Unit + integration tests
+        run: ctest --test-dir build --output-on-failure
+      - name: P0 flow (import -> edit -> export) with the CLI
+        run: |
+          ffmpeg -v error -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=440 -t 4 -c:v libx264 -c:a aac -shortest a.mp4
+          ffmpeg -v error -f lavfi -i mandelbrot=size=1920x1080:rate=25 -f lavfi -i sine=frequency=660 -t 3 -c:v libx264 -c:a aac -shortest b.mp4
+          ./build/tools/vstudio-cli/vstudio-cli demo out.mp4 a.mp4 b.mp4
+          ./build/tools/vstudio-cli/vstudio-cli probe out.mp4
+      - name: Desktop smoke test (screenshot)
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudio a.mp4 b.mp4 --seek 5 --screenshot desktop.png
+      - name: Benchmark (quick)
+        run: ./build/bench/vstudio_bench --quick | tee bench.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-results
+          path: |
+            desktop.png
+            bench.md
+            out.mp4
+
+  core-macos:
+    name: Core + FFmpeg (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install ninja pkg-config ffmpeg nlohmann-json
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build
+        run: cmake --build build
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+
+  core-windows:
+    name: Core (Windows, MSVC)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DVSTUDIO_WITH_FFMPEG=OFF
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  core-android:
+    name: Core + C API (Android arm64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          cmake -S mobile/native -B build-android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-android
+      - name: Check exported symbols
+        run: |
+          $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm -D --defined-only \
+            build-android/vstudio/capi/libvstudio.so | grep ' T vs_' | tee symbols.txt
+          test $(wc -l < symbols.txt) -ge 30
+
+  core-ios:
+    name: Core + C API (iOS arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - name: Build static core for iOS
+        run: ./scripts/build_ios_core.sh build-ios
+
+  flutter:
+    name: Flutter (analyze, test, FFI against the real core)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nlohmann-json3-dev ffmpeg \
+            libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev
+      - name: Build libvstudio
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF
+          cmake --build build --target vstudio_capi
+          ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine -t 3 -c:v libx264 -c:a aac -shortest clip.mp4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Analyze and test
+        working-directory: mobile
+        env:
+          VSTUDIO_LIB: ${{ github.workspace }}/build/capi/libvstudio.so
+          VSTUDIO_TEST_MEDIA: ${{ github.workspace }}/clip.mp4
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
