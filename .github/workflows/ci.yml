@@ -51,7 +51,7 @@ jobs:
 
   core-macos:
     name: Core + FFmpeg (macOS)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -95,7 +95,7 @@ jobs:
 
   core-ios:
     name: Core + C API (iOS arm64)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: brew install ninja
