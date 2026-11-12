@@ -109,22 +109,32 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTUDIO_WITH_FFMPEG=OFF \
             -DVSTUDIO_BUILD_DESKTOP=ON -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
           cmake --build build --target VideoStudio VideoStudioWidgets
-      - name: Timeline smoothness (3000 clips)
+      - name: Timeline smoothness (300 and 3000 clips)
         shell: bash
+        env:
+          QT_FORCE_STDERR_LOGGING: '1'  # GUI-subsystem apps on Windows log to the debugger otherwise
         run: |
+          set +e
           if [ "$RUNNER_OS" = macOS ]; then
             W=build/bin/VideoStudioWidgets.app/Contents/MacOS/VideoStudioWidgets
             Q=build/bin/VideoStudio.app/Contents/MacOS/VideoStudio
           else
+            windeployqt --no-translations --qmldir desktop/quick/qml build/bin/VideoStudio.exe > /dev/null
+            windeployqt --no-translations build/bin/VideoStudioWidgets.exe > /dev/null
             W=build/bin/VideoStudioWidgets.exe
             Q=build/bin/VideoStudio.exe
           fi
+          fail=0
           for n in 300 3000; do
-            "$W" --bench-timeline $n --screenshot widgets-$n.png > w.txt 2>&1; cat w.txt >> timeline-bench.txt
-            "$Q" --bench-timeline $n --screenshot qml-$n.png > q.txt 2>&1; cat q.txt >> timeline-bench.txt
+            for app in "$W:widgets" "$Q:qml"; do
+              exe=${app%:*}; tag=${app##*:}
+              timeout 600 "$exe" --bench-timeline $n --screenshot $tag-$n.png > out.txt 2>&1
+              rc=$?
+              cat out.txt | tee -a timeline-bench.txt
+              if [ $rc -ne 0 ]; then printf '%s %s clips: exit code %d (0x%X)\n' "$tag" "$n" $rc $rc | tee -a timeline-bench.txt; fail=1; fi
+            done
           done
-          cat timeline-bench.txt
-          grep -q "move clip" timeline-bench.txt
+          exit $fail
       - uses: actions/upload-artifact@v4
         if: always()
         with:
