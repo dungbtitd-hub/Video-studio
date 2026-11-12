@@ -14,7 +14,7 @@
 | Cache khung hình + proxy | Xong | xem `docs/benchmarks/` |
 | Export MP4 H.264/AAC | Xong (FFmpeg) | chạy nền, có tiến độ và hủy |
 | Desktop Qt shell | Xong (QML và Widgets) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
-| Desktop Qt Widgets prototype | Xong, chờ chốt | so sánh trong `docs/benchmarks/qml-vs-widgets.md`; đề xuất chọn Widgets |
+| Desktop Qt Widgets prototype | Xong, chờ chốt | so sánh trong `docs/benchmarks/qml-vs-widgets.md`; đề xuất chọn Widgets, chờ đo trên máy Windows/macOS thật |
 | Module FFmpeg (Windows) | Code xong | CI Windows hiện build core không FFmpeg; cần thêm FFmpeg qua vcpkg |
 | Module Apple (macOS/iOS) | Chưa | AVFoundation/VideoToolbox, dùng chung macOS và iOS |
 | Module MediaCodec (Android) | Đang làm | nhánh `p0/android-mediacodec`, chưa build |

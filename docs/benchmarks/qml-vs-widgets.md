@@ -64,6 +64,10 @@ lệnh sửa trong core, giống nhau ở hai bản, không phải chi phí giao
 Nếu chốt Widgets: giữ bản QML đến hết P0 để tham chiếu, rồi bỏ `desktop/quick/`
 ở P1. Lớp `desktop/common/` đã tách sẵn nên việc bỏ không ảnh hưởng gì khác.
 
+Trạng thái (12/11/2026): chưa chốt, giữ cả hai bản và đo thêm trên máy thật. CI job
+`desktop-bench` chạy cùng phép đo trên Windows và macOS (máy runner không có GPU);
+máy của nhóm có GPU chạy hai lệnh ở trên và gửi kết quả.
+
 Cần đo lại trên máy thật (Windows, macOS có GPU) trước khi chốt hẳn: render phần
 mềm trên Xvfb làm QML chậm hơn thực tế, nhưng không đổi được nguyên nhân chính là
 dựng lại delegate theo số clip.

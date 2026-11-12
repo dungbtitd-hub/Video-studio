@@ -82,6 +82,57 @@ jobs:
       - name: Tests
         run: ctest --test-dir build -C Release --output-on-failure
 
+  desktop-bench:
+    # Real Windows/macOS machines (no GPU on hosted runners), to compare the
+    # QML and Widgets shells beyond the Linux VM. See docs/benchmarks/qml-vs-widgets.md.
+    name: Desktop QML vs Widgets (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          modules: qtmultimedia
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja nlohmann-json
+      - name: Configure and build
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTUDIO_WITH_FFMPEG=OFF \
+            -DVSTUDIO_BUILD_DESKTOP=ON -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
+          cmake --build build --target VideoStudio VideoStudioWidgets
+      - name: Timeline smoothness (3000 clips)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            W=build/bin/VideoStudioWidgets.app/Contents/MacOS/VideoStudioWidgets
+            Q=build/bin/VideoStudio.app/Contents/MacOS/VideoStudio
+          else
+            W=build/bin/VideoStudioWidgets.exe
+            Q=build/bin/VideoStudio.exe
+          fi
+          for n in 300 3000; do
+            "$W" --bench-timeline $n --screenshot widgets-$n.png > w.txt 2>&1; cat w.txt >> timeline-bench.txt
+            "$Q" --bench-timeline $n --screenshot qml-$n.png > q.txt 2>&1; cat q.txt >> timeline-bench.txt
+          done
+          cat timeline-bench.txt
+          grep -q "move clip" timeline-bench.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-bench-${{ matrix.os }}
+          path: |
+            timeline-bench.txt
+            *.png
+
   core-android:
     name: Core + C API (Android arm64)
     runs-on: ubuntu-24.04
