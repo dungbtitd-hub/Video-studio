@@ -1,0 +1,158 @@
+#include "vstudio/timeline.hpp"
+
+#include <algorithm>
+
+namespace vstudio::edit {
+
+namespace {
+
+Track& requireTrack(Project& p, const Id& id) {
+    Track* t = p.findTrack(id);
+    if (!t) throw EditError("track not found: " + id);
+    return *t;
+}
+
+Track& requireUnlocked(Project& p, const Id& id) {
+    Track& t = requireTrack(p, id);
+    if (t.locked) throw EditError("track is locked: " + t.name);
+    return t;
+}
+
+Clip& requireClip(Project& p, const Id& clipId, Track** owner = nullptr) {
+    Track* t = p.trackOfClip(clipId);
+    if (!t) throw EditError("clip not found: " + clipId);
+    if (t->locked) throw EditError("track is locked: " + t->name);
+    if (owner) *owner = t;
+    return *t->findClip(clipId);
+}
+
+void checkNoOverlap(const Track& t, const TimeRange& r, const Id& ignoreClip) {
+    for (const auto& c : t.clips) {
+        if (c.id == ignoreClip) continue;
+        if (c.range().overlaps(r)) throw EditError("clip would overlap " + c.id + " on track " + t.name);
+    }
+}
+
+Time minDuration(const Project& p) { return Time::fromFrame(1, p.fps); }
+
+// Source media bounds. Still images have no upper bound.
+void checkSourceRange(const Project& p, const Clip& c) {
+    const MediaAsset* a = p.findAsset(c.assetId);
+    if (!a) throw EditError("asset not found: " + c.assetId);
+    if (c.sourceIn < Time::zero()) throw EditError("source in before media start");
+    if (c.sourceOut <= c.sourceIn) throw EditError("empty clip");
+    if (a->type != MediaType::Image && c.sourceOut > a->duration) throw EditError("source out beyond media end");
+}
+
+}  // namespace
+
+bool compatible(const MediaAsset& a, TrackType t) {
+    if (t == TrackType::Video) return a.hasVideo || a.type == MediaType::Image;
+    return a.audio.has_value();
+}
+
+void addTrack(Project& p, Track track, std::size_t index) {
+    if (track.id.empty() || p.findTrack(track.id)) throw EditError("duplicate or empty track id");
+    index = std::min(index, p.tracks.size());
+    p.tracks.insert(p.tracks.begin() + static_cast<std::ptrdiff_t>(index), std::move(track));
+}
+
+void removeTrack(Project& p, const Id& trackId) {
+    auto it = std::find_if(p.tracks.begin(), p.tracks.end(), [&](const Track& t) { return t.id == trackId; });
+    if (it == p.tracks.end()) throw EditError("track not found: " + trackId);
+    if (it->locked) throw EditError("track is locked");
+    p.tracks.erase(it);
+}
+
+void addAsset(Project& p, MediaAsset asset) {
+    if (asset.id.empty() || p.findAsset(asset.id)) throw EditError("duplicate or empty asset id");
+    p.assets.push_back(std::move(asset));
+}
+
+void insertClip(Project& p, const Id& trackId, Clip clip) {
+    Track& t = requireUnlocked(p, trackId);
+    if (clip.id.empty() || p.findClip(clip.id)) throw EditError("duplicate or empty clip id");
+    if (clip.speed.num <= 0 || clip.speed.den <= 0) throw EditError("speed must be positive");
+    if (clip.timelineIn < Time::zero()) throw EditError("clip starts before 0");
+    checkSourceRange(p, clip);
+    if (!compatible(*p.findAsset(clip.assetId), t.type)) throw EditError("asset does not fit this track type");
+    if (clip.duration() < minDuration(p)) throw EditError("clip shorter than one frame");
+    checkNoOverlap(t, clip.range(), {});
+    t.clips.push_back(std::move(clip));
+    t.sortClips();
+}
+
+void removeClip(Project& p, const Id& clipId) {
+    Track* t = nullptr;
+    requireClip(p, clipId, &t);
+    std::erase_if(t->clips, [&](const Clip& c) { return c.id == clipId; });
+}
+
+void moveClip(Project& p, const Id& clipId, const Id& toTrackId, Time newTimelineIn) {
+    Track* from = nullptr;
+    Clip c = requireClip(p, clipId, &from);
+    Track& to = requireUnlocked(p, toTrackId);
+    if (newTimelineIn < Time::zero()) throw EditError("clip starts before 0");
+    if (!compatible(*p.findAsset(c.assetId), to.type)) throw EditError("asset does not fit this track type");
+    c.timelineIn = newTimelineIn;
+    checkNoOverlap(to, c.range(), clipId);
+    std::erase_if(from->clips, [&](const Clip& x) { return x.id == clipId; });
+    to.clips.push_back(std::move(c));
+    to.sortClips();
+}
+
+void trimClip(Project& p, const Id& clipId, TrimEdge edge, Time t) {
+    Track* owner = nullptr;
+    Clip& orig = requireClip(p, clipId, &owner);
+    Clip c = orig;
+    t = t.snapToFrame(p.fps);
+    if (edge == TrimEdge::Start) {
+        if (t >= c.timelineOut()) throw EditError("trim start past clip end");
+        const Time out = c.timelineOut();
+        c.sourceIn = c.toSource(t);
+        c.timelineIn = t;
+        // keep the end edge fixed on the timeline
+        c.sourceOut = c.toSource(out);
+    } else {
+        if (t <= c.timelineIn) throw EditError("trim end before clip start");
+        c.sourceOut = c.toSource(t);
+    }
+    if (c.timelineIn < Time::zero()) throw EditError("clip starts before 0");
+    checkSourceRange(p, c);
+    if (c.duration() < minDuration(p)) throw EditError("clip shorter than one frame");
+    checkNoOverlap(*owner, c.range(), clipId);
+    orig = std::move(c);
+    owner->sortClips();
+}
+
+void splitClip(Project& p, const Id& clipId, Time t, const Id& newClipId) {
+    Track* owner = nullptr;
+    Clip& left = requireClip(p, clipId, &owner);
+    if (newClipId.empty() || p.findClip(newClipId)) throw EditError("duplicate or empty clip id");
+    t = t.snapToFrame(p.fps);
+    const Time one = minDuration(p);
+    if (t < left.timelineIn + one || t > left.timelineOut() - one)
+        throw EditError("split point must be inside the clip");
+    Clip right = left;
+    right.id = newClipId;
+    const Time cutSource = left.toSource(t);
+    right.timelineIn = t;
+    right.sourceIn = cutSource;
+    left.sourceOut = cutSource;
+    owner->clips.push_back(std::move(right));
+    owner->sortClips();
+}
+
+void setClipVolume(Project& p, const Id& clipId, double volume) {
+    if (volume < 0.0 || volume > 4.0) throw EditError("volume out of range");
+    requireClip(p, clipId).volume = volume;
+}
+
+void setTrackFlags(Project& p, const Id& trackId, bool enabled, bool locked, bool muted) {
+    Track& t = requireTrack(p, trackId);
+    t.enabled = enabled;
+    t.locked = locked;
+    t.muted = muted;
+}
+
+}  // namespace vstudio::edit
