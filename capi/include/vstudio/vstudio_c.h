@@ -67,6 +67,8 @@ VS_API int vs_trim_clip(vs_session* s, const char* clip_id, int edge, int64_t ti
 VS_API char* vs_split_clip(vs_session* s, const char* clip_id, int64_t timeline_time);
 VS_API int vs_split_at(vs_session* s, int64_t timeline_time); /* returns number of clips split, <0 on error */
 VS_API int vs_remove_clip(vs_session* s, const char* clip_id);
+/* Removes the clip and pulls the later clips of its track left to close the gap (one undo step). */
+VS_API int vs_ripple_delete(vs_session* s, const char* clip_id);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

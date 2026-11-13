@@ -335,6 +335,13 @@ int vs_remove_clip(vs_session* s, const char* clip_id) {
     });
 }
 
+int vs_ripple_delete(vs_session* s, const char* clip_id) {
+    return guard(s, [&] {
+        s->editor->rippleDelete(str(clip_id));
+        s->edited();
+    });
+}
+
 /* ---- tracks ---- */
 
 int vs_remove_track(vs_session* s, const char* track_id) {

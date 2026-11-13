@@ -106,10 +106,10 @@ class VStudio {
   String importMedia(String path) => using((a) => _take(_b.importMedia(_s, path.toNativeUtf8(allocator: a))));
   String addTrack({required bool audio, required String name}) =>
       using((a) => _take(_b.addTrack(_s, audio ? 1 : 0, name.toNativeUtf8(allocator: a))));
-  String appendClip(String trackId, String assetId) => using((a) =>
-      _take(_b.appendClip(_s, trackId.toNativeUtf8(allocator: a), assetId.toNativeUtf8(allocator: a))));
-  void moveClip(String clipId, String trackId, double start) => using((a) => _check(_b.moveClip(
-      _s, clipId.toNativeUtf8(allocator: a), trackId.toNativeUtf8(allocator: a), secondsToTicks(start))));
+  String appendClip(String trackId, String assetId) =>
+      using((a) => _take(_b.appendClip(_s, trackId.toNativeUtf8(allocator: a), assetId.toNativeUtf8(allocator: a))));
+  void moveClip(String clipId, String trackId, double start) => using((a) => _check(
+      _b.moveClip(_s, clipId.toNativeUtf8(allocator: a), trackId.toNativeUtf8(allocator: a), secondsToTicks(start))));
   void trimClip(String clipId, {required bool start, required double at}) =>
       using((a) => _check(_b.trimClip(_s, clipId.toNativeUtf8(allocator: a), start ? 0 : 1, secondsToTicks(at))));
   int splitAt(double t) {
@@ -119,11 +119,10 @@ class VStudio {
   }
 
   void removeTrack(String trackId) => using((a) => _check(_b.removeTrack(_s, trackId.toNativeUtf8(allocator: a))));
-  void renameTrack(String trackId, String name) => using((a) =>
-      _check(_b.renameTrack(_s, trackId.toNativeUtf8(allocator: a), name.toNativeUtf8(allocator: a))));
-  void setTrackFlags(String trackId, {required bool enabled, required bool locked, required bool muted}) =>
-      using((a) => _check(_b.setTrackFlags(
-          _s, trackId.toNativeUtf8(allocator: a), enabled ? 1 : 0, locked ? 1 : 0, muted ? 1 : 0)));
+  void renameTrack(String trackId, String name) =>
+      using((a) => _check(_b.renameTrack(_s, trackId.toNativeUtf8(allocator: a), name.toNativeUtf8(allocator: a))));
+  void setTrackFlags(String trackId, {required bool enabled, required bool locked, required bool muted}) => using((a) =>
+      _check(_b.setTrackFlags(_s, trackId.toNativeUtf8(allocator: a), enabled ? 1 : 0, locked ? 1 : 0, muted ? 1 : 0)));
 
   /// Reorders within tracks of the same type; 0 = bottom video layer / first audio track.
   void moveTrack(String trackId, int indexInType) =>
@@ -136,6 +135,18 @@ class VStudio {
         final t = _b.snapClipMove(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(proposedStart),
             secondsToTicks(tolerance), playhead == null ? -1 : secondsToTicks(playhead), snapped);
         return snapped.value != 0 ? ticksToSeconds(t) : null;
+      });
+
+  /// Deletes the clip and closes the gap on its track (one undo step).
+  void rippleDelete(String clipId) => using((a) => _check(_b.rippleDelete(_s, clipId.toNativeUtf8(allocator: a))));
+  bool get dirty => _b.isDirty(_s) != 0;
+
+  /// For trimming: the edge time to use, or null when no edge/playhead is within [tolerance].
+  double? snapTime(double t, double tolerance, {String? excludeClip, double? playhead}) => using((a) {
+        final snapped = a<Int32>();
+        final r = _b.snapTime(_s, secondsToTicks(t), secondsToTicks(tolerance),
+            (excludeClip ?? '').toNativeUtf8(allocator: a), playhead == null ? -1 : secondsToTicks(playhead), snapped);
+        return snapped.value != 0 ? ticksToSeconds(r) : null;
       });
 
   void removeClip(String clipId) => using((a) => _check(_b.removeClip(_s, clipId.toNativeUtf8(allocator: a))));
@@ -221,7 +232,7 @@ class VStudio {
   List<String> missingAssets() => (jsonDecode(_take(_b.missingAssetsJson(_s))) as List).cast<String>();
 
   /// Points an asset at another file; undoable.
-  void relink(String assetId, String path) => using((a) =>
-      _check(_b.relinkAsset(_s, assetId.toNativeUtf8(allocator: a), path.toNativeUtf8(allocator: a))));
+  void relink(String assetId, String path) =>
+      using((a) => _check(_b.relinkAsset(_s, assetId.toNativeUtf8(allocator: a), path.toNativeUtf8(allocator: a))));
   String get lastError => _b.lastError(_s).toDartString();
 }

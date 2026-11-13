@@ -24,6 +24,8 @@ class TimelineView extends StatefulWidget {
     this.onTrackFlags,
     this.onTrackMenu,
     this.snapMove,
+    this.onTrim,
+    this.snapTime,
     this.media,
   });
 
@@ -39,6 +41,12 @@ class TimelineView extends StatefulWidget {
   final ValueChanged<TrackView?>? onTrackMenu; // null = no track (add a track)
   /// Snapped clip start for a proposed one, or null if nothing is within [tolerance] seconds.
   final double? Function(String clipId, double proposedStart, double tolerance)? snapMove;
+
+  /// Drag a handle of the selected clip: [start] true = in point. [at] is the new edge time.
+  final void Function(String clipId, {required bool start, required double at})? onTrim;
+
+  /// Snapped edge time for trimming, or null.
+  final double? Function(double t, double tolerance, String excludeClip)? snapTime;
 
   static const trackH = 56.0;
   static const rulerH = 22.0;
@@ -61,6 +69,53 @@ class _TimelineViewState extends State<TimelineView> {
   int _targetRow = -1; // row the clip would land on
   double _dragDelta = 0;
   bool _snapped = false;
+
+  // Trim of the selected clip by its handles (visual only until release)
+  String? _trimClip;
+  bool _trimStart = true;
+  double _trimDelta = 0;
+  double _trimOriginX = 0;
+  Offset? _downAt; // where the finger landed: gesture callbacks report positions after the touch slop
+  static const handleHit = 22.0; // touch slop around a handle, px
+
+  /// The selected clip's handle under [p], if any: (clip, start edge?).
+  (ClipView, bool)? _handleAt(Offset p) {
+    final sel = widget.selectedClip;
+    if (sel == null) return null;
+    final row = _rowAt(p.dy);
+    if (row < 0 || row >= widget.project.tracks.length) return null;
+    final track = widget.project.tracks[row];
+    if (track.locked) return null;
+    for (final c in track.clips) {
+      if (c.id != sel) continue;
+      final x0 = (c.start - scroll) * pxPerSec, x1 = (c.end - scroll) * pxPerSec;
+      if ((p.dx - x0).abs() <= handleHit) return (c, true);
+      if ((p.dx - x1).abs() <= handleHit) return (c, false);
+    }
+    return null;
+  }
+
+  void _trimUpdate(double x) {
+    final id = _trimClip;
+    if (id == null) return;
+    final clip = widget.project.tracks.expand((t) => t.clips).firstWhere((c) => c.id == id);
+    final edge = _trimStart ? clip.start : clip.end;
+    var t = edge + (x - _trimOriginX) / pxPerSec;
+    // Keep at least ~1 frame, never before 0.
+    final minLen = 1 / (widget.project.fps > 0 ? widget.project.fps : 30);
+    t = _trimStart ? t.clamp(0, clip.end - minLen).toDouble() : (t < clip.start + minLen ? clip.start + minLen : t);
+    var snapped = false;
+    final s = widget.snapTime?.call(t, 12 / pxPerSec, id);
+    if (s != null && (_trimStart ? s < clip.end - minLen : s > clip.start + minLen)) {
+      t = s;
+      snapped = true;
+    }
+    if (snapped && !_snapped) HapticFeedback.selectionClick();
+    setState(() {
+      _trimDelta = t - edge;
+      _snapped = snapped;
+    });
+  }
 
   int _rowAt(double dy) => ((dy - rulerH) / trackH).floor();
 
@@ -118,9 +173,7 @@ class _TimelineViewState extends State<TimelineView> {
             color: VsColors.panel, border: Border(bottom: BorderSide(color: VsColors.panel2, width: 2))),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(t.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: VsColors.fg2, fontSize: 11)),
+              maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: VsColors.fg2, fontSize: 11)),
           Row(children: [
             toggle(t.locked ? Icons.lock : Icons.lock_open, t.locked, t.locked ? 'Mở khóa' : 'Khóa',
                 () => onFlags!(t, enabled: t.enabled, locked: !t.locked, muted: t.muted)),
@@ -173,15 +226,42 @@ class _TimelineViewState extends State<TimelineView> {
             _snapped = false;
           });
         },
-        onScaleStart: (_) => _zoomStart = pxPerSec,
-        onScaleUpdate: (d) => setState(() {
-          if (d.pointerCount >= 2) {
-            pxPerSec = (_zoomStart * d.horizontalScale).clamp(4, 400).toDouble();
-          } else {
-            // one finger: scroll the timeline
-            scroll = (scroll - d.focalPointDelta.dx / pxPerSec).clamp(0, widget.project.duration + 5).toDouble();
+        onScaleStart: (d) {
+          _zoomStart = pxPerSec;
+          final down = _downAt ?? d.localFocalPoint;
+          final h = d.pointerCount == 1 && widget.onTrim != null ? _handleAt(down) : null;
+          if (h != null) {
+            setState(() {
+              _trimClip = h.$1.id;
+              _trimStart = h.$2;
+              _trimDelta = 0;
+              _trimOriginX = down.dx;
+              _snapped = false;
+            });
           }
-        }),
+        },
+        onScaleEnd: (_) {
+          final id = _trimClip;
+          if (id == null) return;
+          if (_trimDelta.abs() > 0.001) {
+            final clip = widget.project.tracks.expand((t) => t.clips).firstWhere((c) => c.id == id);
+            widget.onTrim!(id, start: _trimStart, at: (_trimStart ? clip.start : clip.end) + _trimDelta);
+          }
+          setState(() {
+            _trimClip = null;
+            _snapped = false;
+          });
+        },
+        onScaleUpdate: (d) => _trimClip != null
+            ? _trimUpdate(d.localFocalPoint.dx)
+            : setState(() {
+                if (d.pointerCount >= 2) {
+                  pxPerSec = (_zoomStart * d.horizontalScale).clamp(4, 400).toDouble();
+                } else {
+                  // one finger: scroll the timeline
+                  scroll = (scroll - d.focalPointDelta.dx / pxPerSec).clamp(0, widget.project.duration + 5).toDouble();
+                }
+              }),
         child: CustomPaint(
           size: Size(box.maxWidth, rulerH + widget.project.tracks.length * trackH + 8),
           painter: _TimelinePainter(
@@ -194,6 +274,9 @@ class _TimelineViewState extends State<TimelineView> {
             dragDelta: _dragDelta,
             dragRow: _targetRow,
             snapped: _snapped,
+            trimClip: _trimClip,
+            trimStart: _trimStart,
+            trimDelta: _trimDelta,
             media: widget.media,
           ),
         ),
@@ -214,14 +297,16 @@ class _TimelineViewState extends State<TimelineView> {
                       Icon(Icons.add, size: 14, color: VsColors.fg2),
                       Flexible(
                           child: Text(' Track',
-                              maxLines: 1, overflow: TextOverflow.clip, style: TextStyle(color: VsColors.fg2, fontSize: 11))),
+                              maxLines: 1,
+                              overflow: TextOverflow.clip,
+                              style: TextStyle(color: VsColors.fg2, fontSize: 11))),
                     ]),
                   ),
           ),
           for (final t in widget.project.tracks) _header(t),
         ]),
       ),
-      Expanded(child: lanes),
+      Expanded(child: Listener(onPointerDown: (e) => _downAt = e.localPosition, child: lanes)),
     ]);
   }
 }
@@ -237,6 +322,9 @@ class _TimelinePainter extends CustomPainter {
     required this.dragDelta,
     this.dragRow = -1,
     this.snapped = false,
+    this.trimClip,
+    this.trimStart = true,
+    this.trimDelta = 0,
     this.media,
   }) : super(repaint: media);
 
@@ -249,6 +337,9 @@ class _TimelinePainter extends CustomPainter {
   final double dragDelta;
   final int dragRow; // row the dragged clip is drawn on
   final bool snapped;
+  final String? trimClip;
+  final bool trimStart;
+  final double trimDelta;
   final MediaCache? media;
 
   @override
@@ -262,7 +353,8 @@ class _TimelinePainter extends CustomPainter {
       canvas.drawLine(Offset(x, rulerH - (s % (step * 5) == 0 ? 10 : 5)), Offset(x, rulerH), tick);
       if (s % (step * 5) == 0) {
         final tp = TextPainter(
-          text: TextSpan(text: '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
+          text: TextSpan(
+              text: '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
               style: const TextStyle(color: VsColors.fg3, fontSize: 10)),
           textDirection: TextDirection.ltr,
         )..layout();
@@ -283,11 +375,14 @@ class _TimelinePainter extends CustomPainter {
       for (final c in t.clips) {
         final dragging = c.id == dragClip;
         final top = dragging && dragRow >= 0 ? rulerH + dragRow * trackH : trackTop;
-        final start = c.start + (dragging ? dragDelta : 0);
+        final trimming = c.id == trimClip;
+        final start = c.start + (dragging ? dragDelta : 0) + (trimming && trimStart ? trimDelta : 0);
+        final end = c.end + (dragging ? dragDelta : 0) + (trimming && !trimStart ? trimDelta : 0);
         final x = (start - scroll) * pxPerSec;
-        final w = c.duration * pxPerSec;
+        final w = (end - start) * pxPerSec;
         if (x > size.width || x + w < 0) continue; // cull off-screen clips
-        final r = RRect.fromRectAndRadius(Rect.fromLTWH(x, top + 4, w < 3 ? 3 : w, trackH - 10), const Radius.circular(4));
+        final r =
+            RRect.fromRectAndRadius(Rect.fromLTWH(x, top + 4, w < 3 ? 3 : w, trackH - 10), const Radius.circular(4));
         canvas.drawRRect(r, Paint()..color = audio ? VsColors.clipAudio2 : VsColors.clipVideo2);
         if (media != null && w > 8) {
           canvas.save();
@@ -304,7 +399,7 @@ class _TimelinePainter extends CustomPainter {
             Paint()
               ..style = PaintingStyle.stroke
               ..strokeWidth = c.id == selected ? 2 : 1
-              ..color = dragging && snapped
+              ..color = (dragging || trimming) && snapped
                   ? const Color(0xFFFFD65A)
                   : c.id == selected
                       ? VsColors.accent
@@ -317,6 +412,14 @@ class _TimelinePainter extends CustomPainter {
             ellipsis: '…',
           )..layout(maxWidth: w - 10);
           tp.paint(canvas, Offset(x + 6, top + 8));
+        }
+        // Trim handles on the selected clip of an unlocked track.
+        if (c.id == selected && !t.locked && w > 12) {
+          final hp = Paint()..color = (trimming && snapped) ? const Color(0xFFFFD65A) : VsColors.accent;
+          for (final hx in [x, x + w - 6]) {
+            canvas.drawRRect(
+                RRect.fromRectAndRadius(Rect.fromLTWH(hx, top + 4, 6, trackH - 10), const Radius.circular(3)), hp);
+          }
         }
       }
       if (dim) canvas.restore();
@@ -333,9 +436,12 @@ class _TimelinePainter extends CustomPainter {
       }
     }
     final px = (playhead - scroll) * pxPerSec;
-    canvas.drawLine(Offset(px, 0), Offset(px, size.height), Paint()
-      ..color = VsColors.accent
-      ..strokeWidth = 2);
+    canvas.drawLine(
+        Offset(px, 0),
+        Offset(px, size.height),
+        Paint()
+          ..color = VsColors.accent
+          ..strokeWidth = 2);
   }
 
   // Thumbnail tiles across the visible part of a video clip (one image, sub-rects).
@@ -394,5 +500,7 @@ class _TimelinePainter extends CustomPainter {
       old.dragDelta != dragDelta ||
       old.dragRow != dragRow ||
       old.snapped != snapped ||
+      old.trimClip != trimClip ||
+      old.trimDelta != trimDelta ||
       old.media != media;
 }
