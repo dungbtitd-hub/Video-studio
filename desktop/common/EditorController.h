@@ -157,6 +157,24 @@ public:
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] double trackProgress() const { return trackProgress_; }
 
+    // ---- transitions between clips (vstudio/transitions.hpp) ----
+    // A place a transition goes: the clip storing it and its edge (0 = start, 1 = end).
+    // The end of a clip that touches the next one is that cut: it is reported as the next clip's start.
+    struct Cut {
+        QString clipId;
+        int edge = 0;
+        [[nodiscard]] bool valid() const { return !clipId.isEmpty(); }
+    };
+    [[nodiscard]] Cut selectedCut() const { return cut_; }
+    void setSelectedCut(const QString& clipId, int edge);  // "" clears
+    [[nodiscard]] Cut normalizedCut(const QString& clipId, int edge) const;
+    // What plays there: (type, seconds as played); type "" when none.
+    [[nodiscard]] QPair<QString, double> transitionAt(const Cut& cut) const;
+    // Describes the place for the panel ("A → B", "Đầu clip"...).
+    [[nodiscard]] QString cutLabel(const Cut& cut) const;
+    void setTransition(const Cut& cut, const QString& type, double seconds);
+    int setTransitionEverywhere(const QString& type, double seconds);
+
     // 3D LUT (.cube) from a local file; "" removes. Stored relative to the project when possible.
     void setClipLut(const QStringList& clipIds, const QString& file, double strength = 1.0);
     [[nodiscard]] QString clipLut(const QString& clipId) const;
@@ -198,6 +216,7 @@ signals:
     // ok: packed / unpacked and opened; `path` is the package file or the opened project folder.
     void transferFinished(bool ok, const QString& path, const QString& message);
     void coversChanged();  // active cover or tracking state changed
+    void cutChanged();     // the selected cut (transitions)
     void trackFinished(bool ok, const QString& message);
 
 private:
@@ -234,6 +253,7 @@ private:
     bool wasPlaying_ = false;
     QString selected_;
     QString activeCover_;
+    Cut cut_;
     bool tracking_ = false;
     double trackProgress_ = 0;
     vstudio::CancelToken trackCancel_;

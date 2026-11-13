@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDockWidget>
+#include <QLabel>
 #include <QListWidget>
 #include <QSlider>
 #include <QToolButton>
@@ -25,6 +26,8 @@
 #include "MainWindow.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
+#include "TransitionsPanel.h"
+#include <QMimeData>
 
 class MainWindowTest : public QObject {
     Q_OBJECT
@@ -339,6 +342,64 @@ private slots:
         QVERIFY(ctrl_->covers(clip).isEmpty());
         QCoreApplication::processEvents();
         QVERIFY(!preview->coverEditing());
+    }
+
+    void transitionsFromPanelDropAndBadge() {
+        TransitionsPanel* panel = win_->transitionsPanel();
+        TimelineWidget* tl = win_->timeline();
+        QVERIFY(panel->list()->count() >= 30);
+        QVERIFY(!panel->list()->item(0)->icon().isNull());
+        // Rows: top = the last video track in the project (the top layer), then the one below it.
+        const auto& tracks = ctrl_->project()->tracks;
+        const QString v1b = QString::fromStdString(tracks[0].clips[1].id);  // second clip, lower row
+        const QString v2b = QString::fromStdString(tracks[1].clips[1].id);  // second clip, top row
+        const double cut1 = tracks[0].clips[1].timelineIn.seconds(), cut2 = tracks[1].clips[1].timelineIn.seconds();
+        // Select a clip, click a transition: it goes on the cut at the clip's start.
+        ctrl_->setSelectedClip(v1b);
+        QListWidgetItem* fade = nullptr;
+        for (int i = 0; i < panel->list()->count(); ++i)
+            if (panel->list()->item(i)->data(Qt::UserRole) == "dip_black") fade = panel->list()->item(i);
+        QVERIFY(fade);
+        emit panel->list()->itemClicked(fade);
+        auto [type, secs] = ctrl_->transitionAt({v1b, 0});
+        QCOMPARE(type, QString("dip_black"));
+        QCOMPARE(secs, 0.5);
+        QCOMPARE(ctrl_->selectedCut().clipId, v1b);
+        QVERIFY(panel->placeLabel()->text().contains(QString::fromUtf8("→")));
+        // Length: committed on release, one undo step.
+        panel->duration()->setValue(12);
+        emit panel->duration()->sliderReleased();
+        QCOMPARE(ctrl_->transitionAt({v1b, 0}).second, 1.2);
+        // Drag-and-drop from the panel onto the cut of the top row.
+        const double x = 120 + (cut2 - tl->scrollSeconds()) * tl->pxPerSec();
+        const QPointF at(x + 10, 24 + 54 - 14);  // near the cut, lower part of the row
+        QMimeData mime;
+        mime.setData(TimelineWidget::kTransitionMime, "wipe_left");
+        QDragEnterEvent enter(at.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, {});
+        QCoreApplication::sendEvent(tl, &enter);
+        QVERIFY(enter.isAccepted());
+        QDragMoveEvent move(at.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, {});
+        QCoreApplication::sendEvent(tl, &move);
+        QVERIFY(move.isAccepted());
+        QDropEvent drop(at, Qt::CopyAction, &mime, Qt::LeftButton, {});
+        QCoreApplication::sendEvent(tl, &drop);
+        QCOMPARE(ctrl_->transitionAt({v2b, 0}).first, QString("wipe_left"));
+        QCOMPARE(ctrl_->selectedCut().clipId, v2b);
+        QCOMPARE(ctrl_->selectedClip(), v2b);
+        // Clicking the badge of the lower row's cut selects that cut again.
+        const double x1 = 120 + (cut1 - tl->scrollSeconds()) * tl->pxPerSec();
+        QTest::mouseMove(tl, QPoint(int(x1), 24 + 54 + 54 - 14));
+        QTest::mouseClick(tl, Qt::LeftButton, {}, QPoint(int(x1), 24 + 54 + 54 - 6 - 8 - 3));
+        QCOMPARE(ctrl_->selectedCut().clipId, v1b);
+        auto* dock = win_->findChild<QDockWidget*>("transitions");
+        QVERIFY(dock && dock->isVisible());
+        // Apply to all cuts, then remove one.
+        QCOMPARE(ctrl_->setTransitionEverywhere("fade", 0.5), 2);
+        QCOMPARE(ctrl_->transitionAt({v2b, 0}).first, QString("fade"));
+        panel->removeButton()->click();
+        QVERIFY(ctrl_->transitionAt({v1b, 0}).first.isEmpty());
+        ctrl_->undo();
+        QCOMPARE(ctrl_->transitionAt({v1b, 0}).first, QString("fade"));
     }
 
     void layoutResets() {

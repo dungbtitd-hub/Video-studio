@@ -14,6 +14,7 @@ qt_add_executable(main_window_tests
   ../widgets/MainWindow.cpp ../widgets/MainWindow.h
   ../widgets/LooksPanel.cpp ../widgets/LooksPanel.h
   ../widgets/CoverPanel.cpp ../widgets/CoverPanel.h
+  ../widgets/TransitionsPanel.cpp ../widgets/TransitionsPanel.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )
