@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: '6.10.*'  # 6.8 links the AGL framework, which the macOS 26 SDK no longer ships
           modules: qtmultimedia
           cache: true
       - uses: ilammy/msvc-dev-cmd@v1
