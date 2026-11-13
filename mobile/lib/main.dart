@@ -138,12 +138,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   }
 
   Future<void> _import() async {
-    final res = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.media);
-    if (res == null) return;
+    final files = await FilePicker.pickFiles(type: FileType.media);
+    if (files.isEmpty) return;
     _edit((vs) {
       var track = _project?.tracks.where((t) => t.type == 'video').firstOrNull?.id;
       track ??= vs.addTrack(audio: false, name: 'Video 1');
-      for (final f in res.files) {
+      for (final f in files) {
         if (f.path == null) continue;
         final asset = vs.importMedia(f.path!);
         _selected = vs.appendClip(track, asset);
