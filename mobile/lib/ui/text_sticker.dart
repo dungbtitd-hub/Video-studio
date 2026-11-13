@@ -237,7 +237,7 @@ class _AnimationPickerState extends State<AnimationPicker> {
 
 // ---------------------------------------------------------------- text
 
-const _swatches = [
+const textSwatches = [
   '#ffffff', '#000000', '#ffd54a', '#ff8a3d', '#ff4d6d', '#ff5fd2', //
   '#b47cff', '#4d8dff', '#3fd0ff', '#3fe0a0', '#8bd346', '#8a5a3c',
 ];
@@ -420,7 +420,7 @@ class _TextSheetState extends State<TextSheet> {
       ),
       const SizedBox(height: 6),
       Wrap(spacing: 6, runSpacing: 6, children: [
-        for (final s in _swatches)
+        for (final s in textSwatches)
           GestureDetector(
             key: Key('color-$s'),
             onTap: () => _patch({'color': s, 'color2': null}),
@@ -466,7 +466,7 @@ class _TextSheetState extends State<TextSheet> {
   }
 
   @override
-  Widget build(BuildContext context) => _SheetFrame(
+  Widget build(BuildContext context) => SheetFrame(
         tabs: const ['Chữ', 'Kiểu', 'Hiệu ứng'],
         children: [
           _textTab(),
@@ -477,8 +477,8 @@ class _TextSheetState extends State<TextSheet> {
 }
 
 /// Tabs in a bottom sheet that leaves the preview visible above it.
-class _SheetFrame extends StatelessWidget {
-  const _SheetFrame({required this.tabs, required this.children, this.initial = 0});
+class SheetFrame extends StatelessWidget {
+  const SheetFrame({super.key, required this.tabs, required this.children, this.initial = 0});
   final List<String> tabs;
   final List<Widget> children;
   final int initial;
@@ -657,7 +657,7 @@ class _StickerSheetState extends State<StickerSheet> {
   }
 
   @override
-  Widget build(BuildContext context) => _SheetFrame(
+  Widget build(BuildContext context) => SheetFrame(
         tabs: const ['Sticker', 'Hiệu ứng'],
         initial: widget.content == null ? 0 : 1,
         children: [_library(), _settings()],
