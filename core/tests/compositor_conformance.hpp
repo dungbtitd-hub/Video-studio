@@ -167,7 +167,7 @@ struct CompositorSuite {
             auto c = get();
             if (!c) return;
             std::vector<std::thread> ts;
-            std::vector<int> ok(4, 0);
+            std::vector<std::string> why(4, "did not finish");
             for (int t = 0; t < 4; ++t)
                 ts.emplace_back([&, t] {
                     auto src = pattern(200 + t * 10, 120, 100 + t, t % 2 == 0);
@@ -178,13 +178,23 @@ struct CompositorSuite {
                     for (int i = 0; i < 20; ++i) {
                         VideoFrame out;
                         out.allocate(240, 135);
-                        if (!c->composite(out, {l}, nullptr)) return;
-                        if (compare(out, ref, 3).badFraction > 0.003) return;
+                        std::string err;
+                        if (!c->composite(out, {l}, &err)) {
+                            why[t] = "iteration " + std::to_string(i) + ": composite failed: " + err;
+                            return;
+                        }
+                        const Diff d = compare(out, ref, 3);
+                        if (d.badFraction > 0.003) {
+                            why[t] = "iteration " + std::to_string(i) + ": " + std::to_string(d.badFraction * 100) +
+                                     "% pixels differ (max " + std::to_string(d.maxDiff) + ")";
+                            return;
+                        }
                     }
-                    ok[t] = 1;
+                    why[t].clear();
                 });
             for (auto& th : ts) th.join();
-            for (int v : ok) CHECK_EQ(v, 1);
+            for (int t = 0; t < 4; ++t)
+                if (!why[t].empty()) throw Failure{"thread " + std::to_string(t) + ": " + why[t]};
         });
         add(name + ": 1080p, 4 layers (timing)", [get, name] {
             auto c = get();

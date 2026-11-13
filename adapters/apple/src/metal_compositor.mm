@@ -82,7 +82,8 @@ public:
             pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             [enc setRenderPipelineState:pipeline_];
-            [enc setViewport:(MTLViewport){0, 0, double(W), double(H), 0, 1}];
+            MTLViewport vp{0, 0, double(W), double(H), 0, 1};
+            [enc setViewport:vp];
             for (const auto& l : layers) {
                 if (!l.frame || l.frame->empty()) continue;
                 const VideoFrame& src = *l.frame;
