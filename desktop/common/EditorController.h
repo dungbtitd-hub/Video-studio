@@ -109,6 +109,14 @@ public:
     // Look on a clip: (look id, strength); empty id if none.
     [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
     [[nodiscard]] QString clipAsset(const QString& clipId) const;
+    // Log/HDR -> Rec.709 (vstudio/color_space.hpp): input id ("" = none) and exposure.
+    void setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure = 0.0);
+    [[nodiscard]] QPair<QString, double> clipColorSpace(const QString& clipId) const;
+    // What the clip's file says it is (HLG today); "" when unknown.
+    [[nodiscard]] QString suggestedColorSpace(const QString& clipId) const;
+    // 3D LUT (.cube) from a local file; "" removes. Stored relative to the project when possible.
+    void setClipLut(const QStringList& clipIds, const QString& file, double strength = 1.0);
+    [[nodiscard]] QString clipLut(const QString& clipId) const;
     // Every clip that can take a look: video tracks that are not locked.
     [[nodiscard]] QStringList lookableClips() const;
     void setSelectedClip(const QString& id);

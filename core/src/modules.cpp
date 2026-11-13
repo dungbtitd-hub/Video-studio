@@ -1,5 +1,6 @@
 #include "vstudio/modules.hpp"
 
+#include "vstudio/color_space.hpp"
 #include "vstudio/compositor.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/pixel.hpp"
@@ -165,6 +166,18 @@ public:
     void apply(VideoFrame& f, const Json& p, Time) const override { applyColorLook(f, p); }
 };
 
+class ColorSpaceEffect final : public IVideoEffect {
+public:
+    bool supportsDeep() const override { return true; }
+    void apply(VideoFrame& f, const Json& p, Time) const override { applyColorSpace(f, p); }
+};
+
+class LutEffect final : public IVideoEffect {
+public:
+    bool supportsDeep() const override { return true; }
+    void apply(VideoFrame& f, const Json& p, Time) const override { applyLut(f, p); }
+};
+
 class Grayscale final : public IVideoEffect {
 public:
     bool supportsDeep() const override { return true; }
@@ -189,12 +202,16 @@ void registerBuiltinModules(ModuleRegistry& r) {
                         [] { return std::make_shared<ColorAdjust>(); });
     r.add<IVideoEffect>({.id = kColorLookEffect, .displayName = "Color look", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<ColorLookEffect>(); });
+    r.add<IVideoEffect>({.id = kColorSpaceEffect, .displayName = "Log/HDR to Rec.709", .capabilities = {"effect.color"}},
+                        [] { return std::make_shared<ColorSpaceEffect>(); });
+    r.add<IVideoEffect>({.id = kLutEffect, .displayName = "3D LUT", .capabilities = {"effect.color"}},
+                        [] { return std::make_shared<LutEffect>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<Grayscale>(); });
 }
 
 void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Time localTime,
-                      std::vector<std::string>* warnings) {
+                      std::vector<std::string>* warnings, const std::string& resourceBase) {
     if (!clip.effects.is_array()) return;
     for (const auto& fx : clip.effects) {
         if (!fx.is_object() || !fx.value("enabled", true)) continue;
@@ -207,7 +224,9 @@ void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Ti
         }
         if (frame.deep() && !effect->supportsDeep()) convertFrame(frame, PixelFormat::RGBA8);
         try {
-            effect->apply(frame, fx.value("params", Json::object()), localTime);
+            Json params = fx.value("params", Json::object());
+            if (!resourceBase.empty() && params.is_object()) params["base"] = resourceBase;
+            effect->apply(frame, params, localTime);
         } catch (const std::exception& ex) {
             if (warnings) warnings->push_back("effect " + type + " failed: " + ex.what());
         }

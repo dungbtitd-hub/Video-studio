@@ -49,6 +49,11 @@ class LookInfo {
   final String id, name, category;
 }
 
+class LogFormatInfo {
+  const LogFormatInfo(this.id, this.name, this.vendor);
+  final String id, name, vendor;
+}
+
 class ExportPresetView {
   ExportPresetView.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -215,8 +220,33 @@ class VStudio {
   }
 
   /// Applies [lookId] ('' removes) to [clipIds] as one undo step.
-  void setClipLook(List<String> clipIds, String lookId, {double strength = 1}) => using((a) => _check(_b.setClipLook(
-      _s, jsonEncode(clipIds).toNativeUtf8(allocator: a), lookId.toNativeUtf8(allocator: a), strength)));
+  void setClipLook(List<String> clipIds, String lookId, {double strength = 1}) => using((a) => _check(
+      _b.setClipLook(_s, jsonEncode(clipIds).toNativeUtf8(allocator: a), lookId.toNativeUtf8(allocator: a), strength)));
+
+  /// Log/HDR inputs the core can convert to Rec.709 (S-Log3, V-Log, Apple Log, HLG, ...).
+  List<LogFormatInfo> logFormats() {
+    final p = _b.logFormatsJson();
+    if (p == nullptr) return const [];
+    return [
+      for (final e in (jsonDecode(_take(p)) as List).cast<Map<String, dynamic>>())
+        LogFormatInfo(e['id'] as String, e['name'] as String, e['vendor'] as String)
+    ];
+  }
+
+  /// Converts Log/HDR clips to Rec.709 ('' removes); always before other colour effects.
+  void setClipColorSpace(List<String> clipIds, String input, {double exposure = 0}) =>
+      using((a) => _check(_b.setClipColorSpace(
+          _s, jsonEncode(clipIds).toNativeUtf8(allocator: a), input.toNativeUtf8(allocator: a), exposure)));
+
+  /// 3D LUT (.cube): absolute, or relative to the project's media folder ('' removes).
+  void setClipLut(List<String> clipIds, String path, {double strength = 1}) => using((a) => _check(
+      _b.setClipLut(_s, jsonEncode(clipIds).toNativeUtf8(allocator: a), path.toNativeUtf8(allocator: a), strength)));
+
+  /// What the asset's file says it is ('hlg'), or '' when unknown.
+  String suggestedLogFormat(String assetId) {
+    final p = using((a) => _b.suggestedLogFormat(_s, assetId.toNativeUtf8(allocator: a)));
+    return p == nullptr ? '' : _take(p);
+  }
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
   Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {

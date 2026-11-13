@@ -42,6 +42,7 @@ public:
     void setProxy(const Id& assetId, std::string path);
     [[nodiscard]] bool hasProxy(const Id& assetId) const { return proxies_.count(assetId) != 0; }
     void setProjectDir(std::string dir) { projectDir_ = std::move(dir); }
+    [[nodiscard]] const std::string& projectDir() const { return projectDir_; }
     void clear() { decoders_.clear(); }
     [[nodiscard]] std::shared_ptr<IMediaBackend> backend() const { return backend_; }
 

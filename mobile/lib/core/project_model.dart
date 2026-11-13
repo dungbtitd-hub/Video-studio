@@ -17,7 +17,9 @@ class ClipView {
       this.sourceIn = 0,
       this.speed = 1,
       this.look,
-      this.lookStrength = 1});
+      this.lookStrength = 1,
+      this.colorSpace,
+      this.lut});
   final String id;
   final String assetId;
   final double start; // seconds on the timeline
@@ -27,6 +29,8 @@ class ClipView {
   final double speed; // source seconds per timeline second
   final String? look; // colour look id (builtin.color_look), if any
   final double lookStrength;
+  final String? colorSpace; // Log/HDR input id (builtin.color_space), if any
+  final String? lut; // .cube path (builtin.lut), if any
   double get end => start + duration;
 }
 
@@ -66,8 +70,7 @@ class ProjectView {
   final List<TrackView> tracks; // display order: top video first, then audio
   final List<AssetView> assets;
 
-  double get duration =>
-      tracks.expand((t) => t.clips).fold(0.0, (m, c) => c.end > m ? c.end : m);
+  double get duration => tracks.expand((t) => t.clips).fold(0.0, (m, c) => c.end > m ? c.end : m);
 
   static double _rational(String s) {
     final parts = s.split('/');
@@ -96,11 +99,12 @@ class ProjectView {
       for (final c in (t['clips'] as List? ?? const [])) {
         final m = c as Map<String, dynamic>;
         final speed = _rational((m['speed'] ?? '1/1') as String);
-        final look = (m['effects'] as List? ?? const [])
+        Map<String, dynamic>? effect(String type) => (m['effects'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
-            .where((e) => e['type'] == 'builtin.color_look' && (e['enabled'] ?? true) == true)
+            .where((e) => e['type'] == type && (e['enabled'] ?? true) == true)
             .map((e) => e['params'] as Map<String, dynamic>?)
             .firstOrNull;
+        final look = effect('builtin.color_look');
         final srcDur = ticksToSeconds((m['source_out'] as num).toInt() - (m['source_in'] as num).toInt());
         clips.add(ClipView(
           id: m['clip_id'] as String,
@@ -112,6 +116,8 @@ class ProjectView {
           speed: speed > 0 ? speed : 1,
           look: look?['look'] as String?,
           lookStrength: ((look?['strength'] ?? 1) as num).toDouble(),
+          colorSpace: effect('builtin.color_space')?['input'] as String?,
+          lut: effect('builtin.lut')?['path'] as String?,
         ));
       }
       return TrackView(

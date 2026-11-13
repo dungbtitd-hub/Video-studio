@@ -86,6 +86,12 @@ int main(void) {
     EXPECT(vs_look_preview("nope", 1.0, px, 2, 2) != 0);
     EXPECT(vs_set_clip_look(s, "[\"nope\"]", "vivid", 1.0) != 0);
     EXPECT(vs_set_clip_look(s, "not json", "vivid", 1.0) != 0);
+    char* logs = vs_log_formats_json();
+    EXPECT(logs && strstr(logs, "\"slog3\"") && strstr(logs, "\"applelog\"") && strstr(logs, "\"hlg\""));
+    vs_free(logs);
+    EXPECT(vs_set_clip_color_space(s, "[\"nope\"]", "slog3", 0) != 0);
+    EXPECT(vs_set_clip_lut(s, "[]", "/nonexistent.cube", 1.0) != 0);
+    EXPECT(strstr(vs_last_error(s), "cannot open") != NULL);
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

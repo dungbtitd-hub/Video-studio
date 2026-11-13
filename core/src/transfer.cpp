@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "detail/paths.hpp"
+#include "vstudio/color_space.hpp"
 #include "vstudio/project_io.hpp"
 
 namespace fs = std::filesystem;
@@ -152,6 +153,29 @@ TransferResult packProject(const Project& project, const std::string& mediaBase,
             a.uri = it->second;
             if (a.fingerprint.empty()) a.fingerprint = fingerprintFile(detail::fromPath(src));
         }
+        // LUT files used by clips travel with the media (stored under media/ too).
+        for (auto& track : p.tracks)
+            for (auto& clip : track.clips) {
+                if (!clip.effects.is_array()) continue;
+                for (auto& fx : clip.effects) {
+                    if (!fx.is_object() || fx.value("type", std::string{}) != kLutEffect) continue;
+                    Json& params = fx["params"];
+                    if (!params.is_object()) continue;
+                    fs::path src = detail::toPath(params.value("path", std::string{}));
+                    if (src.empty()) continue;
+                    if (src.is_relative() && !mediaBase.empty()) src = detail::toPath(mediaBase) / src;
+                    std::error_code ec;
+                    if (!fs::is_regular_file(src, ec)) continue;  // missing LUT: the effect reports it
+                    const std::string key = detail::fromPath(fs::weakly_canonical(src, ec));
+                    auto it = nameOf.find(key);
+                    if (it == nameOf.end()) {
+                        it = nameOf.emplace(key, archiveName(src, used)).first;
+                        files.emplace_back(src, it->second);
+                        total += fs::file_size(src);
+                    }
+                    params["path"] = it->second;
+                }
+            }
         std::ofstream f(part, std::ios::binary | std::ios::trunc);
         if (!f) throw std::runtime_error("cannot write " + detail::fromPath(part));
         writeEntry(f, kMarker, Json{{"format", 1}, {"name", p.name}}.dump());
@@ -280,6 +304,13 @@ TransferResult unpackProject(const std::string& packageFile, const std::string& 
         Project p = projectFromJson(Json::parse(projectJson));
         for (auto& a : p.assets)
             if (auto it = renamed.find(a.uri); it != renamed.end()) a.uri = it->second;
+        for (auto& track : p.tracks)
+            for (auto& clip : track.clips)
+                if (clip.effects.is_array())
+                    for (auto& fx : clip.effects)
+                        if (fx.is_object() && fx.value("type", std::string{}) == kLutEffect && fx["params"].is_object())
+                            if (auto it = renamed.find(fx["params"].value("path", std::string{})); it != renamed.end())
+                                fx["params"]["path"] = it->second;
         std::string safe = p.name.empty() ? "Project" : p.name;
         for (char& c : safe)
             if (std::strchr("\\/:*?\"<>|", c)) c = '_';

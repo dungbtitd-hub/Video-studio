@@ -75,6 +75,14 @@ VS_API int vs_ripple_delete(vs_session* s, const char* clip_id);
 VS_API char* vs_looks_json(void);
 VS_API int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_id, double strength);
 VS_API int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height);
+
+/* ---- Log / HDR input and 3D LUTs (color_space.hpp); undoable ---- */
+VS_API char* vs_log_formats_json(void); /* [{"id","name","vendor"}] */
+/* input "" removes; the conversion always runs before other effects. */
+VS_API int vs_set_clip_color_space(vs_session* s, const char* clip_ids_json, const char* input, double exposure);
+/* .cube file, absolute or relative to the project's media folder; "" removes. Bad files fail here. */
+VS_API int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, double strength);
+VS_API char* vs_suggested_log_format(vs_session* s, const char* asset_id); /* "hlg" or "" */
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

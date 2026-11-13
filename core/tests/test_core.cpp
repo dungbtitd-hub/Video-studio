@@ -1025,3 +1025,134 @@ TEST("render: deep output for 10-bit export, 8-bit for preview, old modules stil
     for (int k = 0; k < 4; ++k) CHECK(std::abs(int(d8.rgba[centre + k]) - int(p.rgba[centre + k])) <= 2);
     CHECK(exp.warnings().empty());
 }
+
+// ------------------------------------------------------------------ Log / HDR -> Rec.709, LUT
+
+#include "vstudio/color_space.hpp"
+
+namespace {
+
+std::array<float, 3> through(const std::string& input, float v, double exposure = 0.0, bool deep = true) {
+    VideoFrame f;
+    f.allocate(1, 1, deep ? PixelFormat::RGBA16F : PixelFormat::RGBA8);
+    for (int c = 0; c < 3; ++c) {
+        if (deep) f.half[c] = floatToHalf(v);
+        else f.rgba[c] = static_cast<std::uint8_t>(std::lround(v * 255));
+    }
+    applyColorSpace(f, {{"input", input}, {"exposure", exposure}});
+    std::array<float, 3> out{};
+    for (int c = 0; c < 3; ++c) out[c] = deep ? halfToFloat(f.half[c]) : f.rgba[c] / 255.0f;
+    return out;
+}
+
+}  // namespace
+
+TEST("log: each camera's 18% grey becomes Rec.709 mid-grey, neutral stays neutral") {
+    // Grey signal (0..1 video level) from each maker's published curve.
+    const std::vector<std::pair<std::string, float>> grey = {
+        {"slog3", (420.0f - 64) / 876}, {"vlog", (433.0f - 64) / 876}, {"clog3", 0.328f},  {"nlog", 0.3516f},
+        {"applelog", 0.48828f},         {"dlog", 0.3926f},             {"hlg", 0.3781f}};
+    CHECK_EQ(grey.size(), logFormats().size());
+    for (const auto& [id, v] : grey) {
+        CHECK(findLogFormat(id) != nullptr);
+        const auto o = through(id, v);
+        for (int c = 0; c < 3; ++c)
+            if (std::abs(o[c] - 0.409f) > 0.012f) {
+                std::printf("       %s grey -> %.4f\n", id.c_str(), o[c]);
+                CHECK(false);
+            }
+        // Monotonic, highlights roll off below 1 instead of clipping, exposure brightens.
+        const auto dark = through(id, v * 0.5f), bright = through(id, 1.0f), up = through(id, v, 1.0);
+        CHECK(dark[1] < o[1] && o[1] < bright[1]);
+        CHECK(bright[1] <= 1.0f && bright[1] > 0.85f);
+        CHECK(up[1] > o[1] + 0.05f);
+        // 8-bit input gives the same answer within 8-bit precision.
+        CHECK(std::abs(through(id, v, 0, false)[1] - o[1]) < 0.02f);
+    }
+    // A saturated camera-gamut colour stays inside Rec.709 (clamped, no NaN).
+    VideoFrame f;
+    f.allocate(1, 1, PixelFormat::RGBA16F);
+    f.half = {floatToHalf(0.7f), floatToHalf(0.2f), floatToHalf(0.1f), floatToHalf(1.0f)};
+    applyColorSpace(f, {{"input", "slog3"}});
+    for (int c = 0; c < 3; ++c) CHECK(halfToFloat(f.half[c]) >= 0.0f && halfToFloat(f.half[c]) <= 1.0f);
+    CHECK(halfToFloat(f.half[0]) > halfToFloat(f.half[2]));
+    MediaAsset hlg;
+    hlg.extra["transfer"] = "arib-std-b67";
+    CHECK_EQ(suggestedLogFormat(hlg), std::string("hlg"));
+    CHECK(suggestedLogFormat(MediaAsset{}).empty());
+}
+
+TEST("lut: .cube files parse, apply with strength, and bad files are refused") {
+    std::string err;
+    // 2x2x2 LUT that inverts colours (red fastest).
+    std::string cube = "# comment\nTITLE \"Invert\"\nLUT_3D_SIZE 2\n";
+    for (int b = 0; b < 2; ++b)
+        for (int g = 0; g < 2; ++g)
+            for (int r = 0; r < 2; ++r) cube += std::to_string(1 - r) + " " + std::to_string(1 - g) + " " + std::to_string(1 - b) + "\r\n";
+    auto lut = parseCubeLut(cube, &err);
+    CHECK(lut != nullptr);
+    CHECK_EQ(lut->title, std::string("Invert"));
+    float r = 0.2f, g = 0.5f, b = 0.9f;
+    lut->apply(r, g, b);
+    CHECK(std::abs(r - 0.8f) < 1e-5f && std::abs(g - 0.5f) < 1e-5f && std::abs(b - 0.1f) < 1e-5f);
+    CHECK(parseCubeLut("LUT_1D_SIZE 4\n0 0 0\n", &err) == nullptr);
+    CHECK(err.find("1D") != std::string::npos);
+    CHECK(parseCubeLut("LUT_3D_SIZE 2\n0 0 0\n", &err) == nullptr);  // incomplete
+    CHECK(parseCubeLut("hello world", &err) == nullptr);
+    CHECK(parseCubeLut("LUT_3D_SIZE 2\n0 0 x\n", &err) == nullptr);
+
+    const auto dir = fs::temp_directory_path() / ("vstudio_lut_" + newId());
+    fs::create_directories(dir / "luts");
+    std::ofstream(dir / "luts" / "invert.cube") << cube;
+    VideoFrame f;
+    f.allocate(2, 1, PixelFormat::RGBA16F);
+    for (int c = 0; c < 8; ++c) f.half[c] = floatToHalf(c % 4 == 3 ? 1.0f : 0.2f);
+    applyLut(f, {{"path", "luts/invert.cube"}, {"base", dir.string()}, {"strength", 0.5}});
+    CHECK(std::abs(halfToFloat(f.half[0]) - 0.5f) < 0.002f);  // halfway to 0.8
+    CHECK_THROWS(applyLut(f, {{"path", "luts/missing.cube"}, {"base", dir.string()}}));
+    fs::remove_all(dir);
+}
+
+TEST("editor: Log conversion is always first, LUT and look are replaceable, all undoable") {
+    Fixture f;
+    const Id c = f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    f.ed.setClipLook({c}, "teal_orange", 1.0);
+    f.ed.setClipColorSpace({c}, "slog3", 0.5);
+    auto fx = [&] { return f.ed.project().findClip(c)->effects; };
+    CHECK_EQ(fx().size(), 2u);
+    CHECK_EQ(fx()[0]["type"].get<std::string>(), std::string(kColorSpaceEffect));
+    f.ed.setClipColorSpace({c}, "vlog");  // replaced, still first, still one
+    CHECK_EQ(fx().size(), 2u);
+    CHECK_EQ(fx()[0]["params"]["input"].get<std::string>(), std::string("vlog"));
+    f.ed.setClipLut({c}, "luts/film.cube", 0.7);
+    CHECK_EQ(fx().size(), 3u);
+    CHECK_EQ(fx()[2]["type"].get<std::string>(), std::string(kLutEffect));
+    CHECK(f.ed.undo());
+    CHECK(f.ed.undo());
+    CHECK_EQ(fx()[0]["params"]["input"].get<std::string>(), std::string("slog3"));
+    f.ed.setClipColorSpace({c}, "");
+    CHECK_EQ(fx().size(), 1u);
+    CHECK_THROWS(f.ed.setClipColorSpace({c}, "nope"));
+    f.ed.setTrackFlags(f.v1, true, true, false);
+    CHECK_THROWS(f.ed.setClipLut({c}, "x.cube"));
+}
+
+TEST("transfer: LUT files used by clips travel inside the package") {
+    const auto dir = fs::temp_directory_path() / ("vstudio_xfer_lut_" + newId());
+    fs::create_directories(dir / "pc" / "luts");
+    fs::create_directories(dir / "phone");
+    std::string cube = "LUT_3D_SIZE 2\n";
+    for (int i = 0; i < 8; ++i) cube += "0.5 0.5 0.5\n";
+    std::ofstream(dir / "pc" / "luts" / "grey.cube") << cube;
+    Fixture f;
+    const Id c = f.ed.appendClip(f.v1, f.asset, sec(0), sec(2));
+    f.ed.setClipLut({c}, "luts/grey.cube");
+    CHECK(packProject(f.ed.project(), (dir / "pc").string(), (dir / "p.vstudiopkg").string()).ok);
+    auto u = unpackProject((dir / "p.vstudiopkg").string(), (dir / "phone").string());
+    CHECK(u.ok);
+    const Project p = loadProject(u.packageDir);
+    const std::string path = p.findClip(c)->effects[0]["params"]["path"].get<std::string>();
+    CHECK_EQ(path, std::string("media/grey.cube"));
+    CHECK(fs::exists(dir / "phone" / "media" / "grey.cube"));
+    fs::remove_all(dir);
+}

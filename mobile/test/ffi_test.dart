@@ -206,6 +206,29 @@ void main() {
     expect(() => vs.relink('nope', media), throwsA(isA<VStudioException>()));
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
 
+  test('Log input and LUT go through the core and show up on the clip', () {
+    final tmp = Directory.systemTemp.createTempSync('vs_log');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    final vs = VStudio.create('Log', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final asset = vs.importMedia(media!);
+    vs.appendClip(track, asset);
+    final clip = vs.project().tracks.single.clips.single.id;
+    expect(
+        vs.logFormats().map((f) => f.id), containsAll(['slog3', 'vlog', 'clog3', 'nlog', 'applelog', 'dlog', 'hlg']));
+    expect(vs.suggestedLogFormat(asset), ''); // an ordinary Rec.709 test clip
+    vs.setClipColorSpace([clip], 'applelog');
+    expect(vs.project().tracks.single.clips.single.colorSpace, 'applelog');
+    expect(() => vs.setClipLut([clip], '${tmp.path}/missing.cube'), throwsA(isA<VStudioException>()));
+    final cube = File('${tmp.path}/warm.cube')
+      ..writeAsStringSync('LUT_3D_SIZE 2\n${List.filled(8, '0.6 0.5 0.4').join('\n')}\n');
+    vs.setClipLut([clip], cube.path);
+    expect(vs.project().tracks.single.clips.single.lut, cube.path);
+    expect(vs.undo(), isTrue);
+    expect(vs.project().tracks.single.clips.single.lut, isNull);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
   testWidgets('look strip: previews render, one tap applies, no overflow', (tester) async {
     final vs = VStudio.create('ffi-looks', width: 640, height: 360);
     addTearDown(vs.dispose);
@@ -224,6 +247,8 @@ void main() {
               clip: clip,
               onApply: (look, strength) => applied.add('$look ${strength.toStringAsFixed(1)}'),
               onApplyAll: (look, strength) => applied.add('all $look'),
+              onInput: (input) => applied.add('input $input'),
+              onPickLut: () async => null,
             ),
           ),
         ),
@@ -237,5 +262,12 @@ void main() {
     await tester.tap(find.text('Áp dụng cho tất cả'));
     await tester.pump();
     expect(applied, ['vivid 1.0', 'all vivid']);
+    // Log input picker: lists the camera formats; choosing one reports it.
+    await tester.tap(find.byKey(const Key('log-input')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sony S-Log3 / S-Gamut3.Cine').last);
+    await tester.pumpAndSettle();
+    expect(applied.last, 'input slog3');
+    expect(tester.takeException(), isNull); // no overflow at phone width
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
 }

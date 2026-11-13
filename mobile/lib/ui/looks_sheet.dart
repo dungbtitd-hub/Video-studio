@@ -1,6 +1,7 @@
 // One-tap colour looks on mobile: a strip of previews rendered by the core on
 // the selected clip's own frame. Tapping applies at once (one undo step);
-// strength is committed when the finger lifts from the slider.
+// strength is committed when the finger lifts from the slider. Above the strip:
+// the clip's Log/HDR input (camera Log -> Rec.709) and an optional .cube LUT.
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -17,12 +18,18 @@ class LooksSheet extends StatefulWidget {
     required this.clip,
     required this.onApply,
     required this.onApplyAll,
+    this.onInput,
+    this.onPickLut,
+    this.onClearLut,
   });
 
   final VStudio vs;
   final ClipView clip;
   final void Function(String lookId, double strength) onApply; // '' removes
   final void Function(String lookId, double strength) onApplyAll;
+  final void Function(String input)? onInput; // '' = normal Rec.709
+  final Future<String?> Function()? onPickLut; // returns the applied LUT path, or null
+  final VoidCallback? onClearLut;
 
   @override
   State<LooksSheet> createState() => _LooksSheetState();
@@ -34,6 +41,10 @@ class _LooksSheetState extends State<LooksSheet> {
   final Map<String, ui.Image> _previews = {};
   late String _current = widget.clip.look ?? '';
   late double _strength = widget.clip.look == null ? 1 : widget.clip.lookStrength;
+  late final List<LogFormatInfo> _inputs = widget.vs.logFormats();
+  late String _input = widget.clip.colorSpace ?? '';
+  late String? _lut = widget.clip.lut;
+  late final String _suggested = widget.vs.suggestedLogFormat(widget.clip.assetId);
 
   @override
   void initState() {
@@ -125,12 +136,72 @@ class _LooksSheetState extends State<LooksSheet> {
     );
   }
 
+  /// Log/HDR input and LUT: flat-looking Log footage needs these before any look.
+  Widget _sourceRow() {
+    final hint = _input.isEmpty && _suggested.isNotEmpty
+        ? _inputs.where((f) => f.id == _suggested).map((f) => f.name).firstOrNull
+        : null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Text('Đầu vào', style: TextStyle(color: VsColors.fg2, fontSize: 12)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButton<String>(
+              key: const Key('log-input'),
+              isExpanded: true,
+              value: _input,
+              style: const TextStyle(fontSize: 12, color: VsColors.fg),
+              dropdownColor: VsColors.panel2,
+              items: [
+                const DropdownMenuItem(value: '', child: Text('Bình thường (Rec.709)')),
+                for (final f in _inputs)
+                  DropdownMenuItem(value: f.id, child: Text(f.name, overflow: TextOverflow.ellipsis)),
+              ],
+              onChanged: (v) {
+                setState(() => _input = v ?? '');
+                widget.onInput!(_input);
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: TextButton(
+              onPressed: widget.onPickLut == null
+                  ? null
+                  : () async {
+                      final p = await widget.onPickLut!();
+                      if (p != null && mounted) setState(() => _lut = p);
+                    },
+              child: Text(_lut == null ? '+ LUT' : 'LUT: ${_lut!.split('/').last.replaceAll('.cube', '')}',
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ),
+          if (_lut != null)
+            IconButton(
+              tooltip: 'Bỏ LUT',
+              icon: const Icon(Icons.close, size: 16),
+              onPressed: () {
+                setState(() => _lut = null);
+                widget.onClearLut?.call();
+              },
+            ),
+        ]),
+        if (hint != null)
+          Text('File này là $hint: chọn ở "Đầu vào" để hiện màu đúng.',
+              style: const TextStyle(color: Color(0xFFE0B050), fontSize: 11)),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 8),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (widget.onInput != null) _sourceRow(),
           SizedBox(
             height: tileH + 44,
             child: ListView(

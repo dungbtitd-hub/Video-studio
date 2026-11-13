@@ -107,6 +107,14 @@ class VStudioBindings {
         looksJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_looks_json'),
         setClipLook = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Double),
             int Function(Pointer<VsSession>, CStr, CStr, double)>('vs_set_clip_look'),
+        logFormatsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_log_formats_json'),
+        setClipColorSpace = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Double),
+            int Function(Pointer<VsSession>, CStr, CStr, double)>('vs_set_clip_color_space'),
+        setClipLut = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Double),
+            int Function(Pointer<VsSession>, CStr, CStr, double)>('vs_set_clip_lut'),
+        suggestedLogFormat =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_suggested_log_format'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
@@ -181,6 +189,10 @@ class VStudioBindings {
   final CStr Function() looksJson;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLook;
   final int Function(CStr, double, Pointer<Uint8>, int, int) lookPreview;
+  final CStr Function() logFormatsJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, double) setClipColorSpace;
+  final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLut;
+  final CStr Function(Pointer<VsSession>, CStr) suggestedLogFormat;
   final int Function(Pointer<VsSession>, CStr, CStr) exportStartPreset;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;

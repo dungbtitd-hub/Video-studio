@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 
+#include "vstudio/color_space.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/looks.hpp"
@@ -357,6 +358,55 @@ int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_
         s->editor->setClipLook(clips, str(look_id), strength);
         s->edited();
     });
+}
+
+namespace {
+std::vector<Id> clipIdsFrom(const char* json) {
+    const Json ids = Json::parse(str(json));
+    if (!ids.is_array()) throw std::runtime_error("clip_ids_json must be a JSON array");
+    std::vector<Id> clips;
+    for (const auto& id : ids) clips.push_back(id.get<std::string>());
+    return clips;
+}
+}  // namespace
+
+char* vs_log_formats_json(void) {
+    try {
+        Json out = Json::array();
+        for (const auto& f : logFormats()) out.push_back({{"id", f.id}, {"name", f.name}, {"vendor", f.vendor}});
+        return dup(out.dump());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int vs_set_clip_color_space(vs_session* s, const char* clip_ids_json, const char* input, double exposure) {
+    return guard(s, [&] {
+        s->editor->setClipColorSpace(clipIdsFrom(clip_ids_json), str(input), exposure);
+        s->edited();
+    });
+}
+
+int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, double strength) {
+    return guard(s, [&] {
+        std::string p = str(path);
+        if (!p.empty()) {
+            // Validate now (a bad file fails here, not silently at render time).
+            const std::string full =
+                resolveResourcePath(p, s->packageDir.empty() ? std::string{} : mediaBaseDir(s->packageDir));
+            std::string err;
+            if (!loadCubeLut(full, &err)) throw std::runtime_error(err);
+            if (!s->packageDir.empty()) p = makeUri(full, s->packageDir);  // relative when inside the project
+        }
+        s->editor->setClipLut(clipIdsFrom(clip_ids_json), p, strength);
+        s->edited();
+    });
+}
+
+char* vs_suggested_log_format(vs_session* s, const char* asset_id) {
+    if (!s || !s->editor) return nullptr;
+    const MediaAsset* a = s->editor->project().findAsset(str(asset_id));
+    return dup(a ? suggestedLogFormat(*a) : std::string{});
 }
 
 int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height) {
