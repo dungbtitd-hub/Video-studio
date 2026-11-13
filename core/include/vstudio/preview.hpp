@@ -50,6 +50,8 @@ public:
     void setProjectDir(const std::string& dir);
     void setProxy(const Id& assetId, const std::string& path);
     // Called on the video thread with each finished frame. Marshal to the UI thread yourself.
+    // It may run until the destructor has joined the threads, so whatever it captures must
+    // outlive this engine.
     void setFrameCallback(FrameCallback cb);
     void setPreviewSize(int width, int height);
 
