@@ -11,9 +11,10 @@ COMMON=(-G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE
 
 for SDK in iphoneos iphonesimulator; do
   cmake -S "$ROOT" -B "$OUT/$SDK" "${COMMON[@]}" -DCMAKE_OSX_SYSROOT=$SDK
-  cmake --build "$OUT/$SDK" --target vstudio_capi vstudio_core vstudio_apple
+  cmake --build "$OUT/$SDK" --target vstudio_capi vstudio_core vstudio_apple vstudio_libraw
   libtool -static -o "$OUT/$SDK/libVStudioCore.a" "$OUT/$SDK/capi/libvstudio.a" "$OUT/$SDK/core/libvstudio_core.a" \
-    "$OUT/$SDK/adapters/apple/libvstudio_apple.a"
+    "$OUT/$SDK/adapters/apple/libvstudio_apple.a" "$OUT/$SDK/adapters/libraw/libvstudio_libraw.a" \
+    "$OUT/$SDK/adapters/libraw/libvstudio_libraw_deps.a"  # camera RAW (LibRaw, built from source)
 done
 
 rm -rf "$OUT/VStudioCore.xcframework"
