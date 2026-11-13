@@ -3,6 +3,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QLineF>
 #include <QPainterPath>
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,29 @@ QRectF PreviewWidget::frameRect() const {
     return {(width() - s.width()) / 2, (height() - s.height()) / 2, s.width(), s.height()};
 }
 
+void PreviewWidget::setCoverRect(const QRectF& normalized, const QString& shape) {
+    const bool on = !normalized.isNull();
+    if (coverDrag_ != CoverDrag::None && on) return;  // the user is dragging: keep the local state
+    coverOn_ = on;
+    cover_ = normalized;
+    coverShape_ = shape;
+    if (on) setCursor(Qt::CrossCursor);
+    else setCursor(regionEnabled_ ? Qt::CrossCursor : Qt::ArrowCursor);
+    update();
+}
+
+QRectF PreviewWidget::coverWidgetRect() const {
+    const QRectF f = frameRect();
+    return {f.x() + cover_.x() * f.width(), f.y() + cover_.y() * f.height(), cover_.width() * f.width(),
+            cover_.height() * f.height()};
+}
+
+QRectF PreviewWidget::toNormalized(const QRectF& r) const {
+    const QRectF f = frameRect();
+    if (f.isEmpty()) return {};
+    return {(r.x() - f.x()) / f.width(), (r.y() - f.y()) / f.height(), r.width() / f.width(), r.height() / f.height()};
+}
+
 void PreviewWidget::resizeEvent(QResizeEvent*) {
     const qreal dpr = devicePixelRatioF();
     emit previewSizeChanged(int(width() * dpr), int(height() * dpr));
@@ -61,6 +85,22 @@ QRectF PreviewWidget::bandRect(QPointF to) const {
 }
 
 void PreviewWidget::mousePressEvent(QMouseEvent* e) {
+    if (coverOn_ && e->button() == Qt::LeftButton && !frameRect().isEmpty()) {
+        const QRectF r = coverWidgetRect();
+        const QPointF p = e->position();
+        const QPointF corners[4] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
+        coverDrag_ = CoverDrag::Draw;
+        for (int i = 0; i < 4; ++i)
+            if (QLineF(p, corners[i]).length() <= 9) {
+                coverDrag_ = CoverDrag::Corner;
+                corner_ = i;
+            }
+        if (coverDrag_ == CoverDrag::Draw && r.contains(p)) coverDrag_ = CoverDrag::Move;
+        coverStart_ = r;
+        dragFrom_ = p;
+        setFocus();
+        return;
+    }
     if (!regionEnabled_ || e->button() != Qt::LeftButton || !frameRect().contains(e->position())) return;
     dragging_ = true;
     anchor_ = e->position();
@@ -69,12 +109,33 @@ void PreviewWidget::mousePressEvent(QMouseEvent* e) {
 }
 
 void PreviewWidget::mouseMoveEvent(QMouseEvent* e) {
+    if (coverDrag_ != CoverDrag::None) {
+        const QPointF p = e->position(), d = p - dragFrom_;
+        QRectF r = coverStart_;
+        if (coverDrag_ == CoverDrag::Move) r.translate(d);
+        else if (coverDrag_ == CoverDrag::Draw) r = QRectF(dragFrom_, p).normalized();
+        else {
+            QPointF a = (corner_ == 0 || corner_ == 3) ? r.topRight() : r.topLeft();  // opposite x edge
+            a.setY((corner_ == 0 || corner_ == 1) ? r.bottom() : r.top());           // opposite y edge
+            r = QRectF(a, p).normalized();
+        }
+        if (r.width() >= 4 && r.height() >= 4) cover_ = toNormalized(r);
+        update();
+        return;
+    }
     if (!dragging_) return;
     band_ = bandRect(e->position());
     update();
 }
 
 void PreviewWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if (coverDrag_ != CoverDrag::None && e->button() == Qt::LeftButton) {
+        const bool moved = QLineF(e->position(), dragFrom_).length() > 2;
+        coverDrag_ = CoverDrag::None;
+        if (moved) emit coverRectChanged(cover_);
+        update();
+        return;
+    }
     if (!dragging_ || e->button() != Qt::LeftButton) return;
     dragging_ = false;
     const QRectF b = bandRect(e->position()), f = frameRect();
@@ -86,6 +147,12 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void PreviewWidget::keyPressEvent(QKeyEvent* e) {
+    if (coverDrag_ != CoverDrag::None && e->key() == Qt::Key_Escape) {
+        coverDrag_ = CoverDrag::None;
+        cover_ = toNormalized(coverStart_);
+        update();
+        return;
+    }
     if (dragging_ && e->key() == Qt::Key_Escape) {
         dragging_ = false;
         band_ = {};
@@ -112,6 +179,35 @@ void PreviewWidget::paintEvent(QPaintEvent*) {
     const QRectF r = frameRect();
     p.setRenderHint(QPainter::SmoothPixmapTransform, frame_.width() < r.width() * devicePixelRatioF());
     p.drawImage(r, frame_);
+    if (coverOn_) {
+        const QRectF c = coverWidgetRect();
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(QColor(242, 169, 59, 40));
+        p.setPen(QPen(Theme::accent(), 1.5, Qt::DashLine));
+        if (coverShape_ == "ellipse") p.drawEllipse(c);
+        else if (coverShape_ == "circle") {
+            const double d = std::min(c.width(), c.height());
+            p.drawEllipse(QRectF(c.center().x() - d / 2, c.center().y() - d / 2, d, d));
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor(242, 169, 59, 120), 1, Qt::DotLine));
+            p.drawRect(c);
+        } else p.drawRect(c);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Theme::accent());
+        for (const QPointF& k : {c.topLeft(), c.topRight(), c.bottomRight(), c.bottomLeft()}) p.drawRect(QRectF(k - QPointF(4, 4), QSizeF(8, 8)));
+        if (hover_ && coverDrag_ == CoverDrag::None) {
+            QFont fnt = font();
+            fnt.setPixelSize(11);
+            p.setFont(fnt);
+            const QString hint = tr("Kéo vùng che để di chuyển, kéo góc để đổi cỡ, kéo ra ngoài để vẽ vùng mới");
+            const QRectF box(r.left() + 8, r.bottom() - 26, p.fontMetrics().horizontalAdvance(hint) + 16, 20);
+            p.setBrush(QColor(0, 0, 0, 150));
+            p.drawRoundedRect(box, 4, 4);
+            p.setPen(Theme::fg2());
+            p.drawText(box, Qt::AlignCenter, hint);
+        }
+        return;
+    }
     if (dragging_ && band_.width() >= 1) {
         // Dim what will be cut away; the box shows what fills the frame.
         QPainterPath outside;

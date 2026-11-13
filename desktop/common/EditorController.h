@@ -6,6 +6,8 @@
 
 #include <QImage>
 #include <QObject>
+#include <QRectF>
+#include <QVariantMap>
 #include <QPointer>
 #include <QSet>
 #include <QTimer>
@@ -132,6 +134,29 @@ public:
     // Key times of a clip on the timeline (seconds), for drawing.
     [[nodiscard]] QList<double> keyframeTimes(const QString& clipId, bool audio) const;
 
+    // ---- covers (blur / mosaic / bars over a region) on the selected clip ----
+    // The active cover is the one edited on the preview; "" = none.
+    [[nodiscard]] QString activeCover() const { return activeCover_; }
+    void setActiveCover(const QString& id);
+    // Covers of a clip: {id, style, shape, name}.
+    [[nodiscard]] QVariantList covers(const QString& clipId) const;
+    // Adds a cover to the selected video clip, makes it active; returns its id ("" on failure).
+    QString addCover(const QString& style, const QString& shape = "rect");
+    void removeCover(const QString& id);
+    // Active cover's params at the playhead (+ "following": bool); empty when none.
+    [[nodiscard]] QVariantMap coverState() const;
+    void updateCover(const QVariantMap& patch);  // style, shape, amount, feather, invert, color...
+    // Active cover's region on the canvas (0..1 of the output frame) at the playhead; null if none.
+    [[nodiscard]] QRectF coverCanvasRect() const;
+    // Region drawn on the preview (canvas 0..1): keyed when the cover follows motion.
+    void setCoverCanvasRect(const QRectF& canvasNormalized);
+    void setCoverFollowing(bool on);
+    // Follows the subject from the playhead to the clip's end (background job, one undo step).
+    void trackCover();
+    void cancelTrack();
+    [[nodiscard]] bool tracking() const { return tracking_; }
+    [[nodiscard]] double trackProgress() const { return trackProgress_; }
+
     // 3D LUT (.cube) from a local file; "" removes. Stored relative to the project when possible.
     void setClipLut(const QStringList& clipIds, const QString& file, double strength = 1.0);
     [[nodiscard]] QString clipLut(const QString& clipId) const;
@@ -172,6 +197,8 @@ signals:
     void mediaLibraryChanged(const QString& assetId);  // a thumbnail strip or waveform is ready
     // ok: packed / unpacked and opened; `path` is the package file or the opened project folder.
     void transferFinished(bool ok, const QString& path, const QString& message);
+    void coversChanged();  // active cover or tracking state changed
+    void trackFinished(bool ok, const QString& message);
 
 private:
     template <class F>
@@ -206,6 +233,13 @@ private:
     double playhead_ = 0;
     bool wasPlaying_ = false;
     QString selected_;
+    QString activeCover_;
+    bool tracking_ = false;
+    double trackProgress_ = 0;
+    vstudio::CancelToken trackCancel_;
+    std::unique_ptr<vstudio::JobScheduler> trackJobs_;
+    // Source frame placement of a clip on the canvas at the playhead (canvas px).
+    [[nodiscard]] std::optional<QRectF> sourceRectOnCanvas(const vstudio::Clip& c) const;
     double exportProgress_ = 0;
     bool exporting_ = false;
     vstudio::CancelToken exportCancel_;

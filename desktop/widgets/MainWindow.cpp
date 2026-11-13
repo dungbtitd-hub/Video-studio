@@ -27,6 +27,7 @@
 #include <cmath>
 
 #include "EditorController.h"
+#include "CoverPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -223,7 +224,16 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
+    auto* coverDock = new QDockWidget("Che mờ", this);
+    coverDock->setObjectName("covers");
+    covers_ = new CoverPanel(editor_, coverDock);
+    coverDock->setWidget(covers_);
+    addDockWidget(Qt::RightDockWidgetArea, coverDock);
+    tabifyDockWidget(looksDock, coverDock);
     looksDock->raise();
+    // Region on the preview follows the active cover; dragging it there edits the cover.
+    connect(editor_, &EditorController::coversChanged, this, &MainWindow::refreshCoverOverlay);
+    connect(preview_, &PreviewWidget::coverRectChanged, editor_, &EditorController::setCoverCanvasRect);
 
     auto* timelineDock = new QDockWidget("Timeline", this);
     timelineDock->setObjectName("timeline");
@@ -327,6 +337,12 @@ void MainWindow::refreshState() {
                                              : "Xuất video");
     inspector_->setText(editor_->selectedClip().isEmpty() ? "Chọn một clip trên Timeline" : "Clip đã chọn");
     refreshKeyframes();
+    refreshCoverOverlay();
+}
+
+void MainWindow::refreshCoverOverlay() {
+    const QRectF r = editor_->coverCanvasRect();
+    preview_->setCoverRect(editor_->playing() ? QRectF() : r, editor_->coverState().value("shape").toString());
 }
 
 void MainWindow::refreshKeyframes() {

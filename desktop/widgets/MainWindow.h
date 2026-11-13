@@ -10,6 +10,7 @@ class EditorController;
 class PreviewWidget;
 class TimelineWidget;
 class LooksPanel;
+class CoverPanel;
 class QListWidget;
 class QLabel;
 class QToolButton;
@@ -23,6 +24,8 @@ public:
     explicit MainWindow(EditorController* editor, QWidget* parent = nullptr);
     [[nodiscard]] TimelineWidget* timeline() const { return timeline_; }
     [[nodiscard]] LooksPanel* looks() const { return looks_; }
+    [[nodiscard]] CoverPanel* coverPanel() const { return covers_; }
+    [[nodiscard]] PreviewWidget* preview() const { return preview_; }
     // Every shortcut in the menus, as shown in Trợ giúp > Phím tắt (menu, action, keys).
     [[nodiscard]] QList<QStringList> shortcutTable() const;
     // Layout persistence: QSettings group "workspace" (geometry + dock state).
@@ -41,7 +44,8 @@ private:
     bool confirmDiscard();  // false = user cancelled
     void refreshAssets();
     void refreshState();
-    void refreshKeyframes();  // keyframe bar + region select, from the clip under the playhead
+    void refreshKeyframes();
+    void refreshCoverOverlay();  // active cover's region on the preview  // keyframe bar + region select, from the clip under the playhead
     QIcon assetIcon(const QString& id);  // cached until a new thumbnail strip arrives
     void relinkAsset(const QString& id);
 
@@ -49,6 +53,7 @@ private:
     PreviewWidget* preview_;
     TimelineWidget* timeline_;
     LooksPanel* looks_;
+    CoverPanel* covers_;
     QListWidget* assets_;
     QLabel* timecode_;
     QLabel* inspector_;

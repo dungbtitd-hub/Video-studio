@@ -10,6 +10,8 @@
 #include <QListWidget>
 #include <QSlider>
 #include <QToolButton>
+#include <QCheckBox>
+#include <QPushButton>
 #include <QMenuBar>
 #include <QSet>
 #include <QSignalSpy>
@@ -18,6 +20,7 @@
 #include <QTest>
 
 #include "EditorController.h"
+#include "CoverPanel.h"
 #include "LooksPanel.h"
 #include "MainWindow.h"
 #include "PreviewWidget.h"
@@ -285,6 +288,57 @@ private slots:
         QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 1);
         ctrl_->undo();
         QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 2);
+    }
+
+    // Covers: add from the panel, pick a style, drag the region on the preview, follow, remove.
+    void coversFromPanelAndPreview() {
+        CoverPanel* panel = win_->coverPanel();
+        PreviewWidget* preview = win_->preview();
+        QVERIFY(!panel->addButton()->isEnabled());
+        const QString clip = QString::fromStdString(ctrl_->project()->tracks.front().clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        ctrl_->seek(0.5);
+        QCoreApplication::processEvents();
+        QVERIFY(panel->addButton()->isEnabled());
+        QVERIFY(panel->styles()->count() >= 36);
+        QVERIFY(!panel->styles()->item(0)->icon().isNull());
+        panel->addButton()->click();
+        QCOMPARE(ctrl_->covers(clip).size(), 1);
+        QVERIFY(!ctrl_->activeCover().isEmpty());
+        QCOMPARE(panel->coverList()->count(), 1);
+        // One tap on a style changes the active cover.
+        QListWidgetItem* black = nullptr;
+        for (int i = 0; i < panel->styles()->count(); ++i)
+            if (panel->styles()->item(i)->data(Qt::UserRole) == "black") black = panel->styles()->item(i);
+        QVERIFY(black);
+        emit panel->styles()->itemClicked(black);
+        QCOMPARE(ctrl_->coverState()["style"].toString(), QString("black"));
+        // The preview edits the region: drag it right by a quarter of the frame.
+        QImage frame(480, 270, QImage::Format_RGBA8888);
+        frame.fill(Qt::darkGray);
+        preview->setFrame(frame);
+        QCoreApplication::processEvents();
+        QVERIFY(preview->coverEditing());
+        const double x0 = ctrl_->coverState()["x"].toDouble();
+        const QRectF f = preview->frameRect();
+        const QRectF c = ctrl_->coverCanvasRect();
+        const QPoint from = (f.topLeft() + QPointF((c.center().x()) * f.width(), c.center().y() * f.height())).toPoint();
+        const QPoint to = from + QPoint(int(f.width() / 4), 0);
+        QTest::mousePress(preview, Qt::LeftButton, {}, from);
+        QTest::mouseMove(preview, to);
+        QTest::mouseRelease(preview, Qt::LeftButton, {}, to);
+        QVERIFY2(std::abs(ctrl_->coverState()["x"].toDouble() - (x0 + 0.25)) < 0.02,
+                 qPrintable(QString::number(ctrl_->coverState()["x"].toDouble())));
+        // Follow by keyframes, then remove.
+        auto* follow = panel->findChild<QCheckBox*>();
+        QVERIFY(follow);
+        ctrl_->setCoverFollowing(true);
+        QVERIFY(ctrl_->coverState()["following"].toBool());
+        QVERIFY(panel->trackButton()->isEnabled());
+        ctrl_->removeCover(ctrl_->activeCover());
+        QVERIFY(ctrl_->covers(clip).isEmpty());
+        QCoreApplication::processEvents();
+        QVERIFY(!preview->coverEditing());
     }
 
     void layoutResets() {
