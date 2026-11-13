@@ -303,35 +303,72 @@ void Editor::clearKeyframes(const Id& clipId, kf::Group group) {
     });
 }
 
+namespace {
+
+// What setPropertyAt changes: the static transform/volume, or keys where the property is animated.
+struct PropertyChange {
+    Json transform;
+    double volume = 1;
+    bool staticChange = false;
+    std::map<std::string, double> keyed;
+};
+
+PropertyChange propertyChange(const Clip& c, Time sourceTime, const std::map<std::string, double>& values) {
+    PropertyChange ch;
+    ch.transform = c.transform.is_object() ? c.transform : Json::object();
+    ch.volume = c.volume;
+    for (const auto& [prop, v] : values) {
+        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
+        if (keyframeValue(c, prop, sourceTime)) {
+            // Keyed volume multiplies the clip volume: store the factor that gives `v`.
+            ch.keyed[prop] = prop == kf::kVolume ? v / std::max(c.volume, 1e-6) : v;
+        } else if (prop == kf::kVolume) {
+            ch.volume = kf::clampValue(prop, v);
+            ch.staticChange = true;
+        } else {
+            ch.transform[prop] = kf::clampValue(prop, v);
+            ch.staticChange = true;
+        }
+    }
+    return ch;
+}
+
+void applyPropertyChange(Clip& clip, const PropertyChange& ch, Time sourceTime, Time tol) {
+    if (ch.staticChange) {
+        clip.transform = ch.transform;
+        clip.volume = ch.volume;
+    }
+    for (const auto& [prop, v] : ch.keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+}
+
+}  // namespace
+
 void Editor::setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values) {
     const Clip* c = project_.findClip(clipId);
     if (!c) throw EditError("clip not found");
-    std::map<std::string, double> keyed;
-    Json tf = c->transform.is_object() ? c->transform : Json::object();
-    double volume = c->volume;
-    bool staticChange = false;
-    for (const auto& [prop, v] : values) {
-        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
-        if (keyframeValue(*c, prop, sourceTime)) {
-            // Keyed volume multiplies the clip volume: store the factor that gives `v`.
-            keyed[prop] = prop == kf::kVolume ? v / std::max(c->volume, 1e-6) : v;
-        } else if (prop == kf::kVolume) {
-            volume = kf::clampValue(prop, v);
-            staticChange = true;
-        } else {
-            tf[prop] = kf::clampValue(prop, v);
-            staticChange = true;
-        }
-    }
+    const PropertyChange ch = propertyChange(*c, sourceTime, values);
     const Track* tr = project_.trackOfClip(clipId);
     run("Adjust", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        applyPropertyChange(editableClip(p, clipId), ch, sourceTime, keyTolerance(p));
+    });
+}
+
+void Editor::setOverlayRegion(const Id& clipId, Time sourceTime, double x, double y, double w, double h) {
+    const Clip* c = project_.findClip(clipId);
+    if (!c) throw EditError("clip not found");
+    if (!c->generated() || c->content.value("kind", std::string{}) != "overlay") throw EditError("not an overlay");
+    if (w < 1 || h < 1) throw EditError("empty region");
+    const Transform tf = animatedTransform(*c, sourceTime);
+    const double s = std::max(tf.scale, 1e-6);
+    const PropertyChange ch = propertyChange(*c, sourceTime,
+                                             {{kf::kX, x + w / 2 - project_.canvas.width / 2.0},
+                                              {kf::kY, y + h / 2 - project_.canvas.height / 2.0}});
+    const Json patch{{"w", w / s}, {"h", h / s}};
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Overlay region", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
         Clip& clip = editableClip(p, clipId);
-        if (staticChange) {
-            clip.transform = tf;
-            clip.volume = volume;
-        }
-        const Time tol = keyTolerance(p);
-        for (const auto& [prop, v] : keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+        clip.content.merge_patch(patch);
+        applyPropertyChange(clip, ch, sourceTime, keyTolerance(p));
     });
 }
 

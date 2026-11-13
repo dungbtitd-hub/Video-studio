@@ -848,6 +848,16 @@ char* vs_default_overlay_json(const char* id) {
     return dup(c.dump());
 }
 
+int vs_set_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Project& p = s->editor->project();
+        const double W = p.canvas.width, H = p.canvas.height;
+        s->editor->setOverlayRegion(c.id, c.toSource(Time::fromTicks(t)), x * W, y * H, w * W, h * H);
+        s->edited();
+    });
+}
+
 int vs_overlay_icon(const char* id, double seconds, uint8_t* out, int width, int height) {
     if (!out || width <= 0 || height <= 0 || !overlays::findOverlay(str(id))) return -1;
     try {

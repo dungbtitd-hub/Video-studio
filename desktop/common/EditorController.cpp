@@ -1,6 +1,7 @@
 #include "EditorController.h"
 
 #include "vstudio/generators.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 
@@ -802,6 +803,10 @@ QString generatedLabel(const vstudio::Clip& c) {
         const auto* info = vstudio::stickers::findSticker(c.content.value("sticker", std::string{}));
         return QStringLiteral("★  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Sticker"));
     }
+    if (kind == "overlay") {
+        const auto* info = vstudio::overlays::findOverlay(c.content.value("overlay", std::string{}));
+        return QStringLiteral("✦  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Lớp phủ"));
+    }
     return QString::fromStdString(kind);
 }
 
@@ -823,6 +828,25 @@ QString EditorController::addSticker(const QString& stickerId) {
         return {};
     setSelectedClip(q(id));
     return q(id);
+}
+
+QString EditorController::addOverlay(const QString& overlayId) {
+    if (!vstudio::overlays::findOverlay(s(overlayId))) return {};
+    vstudio::Json c = vstudio::overlays::defaultOverlayContent(s(overlayId));
+    c.erase("w");  // sized to the canvas by the editor
+    c.erase("h");
+    c.erase("ref");
+    Id id;
+    if (!edit([&] { id = editor_->addGeneratedClip(c, fromSecs(playhead_), Time::fromSeconds(5)); })) return {};
+    setSelectedClip(q(id));
+    return q(id);
+}
+
+void EditorController::setOverlayFullFrame() {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || c->content.value("kind", std::string{}) != "overlay") return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    edit([&] { editor_->setOverlayRegion(c->id, src, 0, 0, snapshot_->canvas.width, snapshot_->canvas.height); });
 }
 
 std::optional<vstudio::Json> EditorController::selectedContent() const {
@@ -853,6 +877,11 @@ void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to)
     const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
     const Transform tf = animatedTransform(*c, src);
     const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    if (c->content.value("kind", std::string{}) == "overlay") {
+        if (to.width() <= 0 || to.height() <= 0) return;
+        edit([&] { editor_->setOverlayRegion(c->id, src, to.x() * W, to.y() * H, to.width() * W, to.height() * H); });
+        return;
+    }
     const double k = to.width() / from.width();
     // The box centre sits at canvas centre + offset + (box centre in content units) * scale.
     const double x = to.center().x() * W - W / 2 - (from.center().x() * W - W / 2 - tf.x) * k;

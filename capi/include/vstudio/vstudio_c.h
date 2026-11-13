@@ -187,6 +187,9 @@ VS_API int vs_content_preview(const char* content_json, double local, double len
 VS_API char* vs_overlays_json(void);
 VS_API char* vs_default_overlay_json(const char* overlay_id);
 VS_API int vs_overlay_icon(const char* overlay_id, double seconds, uint8_t* out, int width, int height);
+/* Sets the region an overlay covers (0..1 of the frame) as seen at timeline_time. One undo step. */
+VS_API int vs_set_overlay_region(vs_session* s, const char* clip_id, int64_t timeline_time, double x, double y,
+                                 double w, double h);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

@@ -189,13 +189,18 @@ public:
     // Adds a text (default look) / sticker at the playhead for 3 s on a free overlay track and selects it.
     QString addText(const QString& text = {});
     QString addSticker(const QString& stickerId);
+    // Lays overlay effect `overlayId` over the whole frame from the playhead for 5 s and selects it.
+    QString addOverlay(const QString& overlayId);
+    // The selected overlay covers the whole frame again.
+    void setOverlayFullFrame();
     // Content of the selected clip when it is a text or sticker.
     [[nodiscard]] std::optional<vstudio::Json> selectedContent() const;
     // Merges `patch` into the selected text/sticker (one undo step).
     void updateContent(const vstudio::Json& patch);
     // The selected text/sticker's box on the canvas at the playhead (0..1), or null.
     [[nodiscard]] QRectF objectCanvasRect() const;
-    // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated).
+    // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated);
+    // an overlay's region takes the box `to` exactly (any shape).
     void setObjectCanvasRect(const QRectF& from, const QRectF& to);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }

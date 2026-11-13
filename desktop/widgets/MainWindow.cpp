@@ -31,6 +31,7 @@
 #include "TransitionsPanel.h"
 #include "TextPanel.h"
 #include "StickerPanel.h"
+#include "OverlayPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -251,12 +252,19 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     stickerDock->setWidget(stickers_);
     addDockWidget(Qt::RightDockWidgetArea, stickerDock);
     tabifyDockWidget(textDock, stickerDock);
+    auto* overlayDock = new QDockWidget("Lớp phủ", this);
+    overlayDock->setObjectName("overlays");
+    overlays_ = new OverlayPanel(editor_, overlayDock);
+    overlayDock->setWidget(overlays_);
+    addDockWidget(Qt::RightDockWidgetArea, overlayDock);
+    tabifyDockWidget(stickerDock, overlayDock);
     looksDock->raise();
-    // Selecting a text or sticker on the timeline brings its panel forward.
-    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock] {
+    // Selecting a text, sticker or overlay on the timeline brings its panel forward.
+    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock] {
         const auto c = editor_->selectedContent();
         if (!c) return;
-        QDockWidget* d = c->value("kind", std::string{}) == "text" ? textDock : stickerDock;
+        const std::string kind = c->value("kind", std::string{});
+        QDockWidget* d = kind == "text" ? textDock : kind == "overlay" ? overlayDock : stickerDock;
         d->show();
         d->raise();
     });
@@ -378,7 +386,11 @@ void MainWindow::refreshCoverOverlay() {
     const QRectF r = editor_->coverCanvasRect();
     preview_->setCoverRect(editor_->playing() ? QRectF() : r, editor_->coverState().value("shape").toString());
     // No cover being edited: the selected text/sticker gets move/scale handles.
-    if (r.isNull()) preview_->setObjectRect(editor_->playing() ? QRectF() : editor_->objectCanvasRect());
+    if (r.isNull()) {
+        const auto c = editor_->selectedContent();
+        preview_->setObjectRect(editor_->playing() ? QRectF() : editor_->objectCanvasRect(),
+                                c && c->value("kind", std::string{}) == "overlay");
+    }
 }
 
 void MainWindow::refreshKeyframes() {

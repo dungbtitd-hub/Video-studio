@@ -192,7 +192,10 @@ int main(void) {
             EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[0] < 1e-6 && r[2] > 0.999 && r[3] > 0.999);
             EXPECT(vs_update_clip_content(s, oc, "{\"w\":640,\"h\":360}") == 0);
             EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[2] < 0.6);
-            EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1);
+            EXPECT(vs_set_overlay_region(s, oc, 0, 0.5, 0.25, 0.5, 0.5) == 0);
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[0] > 0.499 && r[0] < 0.501 && r[1] > 0.249 && r[3] < 0.501);
+            EXPECT(vs_set_overlay_region(s, oc, 0, 0.5, 0.25, 0, 0.5) != 0);
+            EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1 && vs_undo(s) == 1);
             vs_free(oc);
         }
         vs_free(snow);

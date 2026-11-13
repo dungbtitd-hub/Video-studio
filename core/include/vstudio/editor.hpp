@@ -105,6 +105,9 @@ public:
     Id addGeneratedClip(const Json& content, Time at, Time duration, const Id& trackId = {});
     // Merges `patch` into the clip's content (JSON merge patch: null removes a key). Undoable.
     void updateClipContent(const Id& clipId, const Json& patch);
+    // Sets the region an overlay effect covers to the canvas box {x, y, w, h} (canvas px) as seen
+    // at `sourceTime`: its "w"/"h" and its position, scale kept (keyed when animated). One undo step.
+    void setOverlayRegion(const Id& clipId, Time sourceTime, double x, double y, double w, double h);
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null
