@@ -6,6 +6,7 @@ qt_add_executable(VideoStudio
   MainWindow.cpp MainWindow.h
   PreviewWidget.cpp PreviewWidget.h
   TimelineWidget.cpp TimelineWidget.h
+  LooksPanel.cpp LooksPanel.h
 )
 target_link_libraries(VideoStudio PRIVATE vstudio_desktop_common Qt6::Widgets)
 set_target_properties(VideoStudio PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON

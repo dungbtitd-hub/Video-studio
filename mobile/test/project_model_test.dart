@@ -8,7 +8,8 @@ const sample = '''
  "assets":[{"asset_id":"a1","uri":"media/clip.mp4","media_type":"video","duration":7056000000,"fps":"30/1"}],
  "tracks":[
   {"track_id":"t0","type":"video","name":"V1","order":0,"clips":[
-    {"clip_id":"c1","asset_id":"a1","timeline_in":0,"source_in":0,"source_out":1411200000,"speed":"1/1"},
+    {"clip_id":"c1","asset_id":"a1","timeline_in":0,"source_in":0,"source_out":1411200000,"speed":"1/1",
+     "effects":[{"effect_id":"e","type":"builtin.color_look","enabled":true,"params":{"look":"vintage","strength":0.7}}]},
     {"clip_id":"c2","asset_id":"a1","timeline_in":1411200000,"source_in":1411200000,"source_out":2822400000,"speed":"2/1"}]},
   {"track_id":"t1","type":"audio","name":"A1","order":1,"clips":[]},
   {"track_id":"t2","type":"video","name":"V2","order":2,"enabled":false,"locked":true,"clips":[]}]}
@@ -26,6 +27,8 @@ void main() {
     expect(v1.clips[1].duration, closeTo(1.0, 1e-9)); // 2 s of source at 2x
     expect(p.duration, closeTo(3.0, 1e-9));
     expect(v1.clips[0].name, 'clip.mp4');
+    expect((v1.clips[0].look, v1.clips[0].lookStrength), ('vintage', 0.7));
+    expect(v1.clips[1].look, isNull);
   });
 
   test('track flags and order within type', () {

@@ -64,11 +64,13 @@ int main(int argc, char* argv[]) {
     QString shot;
     int bench = 0;
     double seekTo = -1;
+    QString look;  // --look <id>: select the first video clip and apply a look (screenshots, CI)
     const QStringList args = app.arguments();
     for (int i = 1; i < args.size(); ++i) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) shot = args[++i];
         else if (args[i] == "--seek" && i + 1 < args.size()) seekTo = args[++i].toDouble();
         else if (args[i] == "--bench-timeline" && i + 1 < args.size()) bench = args[++i].toInt();
+        else if (args[i] == "--look" && i + 1 < args.size()) look = args[++i];
         else files << QUrl::fromLocalFile(args[i]);
     }
     if (bench > 0) {
@@ -81,6 +83,13 @@ int main(int argc, char* argv[]) {
     }
     if (!files.isEmpty()) editor.importMedia(files, true);
     if (seekTo >= 0) QTimer::singleShot(2500, &editor, [&] { editor.seek(seekTo); });
+    if (!look.isEmpty())
+        QTimer::singleShot(2000, &editor, [&] {
+            const QStringList clips = editor.lookableClips();
+            if (clips.isEmpty()) return;
+            editor.setSelectedClip(clips.front());
+            editor.setClipLook({clips.front()}, look, 1.0);
+        });
     if (!shot.isEmpty()) {
         QTimer::singleShot(4000, &app, [&] {
             const bool ok = win.grab().save(shot);

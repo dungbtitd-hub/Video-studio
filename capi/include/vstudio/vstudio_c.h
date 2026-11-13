@@ -69,6 +69,12 @@ VS_API int vs_split_at(vs_session* s, int64_t timeline_time); /* returns number 
 VS_API int vs_remove_clip(vs_session* s, const char* clip_id);
 /* Removes the clip and pulls the later clips of its track left to close the gap (one undo step). */
 VS_API int vs_ripple_delete(vs_session* s, const char* clip_id);
+/* One-tap colour looks (video and photos). vs_looks_json: [{"id","name","category"}], free with vs_free.
+ * vs_set_clip_look: clip_ids_json is a JSON array of clip ids; look_id "" removes the look; one undo step.
+ * vs_look_preview: applies a look to an RGBA buffer in place (for look thumbnails; no session needed). */
+VS_API char* vs_looks_json(void);
+VS_API int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_id, double strength);
+VS_API int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

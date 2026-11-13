@@ -2,9 +2,12 @@
 // Runs when VSTUDIO_LIB points at the library (CI builds it first), else skips:
 //   VSTUDIO_LIB=../build/capi/libvstudio.so flutter test
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:video_studio/core/vstudio.dart';
+import 'package:video_studio/ui/looks_sheet.dart';
 
 void main() {
   final lib = Platform.environment['VSTUDIO_LIB'];
@@ -59,6 +62,21 @@ void main() {
     vs.appendClip(track, asset);
     expect(vs.splitAt(1.0), 1);
     expect(vs.project().tracks.single.clips.length, 2);
+    // One-tap looks: both halves at once, one undo step, visible in the project view.
+    final ids = vs.project().tracks.single.clips.map((c) => c.id).toList();
+    expect(vs.looks().map((l) => l.id), contains('teal_orange'));
+    vs.setClipLook(ids, 'teal_orange', strength: 0.6);
+    expect(vs.project().tracks.single.clips.map((c) => (c.look, c.lookStrength)), everyElement(('teal_orange', 0.6)));
+    vs.setClipLook([ids.first], 'bw_contrast');
+    expect(vs.project().tracks.single.clips.first.look, 'bw_contrast');
+    expect(vs.undo(), isTrue);
+    expect(vs.project().tracks.single.clips.first.look, 'teal_orange');
+    vs.setClipLook(ids, '');
+    expect(vs.project().tracks.single.clips.every((c) => c.look == null), isTrue);
+    final grey = vs.lookPreview('bw_soft', Uint8List.fromList([200, 40, 10, 255]), 1, 1)!;
+    expect(grey[0], grey[1]);
+    expect(grey[1], grey[2]);
+    expect(vs.lookPreview('nope', Uint8List(4), 1, 1), isNull);
     // Right half dragged 0.05 s past the playhead at 3.0 snaps back onto it.
     final right = vs.project().tracks.single.clips[1];
     expect(vs.snapClipMove(right.id, 3.05, 0.1, playhead: 3.0), closeTo(3.0, 1e-9));
@@ -144,4 +162,37 @@ void main() {
     expect(vs.undo(), isTrue);
     expect(() => vs.relink('nope', media), throwsA(isA<VStudioException>()));
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  testWidgets('look strip: previews render, one tap applies, no overflow', (tester) async {
+    final vs = VStudio.create('ffi-looks', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single;
+    final applied = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 360,
+            child: LooksSheet(
+              vs: vs,
+              clip: clip,
+              onApply: (look, strength) => applied.add('$look ${strength.toStringAsFixed(1)}'),
+              onApplyAll: (look, strength) => applied.add('all $look'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300))); // image decodes
+    await tester.pump();
+    expect(find.byType(RawImage), findsWidgets);
+    await tester.tap(find.text('Rực rỡ'));
+    await tester.pump();
+    await tester.tap(find.text('Áp dụng cho tất cả'));
+    await tester.pump();
+    expect(applied, ['vivid 1.0', 'all vivid']);
+  }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
 }

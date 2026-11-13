@@ -1,5 +1,6 @@
 #include "vstudio/editor.hpp"
 
+#include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
 
 namespace vstudio {
@@ -208,6 +209,37 @@ void Editor::addClipEffect(const Id& clipId, const std::string& type, const Json
         Track* t = p.trackOfClip(clipId);
         if (t->locked) throw EditError("track is locked");
         t->findClip(clipId)->effects.push_back(fx);
+    });
+}
+
+void Editor::setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength) {
+    if (clipIds.empty()) throw EditError("no clip selected");
+    const ColorLook* look = lookId.empty() ? nullptr : findColorLook(lookId);
+    if (!lookId.empty() && !look) throw EditError("unknown look: " + lookId);
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    Json fx;
+    if (look) {
+        Json params = look->params;
+        params["look"] = look->id;
+        params["strength"] = std::clamp(strength, 0.0, 1.0);
+        fx = Json{{"effect_id", newId()}, {"type", kColorLookEffect}, {"enabled", true}, {"params", params}};
+    }
+    run(look ? "Apply look" : "Remove look", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& c : clipIds) {
+            Clip* clip = p.trackOfClip(c)->findClip(c);
+            if (!clip->effects.is_array()) clip->effects = Json::array();
+            Json kept = Json::array();
+            for (const auto& e : clip->effects)
+                if (!(e.is_object() && e.value("type", std::string{}) == kColorLookEffect)) kept.push_back(e);
+            if (!fx.is_null()) kept.push_back(fx);
+            clip->effects = std::move(kept);
+        }
     });
 }
 

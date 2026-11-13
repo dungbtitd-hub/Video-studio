@@ -70,6 +70,17 @@ int main(void) {
     vs_free(presets);
     EXPECT(vs_export_start_preset(s, "/tmp/x.mp4", "nope") != 0);
 
+    /* Looks: catalog, preview on a buffer, refusal for unknown clips. */
+    char* looks = vs_looks_json();
+    EXPECT(looks != NULL && strstr(looks, "\"teal_orange\""));
+    vs_free(looks);
+    uint8_t px[4 * 4] = {200, 100, 50, 255, 10, 20, 30, 255, 128, 128, 128, 255, 0, 255, 0, 255};
+    EXPECT(vs_look_preview("bw_contrast", 1.0, px, 2, 2) == 0);
+    EXPECT(px[0] == px[1] && px[1] == px[2] && px[3] == 255);
+    EXPECT(vs_look_preview("nope", 1.0, px, 2, 2) != 0);
+    EXPECT(vs_set_clip_look(s, "[\"nope\"]", "vivid", 1.0) != 0);
+    EXPECT(vs_set_clip_look(s, "not json", "vivid", 1.0) != 0);
+
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");
     EXPECT(v2 != NULL);

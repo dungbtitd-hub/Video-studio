@@ -3,12 +3,15 @@
 #include <QAction>
 #include <QApplication>
 #include <QDockWidget>
+#include <QListWidget>
+#include <QSlider>
 #include <QMenuBar>
 #include <QSet>
 #include <QStandardPaths>
 #include <QTest>
 
 #include "EditorController.h"
+#include "LooksPanel.h"
 #include "MainWindow.h"
 #include "TimelineWidget.h"
 
@@ -111,6 +114,33 @@ private slots:
                 QVERIFY(m["estimatedBytes"].toLongLong() > 0);
             }
         }
+    }
+
+    void oneTapLooks() {
+        LooksPanel* panel = win_->looks();
+        QListWidget* list = panel->list();
+        const auto& v1 = ctrl_->project()->tracks.front();  // Video 1 (top)
+        const QString clip = QString::fromStdString(v1.clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        QListWidgetItem* teal = nullptr;
+        for (int i = 0; i < list->count(); ++i)
+            if (list->item(i)->data(Qt::UserRole) == "teal_orange") teal = list->item(i);
+        QVERIFY(teal);
+        QVERIFY(!teal->icon().isNull());  // preview rendered
+        emit list->itemClicked(teal);     // one tap
+        QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));
+        QCOMPARE(list->currentItem(), teal);
+        // Strength is committed when the slider is released.
+        panel->strength()->setValue(40);
+        emit panel->strength()->sliderReleased();
+        QCOMPARE(ctrl_->clipLook(clip).second, 0.4);
+        // "Áp dụng cho tất cả": every clip on unlocked video tracks, one undo step.
+        ctrl_->setClipLook(ctrl_->lookableClips(), "teal_orange", 0.4);
+        for (const QString& c : ctrl_->lookableClips()) QCOMPARE(ctrl_->clipLook(c).first, QString("teal_orange"));
+        ctrl_->undo();
+        QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
+        emit list->itemClicked(list->item(0));  // "Gốc": no look
+        QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
     }
 
     void layoutResets() {

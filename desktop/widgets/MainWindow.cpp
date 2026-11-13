@@ -24,6 +24,7 @@
 #include <QVBoxLayout>
 
 #include "EditorController.h"
+#include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
 
@@ -155,6 +156,14 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
     connect(split, &QPushButton::clicked, editor_, &EditorController::splitAtPlayhead);
     connect(del, &QPushButton::clicked, editor_, &EditorController::deleteSelected);
+
+    auto* looksDock = new QDockWidget("Bộ lọc màu", this);
+    looksDock->setObjectName("looks");
+    looks_ = new LooksPanel(editor_, looksDock);
+    looksDock->setWidget(looks_);
+    addDockWidget(Qt::RightDockWidgetArea, looksDock);
+    tabifyDockWidget(inspectorDock, looksDock);
+    looksDock->raise();
 
     auto* timelineDock = new QDockWidget("Timeline", this);
     timelineDock->setObjectName("timeline");

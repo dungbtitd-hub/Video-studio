@@ -5,6 +5,7 @@
 #include "fake_media.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
+#include "vstudio/looks.hpp"
 #include "vstudio/frame_cache.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -662,6 +663,66 @@ TEST("export presets keep the canvas aspect") {
     CHECK(bytes > 9'000'000 && bytes < 11'000'000);
     CHECK(findExportPreset("nope") == nullptr);
     for (const auto& pr : exportPresets()) CHECK(!pr.name.empty() && !pr.id.empty());
+}
+
+TEST("colour looks: one tap, replaceable, undoable, render the same everywhere") {
+    Fixture f;
+    const Id a = f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(2));
+    const Id b = f.ed.insertClip(f.v1, f.asset, sec(2), sec(0), sec(2));
+    CHECK(colorLooks().size() >= 15);
+    f.ed.setClipLook({a, b}, "teal_orange", 0.8);
+    auto lookOf = [&](const Id& c) {
+        for (const auto& e : f.ed.project().findClip(c)->effects)
+            if (e.value("type", std::string{}) == kColorLookEffect) return e["params"].value("look", std::string{});
+        return std::string{};
+    };
+    CHECK_EQ(lookOf(a), std::string("teal_orange"));
+    CHECK_EQ(lookOf(b), std::string("teal_orange"));
+    f.ed.setClipLook({a}, "bw_contrast");  // replaces, never stacks
+    CHECK_EQ(f.ed.project().findClip(a)->effects.size(), std::size_t(1));
+    CHECK_EQ(lookOf(a), std::string("bw_contrast"));
+    CHECK(f.ed.undo());
+    CHECK_EQ(lookOf(a), std::string("teal_orange"));
+    f.ed.setClipLook({a}, "");
+    CHECK(lookOf(a).empty());
+    CHECK_THROWS(f.ed.setClipLook({a}, "nope"));
+    f.ed.setTrackFlags(f.v1, true, true, false);
+    CHECK_THROWS(f.ed.setClipLook({b}, "vivid"));
+
+    // The effect itself: identity by default, mono gives grey, strength 0 is a no-op.
+    VideoFrame fr;
+    fr.allocate(64, 36);
+    for (std::size_t i = 0; i < fr.rgba.size(); i += 4) {
+        fr.rgba[i] = std::uint8_t(i % 251);
+        fr.rgba[i + 1] = std::uint8_t((i / 3) % 241);
+        fr.rgba[i + 2] = std::uint8_t((i / 7) % 233);
+        fr.rgba[i + 3] = 255;
+    }
+    VideoFrame same = fr;
+    applyColorLook(same, Json::object());
+    int maxDiff = 0;
+    for (std::size_t i = 0; i < fr.rgba.size(); ++i) maxDiff = std::max(maxDiff, std::abs(fr.rgba[i] - same.rgba[i]));
+    CHECK(maxDiff <= 1);
+    VideoFrame grey = fr;
+    applyColorLook(grey, findColorLook("bw_soft")->params);
+    for (std::size_t i = 0; i < grey.rgba.size(); i += 4) {
+        CHECK(std::abs(grey.rgba[i] - grey.rgba[i + 1]) <= 1);
+        CHECK(std::abs(grey.rgba[i + 1] - grey.rgba[i + 2]) <= 1);
+        CHECK_EQ(int(grey.rgba[i + 3]), 255);  // alpha untouched
+    }
+    VideoFrame off = fr;
+    Json p = findColorLook("night_neon")->params;
+    p["strength"] = 0.0;
+    applyColorLook(off, p);
+    CHECK(off.rgba == fr.rgba);
+    // Speed: a 960x540 preview frame stays well inside a frame budget on CPU.
+    VideoFrame big;
+    big.allocate(960, 540);
+    const auto t0 = std::chrono::steady_clock::now();
+    applyColorLook(big, findColorLook("teal_orange")->params);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("       colour look 960x540: %.2f ms\n", ms);
+    CHECK(ms < 40);
 }
 
 TEST("snap: thousands of clips stay fast") {

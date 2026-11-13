@@ -52,6 +52,9 @@ public:
     void setClipVolume(const Id& clipId, double volume);
     void setClipTransform(const Id& clipId, const Json& transform);
     void addClipEffect(const Id& clipId, const std::string& type, const Json& params);
+    // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
+    // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
+    void setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength = 1.0);
 
     bool undo();
     bool redo();

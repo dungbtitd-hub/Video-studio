@@ -1,6 +1,7 @@
 #include "vstudio/modules.hpp"
 
 #include "vstudio/compositor.hpp"
+#include "vstudio/looks.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -141,6 +142,11 @@ public:
     }
 };
 
+class ColorLookEffect final : public IVideoEffect {
+public:
+    void apply(VideoFrame& f, const Json& p, Time) const override { applyColorLook(f, p); }
+};
+
 class Grayscale final : public IVideoEffect {
 public:
     void apply(VideoFrame& f, const Json& p, Time) const override {
@@ -160,6 +166,8 @@ void registerBuiltinModules(ModuleRegistry& r) {
                        [] { return createCpuCompositor(); });
     r.add<IVideoEffect>({.id = "builtin.color_adjust", .displayName = "Color adjust", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<ColorAdjust>(); });
+    r.add<IVideoEffect>({.id = kColorLookEffect, .displayName = "Color look", .capabilities = {"effect.color"}},
+                        [] { return std::make_shared<ColorLookEffect>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<Grayscale>(); });
 }
