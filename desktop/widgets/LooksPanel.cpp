@@ -4,11 +4,15 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPainter>
+#include <QComboBox>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QPushButton>
 #include <QSlider>
 #include <QVBoxLayout>
 
 #include "EditorController.h"
+#include "vstudio/color_space.hpp"
 #include "vstudio/looks.hpp"
 
 namespace {
@@ -34,6 +38,27 @@ QImage samplePicture() {
 LooksPanel::LooksPanel(EditorController* editor, QWidget* parent) : QWidget(parent), editor_(editor) {
     auto* l = new QVBoxLayout(this);
     l->setContentsMargins(8, 8, 8, 8);
+    // Source conversion first: Log/HDR footage looks flat until it is converted.
+    auto* src = new QHBoxLayout();
+    src->addWidget(new QLabel("Đầu vào", this));
+    input_ = new QComboBox(this);
+    input_->addItem("Bình thường (Rec.709)", QString());
+    for (const auto& f : vstudio::logFormats())
+        input_->addItem(QString::fromStdString(f.name), QString::fromStdString(f.id));
+    input_->setToolTip("Video quay Log hoặc HLG trông nhạt màu: chọn đúng định dạng của máy quay để chuyển về Rec.709.");
+    src->addWidget(input_, 1);
+    l->addLayout(src);
+    inputHint_ = new QLabel(this);
+    inputHint_->setWordWrap(true);
+    inputHint_->setStyleSheet("color: #e0b050;");
+    l->addWidget(inputHint_);
+    auto* lutRow = new QHBoxLayout();
+    lut_ = new QPushButton("Thêm LUT (.cube)…", this);
+    lut_->setToolTip("LUT 3D từ hãng máy quay (vd. LUT D-Log M của DJI) hoặc LUT màu điện ảnh.");
+    lutClear_ = new QPushButton("Bỏ LUT", this);
+    lutRow->addWidget(lut_, 1);
+    lutRow->addWidget(lutClear_);
+    l->addLayout(lutRow);
     hint_ = new QLabel(this);
     hint_->setWordWrap(true);
     l->addWidget(hint_);
@@ -92,6 +117,19 @@ LooksPanel::LooksPanel(EditorController* editor, QWidget* parent) : QWidget(pare
     connect(clear_, &QPushButton::clicked, this, [this] {
         if (!editor_->selectedClip().isEmpty()) editor_->setClipLook({editor_->selectedClip()}, {}, 1.0);
     });
+    connect(input_, &QComboBox::activated, this, [this](int i) {
+        const QString sel = editor_->selectedClip();
+        if (!sel.isEmpty()) editor_->setClipColorSpace({sel}, input_->itemData(i).toString());
+    });
+    connect(lut_, &QPushButton::clicked, this, [this] {
+        const QString sel = editor_->selectedClip();
+        if (sel.isEmpty()) return;
+        const QString f = QFileDialog::getOpenFileName(this, "Chọn LUT", {}, "LUT 3D (*.cube)");
+        if (!f.isEmpty()) editor_->setClipLut({sel}, f);
+    });
+    connect(lutClear_, &QPushButton::clicked, this, [this] {
+        if (!editor_->selectedClip().isEmpty()) editor_->setClipLut({editor_->selectedClip()}, {});
+    });
     connect(editor_, &EditorController::selectionChanged, this, &LooksPanel::refresh);
     connect(editor_, &EditorController::projectChanged, this, &LooksPanel::refresh);
     connect(editor_, &EditorController::mediaLibraryChanged, this, [this](const QString& assetId) {
@@ -145,6 +183,20 @@ void LooksPanel::refresh() {
     hint_->setText(sel.isEmpty() ? "Chọn một clip video hoặc ảnh trên Timeline, rồi chạm vào bộ lọc."
                                  : "Chạm vào bộ lọc để áp dụng ngay cho clip đã chọn.");
     list_->setEnabled(!sel.isEmpty());
+    input_->setEnabled(!sel.isEmpty());
+    lut_->setEnabled(!sel.isEmpty());
+    {
+        const QString in = sel.isEmpty() ? QString() : editor_->clipColorSpace(sel).first;
+        QSignalBlocker b(input_);
+        input_->setCurrentIndex(std::max(0, input_->findData(in)));
+        const QString suggested = sel.isEmpty() ? QString() : editor_->suggestedColorSpace(sel);
+        const auto* f = vstudio::findLogFormat(suggested.toStdString());
+        inputHint_->setVisible(in.isEmpty() && f);
+        if (f) inputHint_->setText(QString("File này là %1: chọn ở \"Đầu vào\" để hiện màu đúng.").arg(QString::fromStdString(f->name)));
+        const QString lut = sel.isEmpty() ? QString() : editor_->clipLut(sel);
+        lut_->setText(lut.isEmpty() ? "Thêm LUT (.cube)…" : "LUT: " + QFileInfo(lut).completeBaseName());
+        lutClear_->setEnabled(!lut.isEmpty());
+    }
     clear_->setEnabled(!look.isEmpty());
     applyAll_->setEnabled(!look.isEmpty());
     for (int i = 0; i < list_->count(); ++i)

@@ -333,7 +333,7 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
             // Effects work on a copy: cached source frames stay untouched.
             auto fx = std::make_shared<VideoFrame>(*frame);
             std::vector<std::string> w;
-            applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w);
+            applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
             for (auto& m : w) warn(std::move(m));
             frame = std::move(fx);
         }

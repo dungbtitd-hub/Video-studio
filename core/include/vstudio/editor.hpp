@@ -54,7 +54,16 @@ public:
     void addClipEffect(const Id& clipId, const std::string& type, const Json& params);
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
+    // Adds or replaces the single effect of `type` on each clip, as one undo step; null
+    // params removes it. `first` puts it before every other effect (input transforms
+    // such as Log -> Rec.709 must run before grading). Refused on locked tracks.
+    void setClipEffect(const std::vector<Id>& clipIds, const std::string& type, const Json& params, bool first = false,
+                       const std::string& label = "Set effect");
     void setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength = 1.0);
+    // Log/HDR footage -> Rec.709 (color_space.hpp), always the first effect; "" removes.
+    void setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure = 0.0);
+    // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.
+    void setClipLut(const std::vector<Id>& clipIds, const std::string& path, double strength = 1.0);
 
     bool undo();
     bool redo();

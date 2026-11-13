@@ -105,7 +105,9 @@ void registerBuiltinModules(ModuleRegistry& r);
 
 // Applies the enabled effects stored in clip.effects ({"type", "enabled", "params"}).
 // Unknown effect types are skipped (and reported) but never removed from the project.
+// `resourceBase` (the project's media folder) is passed to every effect as params["base"],
+// so effects that read files (LUTs) can store paths relative to the project.
 void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Time localTime,
-                      std::vector<std::string>* warnings);
+                      std::vector<std::string>* warnings, const std::string& resourceBase = {});
 
 }  // namespace vstudio

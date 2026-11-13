@@ -1,5 +1,6 @@
 #include "EditorController.h"
 
+#include "vstudio/color_space.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/looks.hpp"
 
@@ -295,6 +296,52 @@ QPair<QString, double> EditorController::clipLook(const QString& clipId) const {
             if (e.is_object() && e.value("type", std::string{}) == kColorLookEffect && e.value("enabled", true))
                 return {q(e["params"].value("look", std::string{})), e["params"].value("strength", 1.0)};
     return {{}, 1.0};
+}
+
+namespace {
+const Json* clipEffect(const Project* p, const QString& clipId, const char* type) {
+    const Clip* c = p ? p->findClip(clipId.toStdString()) : nullptr;
+    if (c && c->effects.is_array())
+        for (const auto& e : c->effects)
+            if (e.is_object() && e.value("type", std::string{}) == type && e.value("enabled", true) && e.contains("params"))
+                return &e["params"];
+    return nullptr;
+}
+}  // namespace
+
+void EditorController::setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    edit([&] { editor_->setClipColorSpace(ids, s(input), exposure); });
+}
+
+QPair<QString, double> EditorController::clipColorSpace(const QString& clipId) const {
+    if (const Json* p = clipEffect(snapshot_.get(), clipId, kColorSpaceEffect))
+        return {q(p->value("input", std::string{})), p->value("exposure", 0.0)};
+    return {{}, 0.0};
+}
+
+QString EditorController::suggestedColorSpace(const QString& clipId) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    const MediaAsset* a = c ? snapshot_->findAsset(c->assetId) : nullptr;
+    return a ? q(suggestedLogFormat(*a)) : QString{};
+}
+
+void EditorController::setClipLut(const QStringList& clipIds, const QString& file, double strength) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    std::string path;
+    if (!file.isEmpty()) {
+        std::string err;
+        if (!loadCubeLut(s(file), &err)) return setStatus(tr("Cannot use LUT: %1").arg(q(err)));
+        path = packageDir_.isEmpty() ? s(file) : makeUri(s(file), s(packageDir_));
+    }
+    edit([&] { editor_->setClipLut(ids, path, strength); });
+}
+
+QString EditorController::clipLut(const QString& clipId) const {
+    const Json* p = clipEffect(snapshot_.get(), clipId, kLutEffect);
+    return p ? q(p->value("path", std::string{})) : QString{};
 }
 
 QString EditorController::clipAsset(const QString& clipId) const {

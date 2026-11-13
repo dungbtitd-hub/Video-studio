@@ -1,5 +1,6 @@
 #include "vstudio/editor.hpp"
 
+#include "vstudio/color_space.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
 
@@ -212,10 +213,9 @@ void Editor::addClipEffect(const Id& clipId, const std::string& type, const Json
     });
 }
 
-void Editor::setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength) {
+void Editor::setClipEffect(const std::vector<Id>& clipIds, const std::string& type, const Json& params, bool first,
+                           const std::string& label) {
     if (clipIds.empty()) throw EditError("no clip selected");
-    const ColorLook* look = lookId.empty() ? nullptr : findColorLook(lookId);
-    if (!lookId.empty() && !look) throw EditError("unknown look: " + lookId);
     std::vector<Id> tracks;
     for (const Id& c : clipIds) {
         const Track* t = project_.trackOfClip(c);
@@ -224,23 +224,44 @@ void Editor::setClipLook(const std::vector<Id>& clipIds, const std::string& look
         if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
     }
     Json fx;
-    if (look) {
-        Json params = look->params;
-        params["look"] = look->id;
-        params["strength"] = std::clamp(strength, 0.0, 1.0);
-        fx = Json{{"effect_id", newId()}, {"type", kColorLookEffect}, {"enabled", true}, {"params", params}};
-    }
-    run(look ? "Apply look" : "Remove look", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+    if (!params.is_null()) fx = Json{{"effect_id", newId()}, {"type", type}, {"enabled", true}, {"params", params}};
+    run(label, EditCommand::Scope::Tracks, tracks, [=](Project& p) {
         for (const Id& c : clipIds) {
             Clip* clip = p.trackOfClip(c)->findClip(c);
             if (!clip->effects.is_array()) clip->effects = Json::array();
             Json kept = Json::array();
+            if (first && !fx.is_null()) kept.push_back(fx);
             for (const auto& e : clip->effects)
-                if (!(e.is_object() && e.value("type", std::string{}) == kColorLookEffect)) kept.push_back(e);
-            if (!fx.is_null()) kept.push_back(fx);
+                if (!(e.is_object() && e.value("type", std::string{}) == type)) kept.push_back(e);
+            if (!first && !fx.is_null()) kept.push_back(fx);
             clip->effects = std::move(kept);
         }
     });
+}
+
+void Editor::setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength) {
+    const ColorLook* look = lookId.empty() ? nullptr : findColorLook(lookId);
+    if (!lookId.empty() && !look) throw EditError("unknown look: " + lookId);
+    Json params;
+    if (look) {
+        params = look->params;
+        params["look"] = look->id;
+        params["strength"] = std::clamp(strength, 0.0, 1.0);
+    }
+    setClipEffect(clipIds, kColorLookEffect, params, false, look ? "Apply look" : "Remove look");
+}
+
+void Editor::setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure) {
+    if (!input.empty() && !findLogFormat(input)) throw EditError("unknown Log/HDR format: " + input);
+    Json params;
+    if (!input.empty()) params = Json{{"input", input}, {"exposure", std::clamp(exposure, -4.0, 4.0)}, {"highlights", true}};
+    setClipEffect(clipIds, kColorSpaceEffect, params, true, input.empty() ? "Remove Log conversion" : "Convert Log to Rec.709");
+}
+
+void Editor::setClipLut(const std::vector<Id>& clipIds, const std::string& path, double strength) {
+    Json params;
+    if (!path.empty()) params = Json{{"path", path}, {"strength", std::clamp(strength, 0.0, 1.0)}};
+    setClipEffect(clipIds, kLutEffect, params, false, path.empty() ? "Remove LUT" : "Apply LUT");
 }
 
 bool Editor::undo() { return history_.undo(project_); }

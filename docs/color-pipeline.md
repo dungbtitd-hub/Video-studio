@@ -35,3 +35,30 @@ BT.2020 khi có), dải màu (limited/full) theo luồng. Probe ghi thêm `bitDe
 - Chỉnh mạnh một dải tối 10-bit: 8-bit còn ≤ 65 mức, đường sâu giữ > 600 mức.
 - FFmpeg: file FFV1 10-bit dải xám 877 mức, giải mã sâu giữ > 700 mức; 8-bit ≤ 256.
 - Renderer: compositor không có đường sâu không bao giờ nhận half; hiệu ứng 8-bit không bao giờ nhận half; ảnh sâu và 8-bit khớp nhau.
+
+# Bước 2: Log/HDR → Rec.709 và LUT 3D
+
+Hiệu ứng `builtin.color_space` (`vstudio/color_space.hpp`), luôn đứng đầu chuỗi hiệu ứng của clip:
+
+1. giải mã đường cong Log của máy quay ra ánh sáng tuyến tính (bảng 4097 điểm, nội suy);
+2. đổi gam màu máy quay sang Rec.709 (ma trận 3×3 tính từ toạ độ màu cơ bản qua XYZ, D65);
+3. phơi sáng, rồi vai mềm cho vùng sáng (xám 18% giữ nguyên, vùng sáng cuộn dần thay vì cháy);
+4. mã hoá Rec.709.
+
+| id | Định dạng | Gam màu |
+|---|---|---|
+| `slog3` | Sony S-Log3 | S-Gamut3.Cine |
+| `vlog` | Panasonic V-Log | V-Gamut |
+| `clog3` | Canon Log 3 | Cinema Gamut |
+| `nlog` | Nikon N-Log | Rec.2020 |
+| `applelog` | Apple Log (iPhone 15 Pro trở lên) | Rec.2020 |
+| `dlog` | DJI D-Log | D-Gamut |
+| `hlg` | HLG (HDR của điện thoại) | Rec.2020 |
+
+Công thức theo tài liệu công bố của từng hãng. Test kiểm tra mỗi định dạng: xám 18% của hãng ra đúng xám giữa Rec.709 (0,409), màu xám giữ trung tính, vùng sáng không cháy, kết quả 8-bit và 16-bit khớp nhau.
+**DJI D-Log M** không có công thức công bố: dùng LUT chính thức của DJI qua `builtin.lut`.
+Camera Log hiếm khi được ghi trong file nên người dùng chọn; HLG thì file có ghi, app gợi ý ngay.
+
+`builtin.lut`: LUT 3D `.cube` (Resolve/Adobe; có `DOMAIN_MIN/MAX`), nội suy ba chiều tuyến tính, có độ mạnh.
+LUT được kiểm tra khi chọn (file hỏng bị từ chối ngay), lưu đường dẫn tương đối theo dự án, và đi kèm trong gói `.vstudiopkg`.
+Trên mobile, LUT được chép vào thư mục media của app như video.

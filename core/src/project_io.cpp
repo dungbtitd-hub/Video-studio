@@ -137,6 +137,10 @@ MediaAsset assetFromProbe(const Id& id, const std::string& path, const ProbeResu
     if (pr.hasAudio) a.audio = AudioInfo{pr.sampleRate, pr.channels, pr.audioCodec};
     a.fingerprint = fingerprintFile(path);
     if (pr.rotation) a.extra["rotation"] = pr.rotation;
+    // Colour description, used to suggest Log/HDR conversion (color_space.hpp).
+    if (pr.hasVideo && pr.bitDepth != 8) a.extra["bit_depth"] = pr.bitDepth;
+    if (!pr.transfer.empty()) a.extra["transfer"] = pr.transfer;
+    if (!pr.primaries.empty()) a.extra["primaries"] = pr.primaries;
     return a;
 }
 

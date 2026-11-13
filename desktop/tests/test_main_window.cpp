@@ -2,7 +2,9 @@
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QDockWidget>
 #include <QListWidget>
@@ -170,6 +172,39 @@ private slots:
         QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
         emit list->itemClicked(list->item(0));  // "Gốc": no look
         QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
+    }
+
+    void logInputAndLut() {
+        LooksPanel* panel = win_->looks();
+        const QString clip = QString::fromStdString(ctrl_->project()->tracks.front().clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        ctrl_->setClipLook({clip}, "vivid", 1.0);
+        QComboBox* input = panel->input();
+        QVERIFY(input->isEnabled());
+        const int slog3 = input->findData("slog3");
+        QVERIFY(slog3 > 0);
+        input->setCurrentIndex(slog3);
+        emit input->activated(slog3);
+        QCOMPARE(ctrl_->clipColorSpace(clip).first, QString("slog3"));
+        // The conversion runs before the look.
+        auto effects = [&] { return ctrl_->project()->findClip(clip.toStdString())->effects; };
+        QCOMPARE(QString::fromStdString(effects()[0]["type"].get<std::string>()), QString("builtin.color_space"));
+        // A LUT file is validated before it is used.
+        QTemporaryDir tmp;
+        QFile bad(tmp.filePath("bad.cube"));
+        QVERIFY(bad.open(QIODevice::WriteOnly));
+        bad.write("not a lut");
+        bad.close();
+        ctrl_->setClipLut({clip}, bad.fileName());
+        QVERIFY(ctrl_->clipLut(clip).isEmpty());
+        QFile good(tmp.filePath("film.cube"));
+        QVERIFY(good.open(QIODevice::WriteOnly));
+        good.write("LUT_3D_SIZE 2\n");
+        for (int i = 0; i < 8; ++i) good.write("0.1 0.2 0.3\n");
+        good.close();
+        ctrl_->setClipLut({clip}, good.fileName());
+        QVERIFY(ctrl_->clipLut(clip).endsWith("film.cube"));
+        QCOMPARE(effects().size(), std::size_t{3});  // Log conversion, look, LUT
     }
 
     void layoutResets() {

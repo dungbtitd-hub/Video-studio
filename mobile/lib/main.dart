@@ -407,6 +407,28 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     return null;
   }
 
+  /// Picks a .cube LUT, keeps a copy next to the media (so the project and its
+  /// package stay self-contained) and applies it. Returns the stored path.
+  Future<String?> _pickLut(String clipId) async {
+    final store = _store;
+    if (store == null) return null;
+    final files = await FilePicker.pickFiles(type: FileType.any);
+    final path = files.map((f) => f.path).whereType<String>().firstOrNull;
+    if (path == null || !mounted) return null;
+    if (!path.toLowerCase().endsWith('.cube')) {
+      setState(() => _status = 'Chỉ dùng được LUT 3D dạng .cube');
+      return null;
+    }
+    final kept = await store.adoptMedia(path);
+    String? applied;
+    _edit((vs) {
+      vs.setClipLut([clipId], kept);
+      applied = kept;
+    });
+    _vs?.seek(_playhead);
+    return applied;
+  }
+
   Future<void> _looks() async {
     final vs = _vs, clip = _selectedVideoClip;
     if (vs == null || clip == null) return;
@@ -419,6 +441,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         clip: clip,
         onApply: (look, strength) {
           _edit((vs) => vs.setClipLook([clip.id], look, strength: strength));
+          _vs?.seek(_playhead);
+        },
+        onInput: (input) {
+          _edit((vs) => vs.setClipColorSpace([clip.id], input));
+          _vs?.seek(_playhead);
+        },
+        onPickLut: () => _pickLut(clip.id),
+        onClearLut: () {
+          _edit((vs) => vs.setClipLut([clip.id], ''));
           _vs?.seek(_playhead);
         },
         onApplyAll: (look, strength) {
