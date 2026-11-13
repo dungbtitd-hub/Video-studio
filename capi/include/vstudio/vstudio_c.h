@@ -83,6 +83,22 @@ VS_API int vs_set_clip_color_space(vs_session* s, const char* clip_ids_json, con
 /* .cube file, absolute or relative to the project's media folder; "" removes. Bad files fail here. */
 VS_API int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, double strength);
 VS_API char* vs_suggested_log_format(vs_session* s, const char* asset_id); /* "hlg" or "" */
+/* ---- keyframes inside one clip (keyframes.hpp); all undoable, times are TIMELINE ticks ----
+ * group: 0 = picture (scale, x, y, opacity), 1 = audio (volume); the two are independent.
+ * vs_add_keyframe captures the clip's current values at t. vs_remove_keyframe: 1 removed, 0 none there.
+ * vs_set_property_at: values_json {"scale":2,"x":-120,"y":40,"volume":0.5}; a property that is
+ *   already animated gets a key at t, otherwise the clip's static value changes (one undo step).
+ *   x/y are canvas pixels from the centre; scale multiplies "fit"; volume is the gain heard.
+ * vs_zoom_to_region: the region (0..1 of the frame) fills the frame at t.
+ * vs_clip_state_at: {"inside","scale","x","y","opacity","volume","picture_here","audio_here",
+ *   "picture_animated","audio_animated"} (free with vs_free). */
+VS_API int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t timeline_time);
+VS_API int vs_remove_keyframe(vs_session* s, const char* clip_id, int group, int64_t timeline_time);
+VS_API int vs_clear_keyframes(vs_session* s, const char* clip_id, int group);
+VS_API int vs_set_property_at(vs_session* s, const char* clip_id, int64_t timeline_time, const char* values_json);
+VS_API int vs_zoom_to_region(vs_session* s, const char* clip_id, int64_t timeline_time, double rx, double ry, double rw,
+                             double rh);
+VS_API char* vs_clip_state_at(vs_session* s, const char* clip_id, int64_t timeline_time);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);
