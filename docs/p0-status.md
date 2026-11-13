@@ -16,7 +16,7 @@
 | Desktop Qt shell | Xong (Widgets là bản chính) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
 | Chọn công nghệ desktop | Đã chốt Qt Widgets (13/11/2026) | số đo Linux/Windows/macOS trong `docs/benchmarks/qml-vs-widgets.md`; bản QML giữ đến hết P0 để tham chiếu |
 | Module FFmpeg (Windows) | Code xong | CI Windows hiện build core không FFmpeg; cần thêm FFmpeg qua vcpkg |
-| Module Apple (macOS/iOS) | Chưa | AVFoundation/VideoToolbox, dùng chung macOS và iOS |
+| Module Apple (macOS/iOS) | Xong (CI macOS) | AVFoundation/VideoToolbox, dùng chung macOS và iOS; qua bộ test chung trên CI macOS; chưa thử trên iPhone thật |
 | Module MediaCodec (Android) | Xong (emulator) | qua bộ test chung trên emulator Android 11 trong CI; chưa thử trên điện thoại thật |
 | Flutter shell + FFI | Xong (chạy trên Linux) | FFI đã test end-to-end với core thật; chưa chạy trên điện thoại |
 | Preview mobile qua native texture | Chưa | hiện copy khung RGBA qua FFI |

@@ -20,6 +20,9 @@
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
 #include "vstudio/android/mediacodec_module.hpp"
 #endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+#include "vstudio/apple/avfoundation_module.hpp"
+#endif
 
 using namespace vstudio;
 
@@ -53,7 +56,9 @@ struct vs_session {
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
         android::registerModule(modules);  // hardware codecs; preferred over FFmpeg on Android
 #endif
-        // The Apple module (AVFoundation/VideoToolbox) registers here when it lands.
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+        apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS
+#endif
     }
 
     IMediaBackend* media() {

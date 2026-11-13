@@ -51,6 +51,9 @@ endif()
 if(ANDROID)
   add_subdirectory(adapters/android)
 endif()
+if(APPLE)
+  add_subdirectory(adapters/apple)
+endif()
 
 add_subdirectory(capi)
 
