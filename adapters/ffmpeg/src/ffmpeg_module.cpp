@@ -5,12 +5,15 @@
 #include <string>
 #include <vector>
 
+#include "vstudio/pixel.hpp"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -140,6 +143,12 @@ std::optional<ProbeResult> probeFile(const std::string& path, std::string* error
             r.duration = Time::fromTimebase(st->duration, toRational(st->time_base));
         if (r.isStillImage) r.duration = Time::zero();
         if (r.fps.num <= 0) r.fps = {30, 1};
+        if (const AVPixFmtDescriptor* d = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(st->codecpar->format)))
+            r.bitDepth = d->comp[0].depth;
+        if (st->codecpar->color_trc != AVCOL_TRC_UNSPECIFIED)
+            if (const char* n = av_color_transfer_name(st->codecpar->color_trc)) r.transfer = n;
+        if (st->codecpar->color_primaries != AVCOL_PRI_UNSPECIFIED)
+            if (const char* n = av_color_primaries_name(st->codecpar->color_primaries)) r.primaries = n;
     }
     if (ai >= 0) {
         AVStream* st = fmt->streams[ai];
@@ -172,6 +181,7 @@ public:
         maxW_ = w;
         maxH_ = h;
     }
+    void setDeepOutput(bool on) override { deep_ = on; }
 
     std::optional<VideoFrame> videoFrameAt(Time t) override {
         if (vi_ < 0) return std::nullopt;
@@ -310,23 +320,56 @@ private:
             w = std::max(2, static_cast<int>(w * k) & ~1);
             h = std::max(2, static_cast<int>(h * k) & ~1);
         }
-        if (!sws_ || swsSrcW_ != f.width || swsSrcH_ != f.height || swsSrcFmt_ != f.format || swsW_ != w || swsH_ != h) {
+        // More than 8 bits per channel (10-bit phone/camera video, Log): keep them when asked.
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(f.format));
+        const bool deep = deep_ && desc && desc->comp[0].depth > 8;
+        const AVPixelFormat dstFmt = deep ? AV_PIX_FMT_RGBA64LE : AV_PIX_FMT_RGBA;
+        if (!sws_ || swsSrcW_ != f.width || swsSrcH_ != f.height || swsSrcFmt_ != f.format || swsW_ != w || swsH_ != h ||
+            swsDst_ != dstFmt) {
             const int flags = (w != f.width) ? SWS_FAST_BILINEAR : SWS_POINT;
-            sws_.reset(sws_getContext(f.width, f.height, static_cast<AVPixelFormat>(f.format), w, h, AV_PIX_FMT_RGBA, flags,
+            sws_.reset(sws_getContext(f.width, f.height, static_cast<AVPixelFormat>(f.format), w, h, dstFmt, flags,
                                       nullptr, nullptr, nullptr));
+            if (sws_ && desc && !(desc->flags & AV_PIX_FMT_FLAG_RGB)) {
+                // swscale assumes BT.601 limited range unless told; HD/UHD video is BT.709 or BT.2020.
+                int cs = f.colorspace;
+                if (cs == AVCOL_SPC_UNSPECIFIED || cs == AVCOL_SPC_RESERVED) cs = f.height >= 720 ? SWS_CS_ITU709 : SWS_CS_DEFAULT;
+                const int fullIn = f.color_range == AVCOL_RANGE_JPEG ||
+                                   f.format == AV_PIX_FMT_YUVJ420P || f.format == AV_PIX_FMT_YUVJ422P ||
+                                   f.format == AV_PIX_FMT_YUVJ444P;
+                const int* coef = sws_getCoefficients(cs);
+                sws_setColorspaceDetails(sws_.get(), coef, fullIn, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
+                                         1 << 16);
+            }
             swsSrcW_ = f.width;
             swsSrcH_ = f.height;
             swsSrcFmt_ = f.format;
             swsW_ = w;
             swsH_ = h;
+            swsDst_ = dstFmt;
         }
         auto out = std::make_shared<VideoFrame>();
-        out->allocate(w, h);
         out->pts = pts;
+        if (!deep) {
+            out->allocate(w, h);
+            if (!sws_) return out;
+            std::uint8_t* dst[1] = {out->rgba.data()};
+            const int stride[1] = {w * 4};
+            sws_scale(sws_.get(), f.data, f.linesize, 0, f.height, dst, stride);
+            return out;
+        }
+        out->allocate(w, h, PixelFormat::RGBA16F);
         if (!sws_) return out;
-        std::uint8_t* dst[1] = {out->rgba.data()};
-        const int stride[1] = {w * 4};
+        deepBuf_.resize(static_cast<std::size_t>(w) * h * 4);
+        std::uint8_t* dst[1] = {reinterpret_cast<std::uint8_t*>(deepBuf_.data())};
+        const int stride[1] = {w * 8};
         sws_scale(sws_.get(), f.data, f.linesize, 0, f.height, dst, stride);
+        // 16-bit -> half: 10/12-bit values are exact in half (11-bit mantissa) up to rounding of /65535.
+        static const std::vector<std::uint16_t> table = [] {
+            std::vector<std::uint16_t> t(65536);
+            for (std::uint32_t i = 0; i < 65536; ++i) t[i] = floatToHalf(static_cast<float>(i) / 65535.0f);
+            return t;
+        }();
+        for (std::size_t i = 0; i < deepBuf_.size(); ++i) out->half[i] = table[deepBuf_[i]];
         return out;
     }
 
@@ -363,6 +406,9 @@ private:
     bool veof_ = false;
     std::shared_ptr<VideoFrame> converted_;
     SwsPtr sws_;
+    AVPixelFormat swsDst_ = AV_PIX_FMT_NONE;
+    bool deep_ = false;
+    std::vector<std::uint16_t> deepBuf_;
     int swsSrcW_ = 0, swsSrcH_ = 0, swsSrcFmt_ = -1, swsW_ = 0, swsH_ = 0;
     // audio state
     SwrPtr swr_;

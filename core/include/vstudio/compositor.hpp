@@ -45,6 +45,8 @@ LayerRect layerRect(int srcW, int srcH, int dstW, int dstH, const Transform& tr)
 // Draws `src` onto `dst` (straight-alpha RGBA) fitted to dst, then transformed.
 // This is the reference the GPU compositors are checked against.
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr);
+// Same for an RGBA16F `dst` (src in either format), in float: the deep reference.
+void compositeOverDeep(VideoFrame& dst, const VideoFrame& src, const Transform& tr);
 
 struct CompositeLayer {
     std::shared_ptr<const VideoFrame> frame;  // straight-alpha RGBA
@@ -56,6 +58,9 @@ public:
     static constexpr const char* kModuleKind = "compositor";
     virtual ~ICompositor() = default;
     [[nodiscard]] virtual std::string name() const = 0;
+    // RGBA16F output and layers. A compositor without it is skipped for deep
+    // renders (the Renderer uses the CPU reference), never handed half floats.
+    [[nodiscard]] virtual bool supportsDeep() const { return false; }
     // Fills `out` (already allocated to the output size) with opaque black,
     // then draws `layers` bottom to top. Must be safe to call from several
     // threads (preview and export run at the same time). Returns false (and

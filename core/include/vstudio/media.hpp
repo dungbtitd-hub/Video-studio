@@ -16,18 +16,34 @@
 namespace vstudio {
 
 // Tightly-packed 8-bit RGBA, straight alpha. Stride = width * 4.
+// RGBA8: 8 bits per channel in `rgba`. RGBA16F: half floats in `half` (see pixel.hpp),
+// used for 10-bit and Log sources and for grading so gradients do not band.
+enum class PixelFormat : std::uint8_t { RGBA8, RGBA16F };
+
 struct VideoFrame {
     int width = 0;
     int height = 0;
     Time pts;
-    std::vector<std::uint8_t> rgba;
+    PixelFormat format = PixelFormat::RGBA8;
+    std::vector<std::uint8_t> rgba;   // RGBA8
+    std::vector<std::uint16_t> half;  // RGBA16F
 
     [[nodiscard]] bool empty() const { return width <= 0 || height <= 0; }
-    void allocate(int w, int h) {
+    [[nodiscard]] bool deep() const { return format == PixelFormat::RGBA16F; }
+    void allocate(int w, int h, PixelFormat fmt = PixelFormat::RGBA8) {
         width = w;
         height = h;
-        rgba.assign(static_cast<std::size_t>(w) * h * 4, 0);
+        format = fmt;
+        const std::size_t n = static_cast<std::size_t>(w) * h * 4;
+        if (fmt == PixelFormat::RGBA8) {
+            rgba.assign(n, 0);
+            half.clear();
+        } else {
+            half.assign(n, 0);
+            rgba.clear();
+        }
     }
+    [[nodiscard]] std::size_t bytes() const { return rgba.size() + half.size() * 2; }
 };
 
 // Interleaved float samples in [-1, 1].
@@ -52,6 +68,10 @@ struct ProbeResult {
     std::string audioCodec;
     int sampleRate = 0;
     int channels = 0;
+    // Colour description of the video stream ("" = unknown / Rec.709 8-bit).
+    int bitDepth = 8;
+    std::string transfer;   // e.g. "bt709", "arib-std-b67" (HLG), "smpte2084" (PQ)
+    std::string primaries;  // e.g. "bt709", "bt2020"
 };
 
 class IMediaDecoder {
@@ -62,6 +82,9 @@ public:
     // Preview asks for display size instead of decoding 4K RGBA frames:
     // this is the single biggest saving for large media. 0 = native size.
     virtual void setMaxOutputSize(int maxWidth, int maxHeight) { (void)maxWidth; (void)maxHeight; }
+    // Deep output: sources with more than 8 bits per channel come out as RGBA16F
+    // instead of being rounded to 8 bits. Decoders that cannot do it ignore this.
+    virtual void setDeepOutput(bool on) { (void)on; }
     // Frame showing at `sourceTime` (the latest frame with pts <= sourceTime),
     // converted to RGBA. Sequential forward reads must not re-seek.
     virtual std::optional<VideoFrame> videoFrameAt(Time sourceTime) = 0;
@@ -84,12 +107,15 @@ struct ExportSettings {
     bool includeAudio = true;  // proxies are video-only
     int gopSize = 0;        // 0 = encoder default; proxies use a short GOP for fast seeking
     bool fastPreset = false; // proxies/preview renders favour speed over size
+    int bitDepth = 8;        // 10: deep render + Main10 encode (videoCodec "hevc")
 };
 
 class IMediaEncoder {
 public:
     virtual ~IMediaEncoder() = default;
     virtual bool open(const std::string& path, const ExportSettings& s, std::string* error) = 0;
+    // Takes RGBA16F frames (10-bit encode). Encoders without it get 8-bit frames.
+    [[nodiscard]] virtual bool supportsDeep() const { return false; }
     // Frames arrive in order; frame i has pts = i / fps.
     virtual bool writeVideo(const VideoFrame& frame, std::string* error) = 0;
     // Audio arrives contiguous from t = 0.
