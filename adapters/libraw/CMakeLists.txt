@@ -2,7 +2,8 @@
 # is one (Linux packages, Homebrew); otherwise LibRaw is built from source as a static
 # library (Windows, Android, iOS), with no optional dependencies.
 find_package(PkgConfig QUIET)
-if(PKG_CONFIG_FOUND AND NOT VSTUDIO_LIBRAW_FROM_SOURCE)
+# Cross builds (iOS, Android) never take the host's library.
+if(PKG_CONFIG_FOUND AND NOT VSTUDIO_LIBRAW_FROM_SOURCE AND NOT IOS AND NOT ANDROID AND NOT CMAKE_CROSSCOMPILING)
   pkg_check_modules(LIBRAW IMPORTED_TARGET libraw_r)
 endif()
 if(LIBRAW_FOUND)
