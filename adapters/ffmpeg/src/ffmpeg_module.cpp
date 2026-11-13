@@ -484,6 +484,8 @@ public:
         if (actx_) ok = drainAudio(true, error) && encode(actx_.get(), ast_, nullptr, error);
         ok = encode(vctx_.get(), vst_, nullptr, error) && ok;
         const int e = av_write_trailer(fmt_);
+        // Close now, not in the destructor: on Windows an open file cannot be renamed.
+        if (!(fmt_->oformat->flags & AVFMT_NOFILE) && fmt_->pb) avio_closep(&fmt_->pb);
         if (e < 0) return fail(error, "cannot finalize file: " + avErr(e));
         return ok;
     }

@@ -56,6 +56,8 @@ ProxyResult generateProxy(IMediaBackend& backend, const std::string& src, const 
         if (progress && i % 30 == 0) progress(static_cast<double>(i) / total);
     }
     if (!enc->finish(&r.error)) return r;
+    enc.reset();  // release the file before renaming it (Windows refuses to rename open files)
+    dec.reset();
     std::remove(dst.c_str());
     if (std::rename(tmp.c_str(), dst.c_str()) != 0) {
         r.error = "cannot move proxy into place";
