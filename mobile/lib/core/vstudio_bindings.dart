@@ -172,6 +172,24 @@ class VStudioBindings {
             Int32 Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, Int32, Int32, Double),
             int Function(
                 CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double)>('vs_transition_preview'),
+        fontsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_fonts_json'),
+        registerFont = lib.lookupFunction<Int32 Function(CStr, CStr, Pointer<Uint8>, Int64),
+            int Function(CStr, CStr, Pointer<Uint8>, int)>('vs_register_font'),
+        textAnimationsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_text_animations_json'),
+        textPresetsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_text_presets_json'),
+        stickersJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_stickers_json'),
+        defaultTextJson = lib.lookupFunction<CStr Function(CStr), CStr Function(CStr)>('vs_default_text_json'),
+        defaultStickerJson = lib.lookupFunction<CStr Function(CStr), CStr Function(CStr)>('vs_default_sticker_json'),
+        addGeneratedClip = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, Int64, Int64, CStr),
+            CStr Function(Pointer<VsSession>, CStr, int, int, CStr)>('vs_add_generated_clip'),
+        updateClipContent = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_update_clip_content'),
+        generatedRect = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64, Pointer<Double>),
+            int Function(Pointer<VsSession>, CStr, int, Pointer<Double>)>('vs_generated_rect'),
+        stickerIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_sticker_icon'),
+        contentPreview = lib.lookupFunction<Int32 Function(CStr, Double, Double, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, double, Pointer<Uint8>, int, int)>('vs_content_preview'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
@@ -271,6 +289,18 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int) setTransitionEverywhere;
   final CStr Function(Pointer<VsSession>) cutPointsJson;
   final int Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double) transitionPreview;
+  final CStr Function() fontsJson;
+  final int Function(CStr, CStr, Pointer<Uint8>, int) registerFont;
+  final CStr Function() textAnimationsJson;
+  final CStr Function() textPresetsJson;
+  final CStr Function() stickersJson;
+  final CStr Function(CStr) defaultTextJson;
+  final CStr Function(CStr) defaultStickerJson;
+  final CStr Function(Pointer<VsSession>, CStr, int, int, CStr) addGeneratedClip;
+  final int Function(Pointer<VsSession>, CStr, CStr) updateClipContent;
+  final int Function(Pointer<VsSession>, CStr, int, Pointer<Double>) generatedRect;
+  final int Function(CStr, double, Pointer<Uint8>, int, int) stickerIcon;
+  final int Function(CStr, double, double, Pointer<Uint8>, int, int) contentPreview;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;
