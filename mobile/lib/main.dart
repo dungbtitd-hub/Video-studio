@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core/project_model.dart';
@@ -232,8 +233,14 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         _exportProgress = p;
       } else {
         _exportProgress = null;
+        if (state == ExportState.done) {
+          _saveExportToPhotos();
+        } else if (_exportPath != null) {
+          File(_exportPath!).delete().ignore(); // cancelled or failed: no half-written file left behind
+          _exportPath = null;
+        }
         _status = switch (state) {
-          ExportState.done => 'Đã xuất video',
+          ExportState.done => 'Đã xuất video, đang lưu vào Ảnh…',
           ExportState.cancelled => 'Đã hủy xuất',
           _ => 'Xuất lỗi: ${vs.lastError}',
         };
@@ -355,19 +362,76 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     return '${t.day}/${t.month}/${t.year}';
   }
 
+  String? _exportPath; // file being written; moved to Photos when done
+
   Future<void> _export() async {
+    final vs = _vs;
+    if (vs == null) return;
     if (_exportProgress != null) {
-      _vs?.cancelExport();
+      vs.cancelExport();
       return;
     }
-    final dir = Directory.systemTemp.path; // P0: app sandbox; V0.1 saves to Photos/Files
-    final out = '$dir/video_studio_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final presets = vs.exportPresets();
+    final preset = await showModalBottomSheet<ExportPresetView>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
+          child: ListView(shrinkWrap: true, children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Text('Xuất video', style: TextStyle(color: VsColors.fg, fontSize: 16)),
+            ),
+            for (final p in presets)
+              ListTile(
+                title: Text(p.name),
+                subtitle: Text(
+                    '${p.width} × ${p.height} · ${p.fps.round()} khung/giây · khoảng ${_size(p.estimatedBytes)}\n'
+                    '${p.description}',
+                    style: const TextStyle(fontSize: 12)),
+                isThreeLine: true,
+                onTap: () => Navigator.pop(context, p),
+              ),
+          ]),
+        ),
+      ),
+    );
+    if (preset == null || !mounted) return;
+    // Written to the app's temporary folder, then handed to the photo library.
+    final out = '${Directory.systemTemp.path}/${_safeName(_project?.name ?? 'video')} ${preset.height}p.mp4';
+    _exportPath = out;
     _edit((vs) {
-      vs.startExport(out, width: 720, height: 1280);
+      vs.startExportPreset(out, preset.id);
       _exportProgress = 0;
-      _status = 'Đang xuất: $out';
+      _status = 'Đang xuất ${preset.name}…';
     });
   }
+
+  Future<void> _saveExportToPhotos() async {
+    final path = _exportPath;
+    _exportPath = null;
+    if (path == null) return;
+    try {
+      if (!await Gal.hasAccess() && !await Gal.requestAccess()) {
+        if (mounted) setState(() => _status = 'Chưa có quyền lưu vào Ảnh. File nằm tại: $path');
+        return;
+      }
+      await Gal.putVideo(path, album: 'Video Studio');
+      await File(path).delete();
+      if (mounted) setState(() => _status = 'Đã lưu video vào Ảnh (album Video Studio)');
+    } catch (e) {
+      if (mounted) setState(() => _status = 'Không lưu được vào Ảnh: $e. File nằm tại: $path');
+    }
+  }
+
+  static String _size(int bytes) {
+    final mb = bytes / 1e6;
+    return mb >= 1000 ? '${(mb / 1000).toStringAsFixed(1)} GB' : '${mb < 10 ? mb.toStringAsFixed(1) : mb.round()} MB';
+  }
+
+  static String _safeName(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
 
   // Media moved or deleted: pick the file again (the core keeps every clip and its edits).
   Future<void> _relink(String assetId) async {

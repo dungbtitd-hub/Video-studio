@@ -66,6 +66,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Video Studio saves the videos you export to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Video Studio imports videos and photos from your library to edit them.</string>
 </dict>

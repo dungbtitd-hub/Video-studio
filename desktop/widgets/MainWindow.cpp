@@ -399,8 +399,50 @@ void MainWindow::importMedia() {
 
 void MainWindow::exportVideo() {
     if (editor_->exporting()) return editor_->cancelExport();
-    const QString f = QFileDialog::getSaveFileName(this, "Xuất MP4", {}, "MP4 (*.mp4)");
-    if (!f.isEmpty()) editor_->exportTo(QUrl::fromLocalFile(f), 0, 0);
+    if (editor_->duration() <= 0) return statusBar()->showMessage("Timeline trống: chưa có gì để xuất");
+    const QString preset = choosePreset();
+    if (preset.isEmpty()) return;
+    const QString f = QFileDialog::getSaveFileName(this, "Xuất MP4", editor_->projectName() + ".mp4", "MP4 (*.mp4)");
+    if (!f.isEmpty()) editor_->exportWithPreset(QUrl::fromLocalFile(f), preset);
+}
+
+QString MainWindow::choosePreset() {
+    QDialog dlg(this);
+    dlg.setWindowTitle("Xuất video");
+    dlg.resize(460, 420);
+    auto* l = new QVBoxLayout(&dlg);
+    l->addWidget(new QLabel("Chọn chất lượng. Kích thước giữ đúng tỉ lệ khung hình của dự án.", &dlg));
+    auto* list = new QListWidget(&dlg);
+    list->setObjectName("exportPresets");
+    QSettings settings;
+    const QString last = settings.value("export/preset", "fhd1080").toString();
+    for (const QVariant& v : editor_->exportPresets()) {
+        const QVariantMap m = v.toMap();
+        const double mb = m["estimatedBytes"].toDouble() / 1e6;
+        auto* it = new QListWidgetItem(QString("%1\n%2 × %3 · %4 khung/giây · %5 Mbit/s · khoảng %6 MB\n%7")
+                                           .arg(m["name"].toString())
+                                           .arg(m["width"].toInt())
+                                           .arg(m["height"].toInt())
+                                           .arg(m["fps"].toDouble(), 0, 'g', 4)
+                                           .arg(m["bitrate"].toDouble() / 1e6, 0, 'f', 1)
+                                           .arg(mb < 10 ? QString::number(mb, 'f', 1) : QString::number(qRound(mb)))
+                                           .arg(m["description"].toString()),
+                                       list);
+        it->setData(Qt::UserRole, m["id"]);
+        if (m["id"].toString() == last) list->setCurrentItem(it);
+    }
+    if (!list->currentItem() && list->count() > 0) list->setCurrentRow(0);
+    l->addWidget(list, 1);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    bb->button(QDialogButtonBox::Ok)->setText("Tiếp tục…");
+    connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(list, &QListWidget::itemDoubleClicked, &dlg, &QDialog::accept);
+    l->addWidget(bb);
+    if (dlg.exec() != QDialog::Accepted || !list->currentItem()) return {};
+    const QString id = list->currentItem()->data(Qt::UserRole).toString();
+    settings.setValue("export/preset", id);
+    return id;
 }
 
 bool MainWindow::confirmDiscard() {

@@ -1,5 +1,7 @@
 #include "EditorController.h"
 
+#include "vstudio/export_presets.hpp"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
@@ -372,11 +374,38 @@ void EditorController::stepFrames(int frames) {
 }
 
 void EditorController::exportTo(const QUrl& file, int width, int height) {
-    if (exporting_ || !backend_) return;
     ExportSettings es;
     es.width = width > 0 ? width : editor_->project().canvas.width;
     es.height = height > 0 ? height : editor_->project().canvas.height;
     es.fps = editor_->project().fps;
+    startExport(file, es);
+}
+
+void EditorController::exportWithPreset(const QUrl& file, const QString& presetId) {
+    const ExportPreset* pr = findExportPreset(s(presetId));
+    if (!pr) return setStatus(tr("Unknown export preset"));
+    startExport(file, exportSettingsFor(editor_->project(), *pr));
+}
+
+QVariantList EditorController::exportPresets() const {
+    QVariantList out;
+    const Project& p = editor_->project();
+    for (const auto& pr : vstudio::exportPresets()) {
+        const ExportSettings es = exportSettingsFor(p, pr);
+        out.push_back(QVariantMap{{"id", q(pr.id)},
+                                  {"name", q(pr.name)},
+                                  {"description", q(pr.description)},
+                                  {"width", es.width},
+                                  {"height", es.height},
+                                  {"fps", double(es.fps.num) / es.fps.den},
+                                  {"bitrate", qint64(es.videoBitrate)},
+                                  {"estimatedBytes", qint64(estimateExportBytes(es, p.duration().seconds()))}});
+    }
+    return out;
+}
+
+void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
+    if (exporting_ || !backend_) return;
     exportCancel_ = CancelToken{};
     exporting_ = true;
     exportProgress_ = 0;

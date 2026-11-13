@@ -113,6 +113,10 @@ VS_API int vs_audio_format(vs_session* s, int* sample_rate, int* channels);
 /* ---- export (background job) ---- */
 VS_API int vs_export_start(vs_session* s, const char* out_path, int width, int height, int fps_num, int fps_den,
                            int64_t video_bitrate);
+/* Presets sized for this project (canvas aspect kept): JSON array of
+ * {"id","name","description","width","height","fps","video_bitrate","estimated_bytes"}. */
+VS_API char* vs_export_presets_json(vs_session* s);
+VS_API int vs_export_start_preset(vs_session* s, const char* out_path, const char* preset_id);
 VS_API int vs_export_status(vs_session* s, double* progress); /* VS_EXPORT_* */
 VS_API void vs_export_cancel(vs_session* s);
 

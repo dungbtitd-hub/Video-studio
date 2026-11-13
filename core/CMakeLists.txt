@@ -13,6 +13,7 @@ add_library(vstudio_core STATIC
   src/modules.cpp
   src/proxy.cpp
   src/media_library.cpp
+  src/export_presets.cpp
 )
 add_library(vstudio::core ALIAS vstudio_core)
 target_include_directories(vstudio_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

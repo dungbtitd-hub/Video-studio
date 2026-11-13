@@ -104,6 +104,10 @@ class VStudioBindings {
                 Pointer<Int64>),
             int Function(Pointer<VsSession>, Pointer<Uint8>, int, Pointer<Int64>, Pointer<Int32>, Pointer<Int32>,
                 Pointer<Int64>)>('vs_preview_take_frame'),
+        exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
+            'vs_export_presets_json'),
+        exportStartPreset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_export_start_preset'),
         exportStart = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32, Int32, Int64),
             int Function(Pointer<VsSession>, CStr, int, int, int, int, int)>('vs_export_start'),
         exportStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
@@ -168,6 +172,8 @@ class VStudioBindings {
           Pointer<VsSession>, Pointer<Uint8>, int, Pointer<Int64>, Pointer<Int32>, Pointer<Int32>, Pointer<Int64>)
       previewTakeFrame;
   final int Function(Pointer<VsSession>, CStr, int, int, int, int, int) exportStart;
+  final CStr Function(Pointer<VsSession>) exportPresetsJson;
+  final int Function(Pointer<VsSession>, CStr, CStr) exportStartPreset;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;
   final int Function(Pointer<VsSession>, CStr, int, int) requestThumbnails;

@@ -64,6 +64,12 @@ int main(void) {
     EXPECT(vs_remove_clip(s, "nope") != 0);
     EXPECT(vs_ripple_delete(s, "nope") != 0);
 
+    /* Export presets: JSON for the UI; unknown ids are refused. */
+    char* presets = vs_export_presets_json(s);
+    EXPECT(presets != NULL && strstr(presets, "\"fhd1080\"") && strstr(presets, "\"width\":1920"));
+    vs_free(presets);
+    EXPECT(vs_export_start_preset(s, "/tmp/x.mp4", "nope") != 0);
+
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");
     EXPECT(v2 != NULL);
