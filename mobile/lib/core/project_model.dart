@@ -19,7 +19,9 @@ class ClipView {
       this.look,
       this.lookStrength = 1,
       this.colorSpace,
-      this.lut});
+      this.lut,
+      this.pictureKeys = const [],
+      this.audioKeys = const []});
   final String id;
   final String assetId;
   final double start; // seconds on the timeline
@@ -31,7 +33,12 @@ class ClipView {
   final double lookStrength;
   final String? colorSpace; // Log/HDR input id (builtin.color_space), if any
   final String? lut; // .cube path (builtin.lut), if any
+  // Keyframes inside the clip, as timeline seconds (sorted). Picture (zoom, position,
+  // opacity) and audio (volume) keys are independent.
+  final List<double> pictureKeys;
+  final List<double> audioKeys;
   double get end => start + duration;
+  bool get animated => pictureKeys.isNotEmpty || audioKeys.isNotEmpty;
 }
 
 class TrackView {
@@ -64,9 +71,16 @@ class AssetView {
 }
 
 class ProjectView {
-  ProjectView({required this.name, required this.fps, required this.tracks, required this.assets});
+  ProjectView(
+      {required this.name,
+      required this.fps,
+      required this.tracks,
+      required this.assets,
+      this.canvasWidth = 1920,
+      this.canvasHeight = 1080});
   final String name;
   final double fps;
+  final int canvasWidth, canvasHeight; // output frame size; keyframe positions are in these pixels
   final List<TrackView> tracks; // display order: top video first, then audio
   final List<AssetView> assets;
 
@@ -106,18 +120,37 @@ class ProjectView {
             .firstOrNull;
         final look = effect('builtin.color_look');
         final srcDur = ticksToSeconds((m['source_out'] as num).toInt() - (m['source_in'] as num).toInt());
+        final start = ticksToSeconds((m['timeline_in'] as num).toInt());
+        final sourceIn = ticksToSeconds((m['source_in'] as num).toInt());
+        final clipSpeed = speed > 0 ? speed : 1.0;
+        final clipDur = speed > 0 ? srcDur / speed : srcDur;
+        // Keys are stored in source time; shown where they fall on the timeline.
+        List<double> keys(List<String> props) {
+          final out = <double>{};
+          final kf = m['keyframes'] as Map<String, dynamic>? ?? const {};
+          for (final p in props) {
+            for (final k in (kf[p] as List? ?? const []).cast<Map<String, dynamic>>()) {
+              final t = start + (ticksToSeconds((k['t'] as num).toInt()) - sourceIn) / clipSpeed;
+              if (t >= start - 1e-6 && t <= start + clipDur + 1e-6) out.add((t * 1e6).roundToDouble() / 1e6);
+            }
+          }
+          return out.toList()..sort();
+        }
+
         clips.add(ClipView(
           id: m['clip_id'] as String,
           assetId: m['asset_id'] as String,
-          start: ticksToSeconds((m['timeline_in'] as num).toInt()),
-          duration: speed > 0 ? srcDur / speed : srcDur,
+          start: start,
+          duration: clipDur,
           name: assets[m['asset_id']]?.name ?? '?',
-          sourceIn: ticksToSeconds((m['source_in'] as num).toInt()),
-          speed: speed > 0 ? speed : 1,
+          sourceIn: sourceIn,
+          speed: clipSpeed,
           look: look?['look'] as String?,
           lookStrength: ((look?['strength'] ?? 1) as num).toDouble(),
           colorSpace: effect('builtin.color_space')?['input'] as String?,
           lut: effect('builtin.lut')?['path'] as String?,
+          pictureKeys: keys(const ['scale', 'x', 'y', 'opacity']),
+          audioKeys: keys(const ['volume']),
         ));
       }
       return TrackView(
@@ -142,6 +175,8 @@ class ProjectView {
     return ProjectView(
       name: (j['name'] ?? '') as String,
       fps: _rational(j['fps'] as String),
+      canvasWidth: ((j['canvas'] as Map?)?['width'] ?? 1920) as int,
+      canvasHeight: ((j['canvas'] as Map?)?['height'] ?? 1080) as int,
       tracks: [...video, ...audio],
       assets: assets.values.toList(),
     );

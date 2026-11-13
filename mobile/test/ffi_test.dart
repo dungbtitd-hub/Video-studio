@@ -229,6 +229,43 @@ void main() {
     expect(vs.project().tracks.single.clips.single.lut, isNull);
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
 
+  test('keyframes: zoom between two points, audio keys separate, undo', () {
+    final vs = VStudio.create('Keys', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single.id;
+    // Start key at 0.2 s, then zoom 2x on the top-left quarter at 1.0 s: auto-keyed.
+    expect(vs.toggleKeyframe(clip, KeyGroup.picture, 0.2), isTrue);
+    vs.zoomToRegion(clip, 1.0, 0, 0, 0.5, 0.5);
+    var st = vs.clipStateAt(clip, 1.0);
+    expect(st.pictureHere, isTrue);
+    expect(st.scale, closeTo(2, 1e-6));
+    expect(st.x, closeTo(320, 1e-6)); // the quarter's centre moved to the frame centre
+    expect(st.y, closeTo(180, 1e-6));
+    expect(vs.clipStateAt(clip, 0.1).scale, 1);
+    final mid = vs.clipStateAt(clip, 0.6).scale;
+    expect(mid, inInclusiveRange(1.2, 1.8));
+    // Audio: its own keys; picture untouched.
+    vs.addKeyframe(clip, KeyGroup.audio, 0.4);
+    vs.setPropertyAt(clip, 1.2, {'volume': 0.25});
+    st = vs.clipStateAt(clip, 1.2);
+    expect(st.volume, closeTo(0.25, 1e-6));
+    expect(st.audioHere && !st.pictureHere, isTrue);
+    final c = vs.project().tracks.single.clips.single;
+    expect(c.pictureKeys, [closeTo(0.2, 1e-3), closeTo(1.0, 1e-3)]);
+    expect(c.audioKeys, [closeTo(0.4, 1e-3), closeTo(1.2, 1e-3)]);
+    // ◆ again removes; undo brings it back.
+    expect(vs.toggleKeyframe(clip, KeyGroup.picture, 1.0), isFalse);
+    expect(vs.project().tracks.single.clips.single.pictureKeys.length, 1);
+    expect(vs.undo(), isTrue);
+    expect(vs.project().tracks.single.clips.single.pictureKeys.length, 2);
+    vs.clearKeyframes(clip, KeyGroup.audio);
+    expect(vs.project().tracks.single.clips.single.audioKeys, isEmpty);
+    expect(vs.project().tracks.single.clips.single.pictureKeys.length, 2);
+    expect(() => vs.setPropertyAt(clip, 1.0, {'nope': 1}), throwsA(isA<VStudioException>()));
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
   testWidgets('look strip: previews render, one tap applies, no overflow', (tester) async {
     final vs = VStudio.create('ffi-looks', width: 640, height: 360);
     addTearDown(vs.dispose);

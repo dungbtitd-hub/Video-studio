@@ -1,0 +1,241 @@
+// Keyframes on the quick-edit screen.
+//
+// PreviewZoom: pinch (and drag) the picture with two fingers to zoom on a
+// subject. While the fingers move only the shown image is transformed (no
+// core work, no lag); on release one edit is committed: a keyframe when the
+// clip's picture is animated, otherwise the clip's own zoom. Double-tap resets.
+//
+// KeyframeBar: ◇ Hình / ◇ Âm thanh add or remove a key at the playhead (the two
+// groups are independent), ◀◆ / ◆▶ jump between keys, and the volume slider sets
+// the sound level at the playhead (a key when the sound is animated).
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+import '../core/vstudio.dart';
+import 'theme.dart';
+
+/// A finished pinch, in canvas pixels relative to the frame centre: the point
+/// that was under the fingers ([from]) ends at [to], everything scaled by [scale].
+typedef ZoomCommit = void Function(double scale, Offset from, Offset to);
+
+class PreviewZoom extends StatefulWidget {
+  const PreviewZoom({
+    super.key,
+    required this.enabled,
+    required this.canvasSize,
+    required this.onCommit,
+    required this.child,
+    this.onReset,
+  });
+  final bool enabled;
+  final Size canvasSize; // project frame size in pixels
+  final ZoomCommit onCommit;
+  final VoidCallback? onReset;
+  final Widget child; // the preview surface (texture or image), canvas letterboxed inside
+
+  @override
+  State<PreviewZoom> createState() => PreviewZoomState();
+}
+
+class PreviewZoomState extends State<PreviewZoom> {
+  // Raw pointers (not a scale recogniser): the zoom follows the fingers from the
+  // first pixel, without losing the touch slop at the start of the pinch.
+  final Map<int, Offset> _now = {};
+  Offset _from = Offset.zero, _to = Offset.zero; // local coordinates
+  double _scale = 1, _span0 = 1;
+  bool _active = false, _holding = false;
+  Rect _canvas = Rect.zero;
+  Timer? _release;
+
+  /// Where the canvas is drawn inside a box of [size] (contained, centred).
+  Rect canvasRect(Size size) {
+    final c = widget.canvasSize;
+    final k = math.min(size.width / c.width, size.height / c.height);
+    final w = c.width * k, h = c.height * k;
+    return Rect.fromLTWH((size.width - w) / 2, (size.height - h) / 2, w, h);
+  }
+
+  Offset _toCanvas(Offset local) => Offset((local.dx - _canvas.center.dx) / _canvas.width * widget.canvasSize.width,
+      (local.dy - _canvas.center.dy) / _canvas.height * widget.canvasSize.height);
+
+  (Offset, double) _focalSpan(Map<int, Offset> pts) {
+    final p = pts.values.take(2).toList();
+    return ((p[0] + p[1]) / 2, (p[0] - p[1]).distance);
+  }
+
+  void _pointerDown(PointerDownEvent e) {
+    _now[e.pointer] = e.localPosition;
+    if (_now.length == 2 && !_active) {
+      _release?.cancel();
+      final (focal, span) = _focalSpan(_now);
+      setState(() {
+        _active = true;
+        _holding = false;
+        _from = focal;
+        _to = focal;
+        _span0 = math.max(span, 1);
+        _scale = 1;
+      });
+    }
+  }
+
+  void _pointerMove(PointerMoveEvent e) {
+    if (!_now.containsKey(e.pointer)) return;
+    _now[e.pointer] = e.localPosition;
+    if (!_active || _now.length < 2) return;
+    final (focal, span) = _focalSpan(_now);
+    setState(() {
+      _scale = (span / _span0).clamp(0.2, 12).toDouble();
+      _to = focal;
+    });
+  }
+
+  void _pointerUp(PointerEvent e) {
+    _now.remove(e.pointer);
+    if (!_active) return;
+    _active = false;
+    final moved = (_to - _from).distance > 4 || (_scale - 1).abs() > 0.02;
+    if (moved && e is! PointerCancelEvent) widget.onCommit(_scale, _toCanvas(_from), _toCanvas(_to));
+    // Keep showing the result until the core's new frame is up.
+    setState(() => _holding = moved);
+    _release = Timer(const Duration(milliseconds: 220), () {
+      if (mounted) setState(() => _holding = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _release?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    return LayoutBuilder(builder: (context, box) {
+      _canvas = canvasRect(box.biggest);
+      // Shown while the fingers move: the same maths the core will apply.
+      final m = Matrix4.identity()
+        ..translate(_to.dx, _to.dy)
+        ..scale(_scale, _scale)
+        ..translate(-_from.dx, -_from.dy);
+      return Listener(
+        onPointerDown: _pointerDown,
+        onPointerMove: _pointerMove,
+        onPointerUp: _pointerUp,
+        onPointerCancel: _pointerUp,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: widget.onReset,
+          child: Stack(fit: StackFit.expand, children: [
+            ClipRect(
+              child: _active || _holding ? Transform(transform: m, child: widget.child) : widget.child,
+            ),
+            if (_active)
+              Positioned(
+                left: _canvas.left + 8,
+                top: _canvas.top + 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
+                  child: Text('×${_scale.toStringAsFixed(_scale < 10 ? 1 : 0)}',
+                      style: const TextStyle(color: VsColors.fg, fontSize: 12)),
+                ),
+              ),
+          ]),
+        ),
+      );
+    });
+  }
+}
+
+class KeyframeBar extends StatefulWidget {
+  const KeyframeBar({
+    super.key,
+    required this.state,
+    required this.video,
+    required this.hasKeys,
+    required this.onToggle,
+    required this.onJump,
+    required this.onVolume,
+  });
+  final ClipKeyState? state; // null: no clip under the playhead
+  final bool video; // the clip has a picture
+  final bool hasKeys; // the clip has keys to jump between
+  final void Function(KeyGroup group) onToggle;
+  final void Function(bool forward) onJump;
+  final ValueChanged<double> onVolume; // gain, 1 = unchanged
+
+  @override
+  State<KeyframeBar> createState() => _KeyframeBarState();
+}
+
+class _KeyframeBarState extends State<KeyframeBar> {
+  double? _dragging; // volume while the slider is held
+
+  Widget _key(String label, bool here, bool enabled, VoidCallback onTap, Key key) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: ChoiceChip(
+          key: key,
+          label: Text('${here ? '◆' : '◇'} $label', style: const TextStyle(fontSize: 12)),
+          selected: here,
+          showCheckmark: false,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          selectedColor: VsColors.accent.withValues(alpha: 0.25),
+          onSelected: enabled ? (_) => onTap() : null,
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final st = widget.state;
+    final ok = st != null && st.inside;
+    final volume = _dragging ?? (ok ? st.volume : 1.0);
+    return Container(
+      color: VsColors.panel,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(children: [
+        IconButton(
+          key: const Key('kf-prev'),
+          tooltip: 'Keyframe trước',
+          visualDensity: VisualDensity.compact,
+          icon: const Text('◀◆', style: TextStyle(fontSize: 12)),
+          onPressed: widget.hasKeys ? () => widget.onJump(false) : null,
+        ),
+        _key('Hình', ok && st.pictureHere, ok && widget.video, () => widget.onToggle(KeyGroup.picture),
+            const Key('kf-picture')),
+        _key('Âm thanh', ok && st.audioHere, ok, () => widget.onToggle(KeyGroup.audio), const Key('kf-audio')),
+        IconButton(
+          key: const Key('kf-next'),
+          tooltip: 'Keyframe sau',
+          visualDensity: VisualDensity.compact,
+          icon: const Text('◆▶', style: TextStyle(fontSize: 12)),
+          onPressed: widget.hasKeys ? () => widget.onJump(true) : null,
+        ),
+        const Icon(Icons.volume_up_outlined, size: 18, color: VsColors.fg2),
+        Expanded(
+          child: Slider(
+            key: const Key('kf-volume'),
+            value: volume.clamp(0, 4).toDouble(),
+            max: 4,
+            divisions: 80,
+            onChanged: ok ? (v) => setState(() => _dragging = v) : null,
+            onChangeEnd: ok
+                ? (v) {
+                    setState(() => _dragging = null);
+                    widget.onVolume(v);
+                  }
+                : null,
+          ),
+        ),
+        SizedBox(
+          width: 40,
+          child: Text('${(volume * 100).round()}%', style: const TextStyle(fontSize: 11, color: VsColors.fg2)),
+        ),
+      ]),
+    );
+  }
+}

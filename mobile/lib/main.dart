@@ -13,6 +13,7 @@ import 'core/native_preview.dart';
 import 'core/project_store.dart';
 import 'core/transfer.dart';
 import 'core/vstudio.dart';
+import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/theme.dart';
@@ -407,6 +408,80 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     return null;
   }
 
+  ClipView? get _selectedClip {
+    for (final t in _project?.tracks ?? const <TrackView>[]) {
+      for (final c in t.clips) {
+        if (c.id == _selected) return c;
+      }
+    }
+    return null;
+  }
+
+  // ---- keyframes: on the clip selected, at the playhead ----
+
+  ClipKeyState? _keyState() {
+    final vs = _vs, clip = _selectedClip;
+    if (vs == null || clip == null) return null;
+    try {
+      final st = vs.clipStateAt(clip.id, _playhead);
+      return st.inside ? st : null;
+    } on VStudioException {
+      return null;
+    }
+  }
+
+  void _toggleKeyframe(KeyGroup group) {
+    final clip = _selectedClip;
+    if (clip == null) return;
+    _edit((vs) {
+      final added = vs.toggleKeyframe(clip.id, group, _playhead);
+      final what = group == KeyGroup.picture ? 'hình ảnh' : 'âm thanh';
+      _status = added
+          ? (group == KeyGroup.picture
+              ? 'Đã đặt keyframe hình ảnh. Sang điểm khác rồi dùng hai ngón tay phóng to vùng cần zoom.'
+              : 'Đã đặt keyframe âm thanh. Sang điểm khác rồi kéo thanh âm lượng.')
+          : 'Đã bỏ keyframe $what';
+    });
+    _vs?.seek(_playhead);
+  }
+
+  void _jumpKeyframe(bool forward) {
+    final clip = _selectedClip;
+    if (clip == null) return;
+    final keys = {...clip.pictureKeys, ...clip.audioKeys}.toList()..sort();
+    final halfFrame = 0.5 / (_project!.fps > 0 ? _project!.fps : 30);
+    final next = forward
+        ? keys.where((k) => k > _playhead + halfFrame).firstOrNull
+        : keys.where((k) => k < _playhead - halfFrame).lastOrNull;
+    if (next != null) _seek(next);
+  }
+
+  /// Two-finger pinch on the preview, already shown on screen: commit it as one edit.
+  void _commitZoom(double f, Offset from, Offset to) {
+    final vs = _vs, clip = _selectedVideoClip;
+    if (vs == null || clip == null) return;
+    final st = vs.clipStateAt(clip.id, _playhead);
+    if (!st.inside) return;
+    // The point under the fingers ends where the fingers are, everything scaled by f.
+    final scale = (st.scale * f).clamp(0.05, 20).toDouble();
+    final k = scale / st.scale;
+    _edit((vs) {
+      vs.setPropertyAt(
+          clip.id, _playhead, {'scale': scale, 'x': to.dx + k * (st.x - from.dx), 'y': to.dy + k * (st.y - from.dy)});
+      if (!st.pictureAnimated) {
+        _status = 'Đã phóng to cả clip. Muốn zoom dần: chạm ◇ Hình ở điểm bắt đầu trước, rồi phóng to ở điểm sau.';
+      }
+    });
+    vs.seek(_playhead);
+  }
+
+  void _resetZoom() {
+    final clip = _selectedVideoClip;
+    if (clip == null) return;
+    _edit((vs) => vs.setPropertyAt(clip.id, _playhead, {'scale': 1, 'x': 0, 'y': 0}));
+    _vs?.seek(_playhead);
+  }
+
   /// Picks a .cube LUT, keeps a copy next to the media (so the project and its
   /// package stay self-contained) and applies it. Returns the stored path.
   Future<String?> _pickLut(String clipId) async {
@@ -650,6 +725,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     }
   }
 
+  /// The preview, pinchable when a video clip is selected under the playhead and nothing plays.
+  Widget _zoomable(Widget preview, ClipKeyState? keys) => PreviewZoom(
+        enabled: keys != null && _selectedVideoClip != null && !_playing,
+        canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
+        onCommit: _commitZoom,
+        onReset: _resetZoom,
+        child: preview,
+      );
+
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
@@ -657,6 +741,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     }
     final project = _project;
     if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final keys = _keyState();
     return Scaffold(
       appBar: AppBar(
         title: Text(project.name, style: const TextStyle(fontSize: 16)),
@@ -680,10 +765,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               color: Colors.black,
               alignment: Alignment.center,
               child: _textureId != null && (_project?.duration ?? 0) > 0
-                  ? AspectRatio(aspectRatio: 720 / 1280, child: Texture(textureId: _textureId!))
+                  ? AspectRatio(aspectRatio: 720 / 1280, child: _zoomable(Texture(textureId: _textureId!), keys))
                   : _frame == null
                       ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
-                      : RawImage(image: _frame, fit: BoxFit.contain),
+                      : AspectRatio(
+                          aspectRatio: _frame!.width / _frame!.height,
+                          child: _zoomable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
             ),
           ),
           Container(
@@ -710,6 +797,17 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
             ]),
           ),
+          if (_selectedClip != null)
+            KeyframeBar(
+              state: keys,
+              video: _selectedVideoClip != null,
+              hasKeys: _selectedClip!.animated,
+              onToggle: _toggleKeyframe,
+              onJump: _jumpKeyframe,
+              onVolume: (v) {
+                _edit((vs) => vs.setPropertyAt(_selectedClip!.id, _playhead, {'volume': v}));
+              },
+            ),
           SizedBox(
             height: 22 + 56.0 * (project.tracks.isEmpty ? 1 : project.tracks.length) + 8,
             child: TimelineView(
