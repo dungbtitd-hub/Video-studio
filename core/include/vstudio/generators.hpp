@@ -40,6 +40,10 @@ std::shared_ptr<IClipGenerator> generatorFor(ModuleRegistry* modules, const std:
 // Registers "builtin.text" and "builtin.sticker".
 void registerGeneratorModules(ModuleRegistry& r);
 
+// What a generated clip draws: its content, or for a subtitle line the track look resolved
+// for it (subtitles::resolvedContent).
+Json drawnContent(const Project& p, const Clip& c);
+
 // Box of a generated clip on the canvas at `sourceTime` {x, y, w, h} in canvas pixels
 // (its rest bounds moved and scaled by the clip's transform).
 std::array<double, 4> generatedRectOnCanvas(const Project& p, const Clip& c, Time sourceTime);
