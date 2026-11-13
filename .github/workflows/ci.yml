@@ -238,7 +238,13 @@ jobs:
         working-directory: mobile
         run: flutter build ios --release --no-codesign
       - name: Check the core is linked in
-        run: nm -gU mobile/build/ios/iphoneos/Runner.app/Runner | grep -c " _vs_" | tee n.txt && test $(cat n.txt) -ge 30
+        run: |
+          xcodebuild -project mobile/ios/Runner.xcodeproj -target Runner -configuration Release -showBuildSettings 2>/dev/null \
+            | grep -E " (OTHER_LDFLAGS|STRIP_STYLE|DEAD_CODE_STRIPPING|VSTUDIO_CORE_DIR) = " || true
+          ls -l build-ios/iphoneos/libVStudioCore.a
+          nm -gU mobile/build/ios/iphoneos/Runner.app/Runner | grep " _vs_" | head -3 || true
+          nm -gU mobile/build/ios/iphoneos/Runner.app/Runner | grep -c " _vs_" | tee n.txt || true
+          test $(cat n.txt) -ge 30
 
   flutter:
     name: Flutter (analyze, test, FFI against the real core)
