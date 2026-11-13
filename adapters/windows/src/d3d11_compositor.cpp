@@ -5,6 +5,8 @@
 // shader against the shared layerRect(), exactly like the CPU reference.
 #include "vstudio/windows/d3d11_compositor.hpp"
 
+#include "vstudio/grade.hpp"
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <d3d11.h>
@@ -31,9 +33,90 @@ cbuffer Layer : register(b0) {
     float opacity;
     uint exact;
     int2 offset;
+    uint graded;
+    uint3 pad;
+    float4 g[4];     // grade uniforms (GpuGrade::u)
 };
 Texture2D<float4> tex : register(t0);
+Texture2D<float4> gradeTab : register(t1);  // R32G32B32A32_FLOAT, 4098 x 2 (GpuGrade::table); Load only
 SamplerState smp : register(s0);
+
+// ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
+float tone(float v, int ch) {
+    float pos = saturate(v) * 4096.0;
+    int i = min(int(pos), 4095);
+    float t = pos - float(i);
+    return lerp(gradeTab.Load(int3(i, 0, 0))[ch], gradeTab.Load(int3(i + 1, 0, 0))[ch], t);
+}
+float4 hueRow(float h) {
+    float pos = h - 360.0 * floor(h / 360.0);
+    int i = clamp(int(pos), 0, 359);
+    float t = pos - float(i);
+    return lerp(gradeTab.Load(int3(i, 1, 0)), gradeTab.Load(int3(i + 1, 1, 0)), t);
+}
+float3 rgb2hsv(float3 c) {
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), d = mx - mn;
+    float s = mx > 1e-6 ? d / mx : 0.0;
+    float h = 0.0;
+    if (d > 1e-6) {
+        float k = 60.0 / d;
+        if (mx == c.r) { h = (c.g - c.b) * k; if (h < 0.0) h += 360.0; }
+        else if (mx == c.g) h = (c.b - c.r) * k + 120.0;
+        else h = (c.r - c.g) * k + 240.0;
+    }
+    return float3(h, s, mx);
+}
+float3 hsv2rgb(float3 c) {
+    float h = c.x, s = c.y, v = c.z;
+    if (s <= 0.0) return float3(v, v, v);
+    h = h - 360.0 * floor(h / 360.0);
+    float hp = h / 60.0;
+    int i = min(int(hp), 5);
+    float f = hp - float(i), p = v * (1.0 - s), q = v * (1.0 - s * f), t = v * (1.0 - s * (1.0 - f));
+    if (i == 0) return float3(v, t, p);
+    if (i == 1) return float3(q, v, p);
+    if (i == 2) return float3(p, v, t);
+    if (i == 3) return float3(p, q, v);
+    if (i == 4) return float3(t, p, v);
+    return float3(v, p, q);
+}
+float rangeMask(float v, float lo, float hi, float soft) {
+    if (v >= lo && v <= hi) return 1.0;
+    float d = v < lo ? lo - v : v - hi;
+    if (d >= soft) return 0.0;
+    float t = 1.0 - d / soft;
+    return t * t * (3.0 - 2.0 * t);
+}
+float3 grade(float3 c) {
+    if (g[0].y > 0.5) c = float3(tone(c.r, 0), tone(c.g, 1), tone(c.b, 2));
+    if (g[0].x != 1.0) {
+        float l = dot(c, float3(0.2126, 0.7152, 0.0722));
+        c = l + (c - l) * g[0].x;
+    }
+    bool hsl = g[0].z > 0.5, qual = g[0].w > 0.5;
+    if (!hsl && !qual) return c;
+    c = max(c, float3(0.0, 0.0, 0.0));
+    float3 hsv = rgb2hsv(c);
+    if (hsl && hsv.y > 0.0) {
+        float4 a = hueRow(hsv.x);
+        float w = min(1.0, hsv.y * 2.0);
+        hsv.x += a.x * w;
+        hsv.z *= 1.0 + a.z * 0.5 * w;
+        hsv.y = saturate(hsv.y * (1.0 + (a.y - 1.0) * w));
+    }
+    if (qual) {
+        float luma = dot(c, float3(0.2126, 0.7152, 0.0722));
+        float m = hueRow(hsv.x).w * rangeMask(hsv.y, g[1].x, g[1].y, g[2].x) * rangeMask(luma, g[1].z, g[1].w, g[2].x);
+        if (g[2].y > 0.5) m = 1.0 - m;
+        if (g[2].z > 0.5) return float3(m, m, m);
+        if (m > 0.0) {
+            hsv.x += g[2].w * m;
+            hsv.y = saturate(hsv.y * (1.0 + (g[3].x - 1.0) * m));
+            hsv.z *= 1.0 + (g[3].y - 1.0) * m;
+        }
+    }
+    return hsv2rgb(hsv);
+}
 
 float4 vs_quad(uint vid : SV_VertexID) : SV_Position {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
@@ -49,6 +132,7 @@ float4 ps_layer(float4 pos : SV_Position) : SV_Target {
     } else {
         c = tex.SampleLevel(smp, (p - rect.xy) / (rect.zw - rect.xy), 0);
     }
+    if (graded != 0u) c.rgb = saturate(grade(c.rgb));
     c.a *= opacity;
     return c;
 }
@@ -60,6 +144,9 @@ struct LayerCB {
     float opacity;
     std::uint32_t exact;
     std::int32_t offset[2];
+    std::uint32_t graded;
+    std::uint32_t pad[3];
+    float g[16];
 };
 static_assert(sizeof(LayerCB) % 16 == 0, "constant buffer size");
 
@@ -74,6 +161,7 @@ public:
     }
 
     std::string name() const override { return warp_ ? "windows.d3d11_compositor (WARP)" : "windows.d3d11_compositor"; }
+    bool supportsGrade() const override { return true; }
 
     bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string* error) override {
         if (out.empty()) return true;
@@ -112,13 +200,23 @@ public:
                        {float(r.left), float(r.top), float(r.left + r.width), float(r.top + r.height)},
                        float(op),
                        r.unscaled ? 1u : 0u,
-                       {std::int32_t(std::lround(r.left)), std::int32_t(std::lround(r.top))}};
+                       {std::int32_t(std::lround(r.left)), std::int32_t(std::lround(r.top))},
+                       l.grade ? 1u : 0u,
+                       {0, 0, 0},
+                       {}};
+            ID3D11ShaderResourceView* gsrv = nullptr;
+            if (l.grade) {
+                std::copy(l.grade->u, l.grade->u + 16, cb.g);
+                gsrv = gradeTexture(l.grade);
+                if (!gsrv) return fail(error, "cannot upload a grade table");
+            }
             ctx_->UpdateSubresource(cb_.Get(), 0, nullptr, &cb, 0, 0);
             ctx_->PSSetShaderResources(0, 1, &srv);
+            ctx_->PSSetShaderResources(1, 1, &gsrv);
             ctx_->Draw(4, 0);
         }
-        ID3D11ShaderResourceView* none[] = {nullptr};
-        ctx_->PSSetShaderResources(0, 1, none);
+        ID3D11ShaderResourceView* none[] = {nullptr, nullptr};
+        ctx_->PSSetShaderResources(0, 2, none);
         ctx_->CopyResource(staging_.Get(), target_.Get());
         D3D11_MAPPED_SUBRESOURCE m{};
         const HRESULT hr = ctx_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &m);
@@ -230,9 +328,9 @@ private:
                 return cache_.front().srv.Get();
             }
         }
-        Cached c{f.get(), f, nullptr, nullptr, f->width, f->height};
+        Cached c{f.get(), f, nullptr, nullptr, f->width, f->height, f->deep()};
         for (auto it = cache_.begin(); it != cache_.end(); ++it) {
-            if (it->frame.expired() && it->w == f->width && it->h == f->height) {
+            if (it->frame.expired() && it->w == f->width && it->h == f->height && it->deep == f->deep()) {
                 c.tex = it->tex;
                 c.srv = it->srv;
                 cache_.erase(it);
@@ -245,7 +343,7 @@ private:
             d.Height = UINT(f->height);
             d.MipLevels = 1;
             d.ArraySize = 1;
-            d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            d.Format = f->deep() ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
             d.SampleDesc.Count = 1;
             d.Usage = D3D11_USAGE_DEFAULT;
             d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -253,11 +351,47 @@ private:
                 FAILED(device_->CreateShaderResourceView(c.tex.Get(), nullptr, &c.srv)))
                 return nullptr;
         }
-        ctx_->UpdateSubresource(c.tex.Get(), 0, nullptr, f->rgba.data(), UINT(f->width) * 4, 0);
+        if (f->deep())  // 10-bit sources graded in float: half floats straight from the decoder
+            ctx_->UpdateSubresource(c.tex.Get(), 0, nullptr, f->half.data(), UINT(f->width) * 8, 0);
+        else
+            ctx_->UpdateSubresource(c.tex.Get(), 0, nullptr, f->rgba.data(), UINT(f->width) * 4, 0);
         cache_.push_front(std::move(c));
         while (cache_.size() > kMaxTextures) cache_.pop_back();
         return cache_.front().srv.Get();
     }
+
+    // Grade tables by grade identity (gpuGrade() reuses one object per parameter set).
+    ID3D11ShaderResourceView* gradeTexture(const std::shared_ptr<const GpuGrade>& g) {
+        for (auto it = grades_.begin(); it != grades_.end(); ++it)
+            if (it->key == g.get() && it->grade.lock() == g) {
+                grades_.splice(grades_.begin(), grades_, it);
+                return grades_.front().srv.Get();
+            }
+        GradeTex t{g.get(), g, nullptr, nullptr};
+        D3D11_TEXTURE2D_DESC d{};
+        d.Width = UINT(GpuGrade::kTableWidth);
+        d.Height = 2;
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        d.SampleDesc.Count = 1;
+        d.Usage = D3D11_USAGE_IMMUTABLE;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init{g->table.data(), UINT(GpuGrade::kTableWidth) * 16, 0};
+        if (FAILED(device_->CreateTexture2D(&d, &init, &t.tex)) ||
+            FAILED(device_->CreateShaderResourceView(t.tex.Get(), nullptr, &t.srv)))
+            return nullptr;
+        grades_.push_front(std::move(t));
+        while (grades_.size() > 8) grades_.pop_back();
+        return grades_.front().srv.Get();
+    }
+
+    struct GradeTex {
+        const GpuGrade* key;
+        std::weak_ptr<const GpuGrade> grade;
+        ComPtr<ID3D11Texture2D> tex;
+        ComPtr<ID3D11ShaderResourceView> srv;
+    };
 
     struct Cached {
         const VideoFrame* key;
@@ -265,6 +399,7 @@ private:
         ComPtr<ID3D11Texture2D> tex;
         ComPtr<ID3D11ShaderResourceView> srv;
         int w = 0, h = 0;
+        bool deep = false;
     };
     static constexpr std::size_t kMaxTextures = 24;
 
@@ -282,6 +417,7 @@ private:
     ComPtr<ID3D11RenderTargetView> rtv_;
     int targetW_ = 0, targetH_ = 0;
     std::list<Cached> cache_;
+    std::list<GradeTex> grades_;
 };
 
 }  // namespace

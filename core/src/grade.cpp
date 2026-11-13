@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 
 #include "detail/parallel.hpp"
 #include "vstudio/color_space.hpp"
@@ -113,6 +114,7 @@ struct Plan {
         return table[c][i] + (table[c][i + 1] - table[c][i]) * t;
     }
     static float hueTable(const std::vector<float>& t, float h) {
+        h -= 360.0f * std::floor(h / 360.0f);  // hue shifts may leave 0..360
         const float pos = h * (kHueBins / 360.0f);
         const int i = std::clamp(static_cast<int>(pos), 0, kHueBins - 1);
         const float f = pos - i;
@@ -413,6 +415,51 @@ void applyColorGrade(VideoFrame& f, const Json& p) {
             px[2] = static_cast<std::uint8_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f + 0.5f);
         }
     });
+}
+
+std::shared_ptr<const GpuGrade> gpuGrade(const Json& params) {
+    static std::mutex mu;
+    static std::vector<std::pair<std::string, std::shared_ptr<const GpuGrade>>> cache;  // most recent first
+    const std::string key = params.dump();
+    {
+        std::lock_guard lk(mu);
+        for (std::size_t i = 0; i < cache.size(); ++i)
+            if (cache[i].first == key) {
+                auto hit = cache[i].second;
+                std::rotate(cache.begin(), cache.begin() + static_cast<std::ptrdiff_t>(i), cache.begin() + static_cast<std::ptrdiff_t>(i) + 1);
+                return hit;
+            }
+    }
+    constexpr int kSteps = 4096;
+    const Plan pl = makePlan(params, kSteps);
+    auto g = std::make_shared<GpuGrade>();
+    g->params = params;
+    constexpr int W = GpuGrade::kTableWidth;
+    g->table.assign(static_cast<std::size_t>(W) * 2 * 4, 0.0f);
+    for (int x = 0; x < W; ++x) {
+        float* t = g->table.data() + static_cast<std::size_t>(x) * 4;
+        const int i = std::min(x, kSteps + 1);
+        for (int c = 0; c < 3; ++c)
+            t[c] = pl.tone ? pl.table[c][i] : std::min(1.0f, static_cast<float>(i) / kSteps);
+        t[3] = 1.0f;
+    }
+    for (int x = 0; x < W; ++x) {
+        float* t = g->table.data() + (static_cast<std::size_t>(W) + x) * 4;
+        const int i = std::min(x, kHueBins);
+        t[0] = pl.hsl ? pl.hShift[i] : 0.0f;
+        t[1] = pl.hsl ? pl.hSat[i] : 1.0f;
+        t[2] = pl.hsl ? pl.hLum[i] : 0.0f;
+        t[3] = pl.qual ? pl.qHue[i] : 0.0f;
+    }
+    const float u[16] = {pl.saturation, pl.tone ? 1.0f : 0.0f, pl.hsl ? 1.0f : 0.0f, pl.qual ? 1.0f : 0.0f,
+                         pl.sLo, pl.sHi, pl.lLo, pl.lHi,
+                         pl.soft, pl.invert ? 1.0f : 0.0f, pl.showMask ? 1.0f : 0.0f, pl.qShift,
+                         pl.qSat, pl.qExp, 0.0f, 0.0f};
+    std::copy(u, u + 16, g->u);
+    std::lock_guard lk(mu);
+    cache.insert(cache.begin(), {key, g});
+    if (cache.size() > 16) cache.pop_back();
+    return g;
 }
 
 Json withGradeEffect(const Json& effects, const Json& params, const std::string& effectId) {

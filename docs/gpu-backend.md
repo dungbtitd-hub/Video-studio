@@ -29,6 +29,10 @@ Why native modules rather than one abstraction (bgfx, Dawn/WebGPU, Qt RHI):
 - Thread-safe: preview and export may composite at the same time.
 - No device, or device lost: the factory returns nullptr or `composite()` returns false,
   and the Renderer uses the CPU compositor. A missing GPU never breaks preview or export.
+- Colour grade (`supportsGrade()`, all three GPU compositors): a layer may carry a `GpuGrade`
+  (one RGBA32F 4098x2 table + 16 floats, cached per parameter set). The shader runs the grade after
+  sampling and before blending; 10-bit layers are uploaded as RGBA16F so the grade works in float.
+  See `docs/color-pipeline.md` ("Chỉnh màu trên GPU").
 
 ## Metal compositor
 

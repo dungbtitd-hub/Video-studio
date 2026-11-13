@@ -113,5 +113,16 @@ Thông số về trung tính thì hiệu ứng tự bị gỡ khỏi clip.
 - 8-bit và 16-bit khớp nhau (lệch ≤ 3 mức); dải tối 10-bit đẩy mạnh vẫn giữ > 600 mức.
 - Editor: một hiệu ứng mỗi clip, đúng vị trí (sau Log, trước bộ lọc), giữ id khi sửa, hoàn tác từng bước, `show_mask` không bị lưu.
 - Xem trước trực tiếp đổi hình mà dự án không đổi; clip khác không bị ảnh hưởng.
-- Tốc độ (máy ảo CI 4 nhân): chỉnh màu đầy đủ khung xem trước 960×540 ≈ 6 ms; khung 4K 16-bit ≈ 0,4 s trên CPU
-  (xuất 4K có chỉnh màu vì vậy chậm hơn; chuyển phần chỉnh màu sang GPU là bước tối ưu tiếp theo).
+- Tốc độ CPU (máy ảo CI 4 nhân): chỉnh màu đầy đủ khung xem trước 960×540 ≈ 6 ms; khung 4K 16-bit ≈ 0,4 s.
+  Vì vậy khi có GPU, phần chỉnh màu chạy trên GPU (mục dưới).
+
+## Chỉnh màu trên GPU
+
+Compositor Metal (macOS/iOS), Direct3D 11 (Windows) và OpenGL ES (Android) chạy chỉnh màu ngay trong shader ghép lớp
+(`ICompositor::supportsGrade()`). Khi hiệu ứng cuối cùng của clip là `builtin.color_grade`, `Renderer` không chạy nó
+trên CPU mà gắn `GpuGrade` vào lớp (`CompositeLayer::grade`) và giữ khung 16-bit: lớp được tải lên GPU dạng RGBA16F,
+chỉnh màu trong float rồi mới ghép và lượng tử về 8-bit. GPU dùng **cùng bảng tra** với CPU
+(`gpuGrade()`: 1 texture RGBA32F 4098×2 — hàng 0 là đường cong tông màu, hàng 1 là HSL + mặt nạ sắc độ theo độ),
+tạo một lần cho mỗi bộ thông số và được cache, nên kéo bánh xe chỉ đổi vài số và một texture nhỏ.
+Compositor CPU và cảnh chuyển vẫn chỉnh trên CPU (cùng kết quả). Kiểm thử chung cho mọi compositor
+("colour grade in the compositor matches the CPU grade") so 5 bản chỉnh trên lớp 8-bit và 10-bit với kết quả CPU.

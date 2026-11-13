@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "vstudio/compositor.hpp"
+#include "vstudio/grade.hpp"
+#include "vstudio/pixel.hpp"
 #include "vtest.hpp"
 
 namespace vtest {
@@ -195,6 +197,29 @@ struct CompositorSuite {
             for (auto& th : ts) th.join();
             for (int t = 0; t < 4; ++t)
                 if (!why[t].empty()) throw Failure{"thread " + std::to_string(t) + ": " + why[t]};
+        });
+        add(name + ": colour grade in the compositor matches the CPU grade (8-bit and 10-bit layers)", [get] {
+            auto c = get();
+            if (!c || !c->supportsGrade()) return;  // compositors without it get pre-graded layers
+            const Json grades[] = {
+                {{"lift", {0.05, 0, -0.05, 0.1}}, {"gamma", {0, 0.1, 0, 0.2}}, {"gain", {0, 0, 0.1, -0.1}}, {"contrast", 1.2}},
+                {{"saturation", 1.4}, {"curves", {{"master", {{0.25, 0.2}, {0.75, 0.85}}}, {"b", {{0.5, 0.4}}}}}},
+                {{"hsl", {{"orange", {0.3, 0.4, 0.2}}, {"blue", {-0.2, -0.6, 0}}, {"green", {0, 0.5, -0.3}}}}},
+                {{"qualifier", {{"hue", {200, 80}}, {"sat", {0.2, 1}}, {"softness", 0.2}, {"saturation", -0.7}, {"exposure", 0.4}}}},
+                {{"qualifier", {{"hue", {30, 60}}, {"invert", true}, {"show_mask", true}}}},
+            };
+            for (int deep = 0; deep < 2; ++deep)
+                for (const auto& g : grades) {
+                    auto src = pattern(320, 180, 11, false);
+                    if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
+                    CompositeLayer l{src, {}, gpuGrade(g)};
+                    l.transform.x = 16;  // unscaled at an integer offset: exact texel path
+                    VideoFrame out;
+                    out.allocate(320, 180);
+                    std::string err;
+                    CHECK(c->composite(out, {l}, &err));
+                    expectClose(out, reference(320, 180, {l}), (std::string(deep ? "10-bit " : "8-bit ") + g.dump()).c_str());
+                }
         });
         add(name + ": 1080p, 4 layers (timing)", [get, name] {
             auto c = get();
