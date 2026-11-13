@@ -105,6 +105,10 @@ class VStudio {
   void save(String packageDir) => using((a) => _check(_b.save(_s, packageDir.toNativeUtf8(allocator: a))));
   void autosave() => _check(_b.autosave(_s));
 
+  /// Address of the native vs_session, for platform code that attaches a preview surface.
+  /// Detach that surface before [dispose].
+  int get nativeHandle => _s.address;
+
   void setPreviewSize(int w, int h) => _b.previewSetSize(_s, w, h);
   void seek(double t) => _b.previewSeek(_s, secondsToTicks(t));
   void play(double from) => _b.play(_s, secondsToTicks(from));
