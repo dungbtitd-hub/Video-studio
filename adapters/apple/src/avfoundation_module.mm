@@ -16,6 +16,8 @@
 #include <thread>
 #include <vector>
 
+#include "vstudio/pixel.hpp"
+
 // The synchronous AVAsset property getters are deprecated from macOS 13 / iOS 16
 // in favour of async loading, but we target macOS 11 / iOS 14 and every call
 // here already runs on a background thread, so blocking is what we want.
@@ -96,8 +98,25 @@ std::optional<ProbeResult> probeFile(const std::string& path, std::string* error
                     std::fabs(CMTimeGetSeconds(v.minFrameDuration) * v.nominalFrameRate - 1.0) > 0.05;
             const CGAffineTransform t = v.preferredTransform;
             r.rotation = (static_cast<int>(std::lround(std::atan2(t.b, t.a) * 180.0 / M_PI)) + 360) % 360;
-            if (id desc = v.formatDescriptions.firstObject)
-                r.videoCodec = fourcc(CMFormatDescriptionGetMediaSubType((__bridge CMFormatDescriptionRef)desc));
+            if (id desc = v.formatDescriptions.firstObject) {
+                auto fd = (__bridge CMFormatDescriptionRef)desc;
+                r.videoCodec = fourcc(CMFormatDescriptionGetMediaSubType(fd));
+                // Colour description: bit depth and transfer, named like FFmpeg does.
+                if (auto bits = (CFNumberRef)CMFormatDescriptionGetExtension(fd, kCMFormatDescriptionExtension_BitsPerComponent);
+                    bits && CFGetTypeID(bits) == CFNumberGetTypeID())
+                    CFNumberGetValue(bits, kCFNumberIntType, &r.bitDepth);
+                if (auto tf = (CFStringRef)CMFormatDescriptionGetExtension(fd, kCMFormatDescriptionExtension_TransferFunction);
+                    tf && CFGetTypeID(tf) == CFStringGetTypeID()) {
+                    if (CFEqual(tf, kCVImageBufferTransferFunction_ITU_R_2100_HLG)) r.transfer = "arib-std-b67";
+                    else if (CFEqual(tf, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)) r.transfer = "smpte2084";
+                    else if (CFEqual(tf, kCVImageBufferTransferFunction_ITU_R_709_2)) r.transfer = "bt709";
+                }
+                if (auto pr = (CFStringRef)CMFormatDescriptionGetExtension(fd, kCMFormatDescriptionExtension_ColorPrimaries);
+                    pr && CFGetTypeID(pr) == CFStringGetTypeID()) {
+                    if (CFEqual(pr, kCVImageBufferColorPrimaries_ITU_R_2020)) r.primaries = "bt2020";
+                    else if (CFEqual(pr, kCVImageBufferColorPrimaries_ITU_R_709_2)) r.primaries = "bt709";
+                }
+            }
             r.duration = fromCM(v.timeRange.duration);
         }
         if (a) {
@@ -133,6 +152,7 @@ public:
         maxW_ = w;
         maxH_ = h;
     }
+    void setDeepOutput(bool on) override { deep_ = on; }
 
     std::optional<VideoFrame> videoFrameAt(Time t) override {
         if (!probe_.hasVideo) return std::nullopt;
@@ -212,9 +232,11 @@ private:
         if (!vreader_) return false;
         int w, h;
         targetSize(w, h);
-        // VideoToolbox decodes and scales straight to the preview size in BGRA.
+        // VideoToolbox decodes and scales straight to the preview size: BGRA, or half-float
+        // RGBA for 10-bit sources when deep output is asked (no rounding to 8 bits).
+        const bool deepNow = deep_ && probe_.bitDepth > 8;
         NSDictionary* settings = @{
-            (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+            (id)kCVPixelBufferPixelFormatTypeKey : @(deepNow ? kCVPixelFormatType_64RGBAHalf : kCVPixelFormatType_32BGRA),
             (id)kCVPixelBufferWidthKey : @(w),
             (id)kCVPixelBufferHeightKey : @(h),
         };
@@ -236,7 +258,10 @@ private:
         if (CVImageBufferRef px = CMSampleBufferGetImageBuffer(sb)) {
             int w, h;
             targetSize(w, h);
-            copyBgra(px, pending_, w, h);
+            if (CVPixelBufferGetPixelFormatType(px) == kCVPixelFormatType_64RGBAHalf)
+                copyHalf(px, pending_, w, h);
+            else
+                copyBgra(px, pending_, w, h);
             pendingPts_ = fromCM(CMSampleBufferGetPresentationTimeStamp(sb));
             pending_.pts = pendingPts_;
             ok = true;
@@ -264,6 +289,30 @@ private:
                 d[1] = s[1];
                 d[2] = s[0];
                 d[3] = 255;
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(px, kCVPixelBufferLock_ReadOnly);
+    }
+
+    // Half-float RGBA pixel buffer -> RGBA16F frame (same layout, opaque alpha).
+    static void copyHalf(CVPixelBufferRef px, VideoFrame& out, int w, int h) {
+        CVPixelBufferLockBaseAddress(px, kCVPixelBufferLock_ReadOnly);
+        const int sw = static_cast<int>(CVPixelBufferGetWidth(px));
+        const int sh = static_cast<int>(CVPixelBufferGetHeight(px));
+        const size_t bpr = CVPixelBufferGetBytesPerRow(px);
+        const auto* base = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(px));
+        out.allocate(w, h, PixelFormat::RGBA16F);
+        const uint16_t one = floatToHalf(1.0f);
+        for (int y = 0; y < h; ++y) {
+            const auto* row = reinterpret_cast<const uint16_t*>(
+                base + static_cast<size_t>(std::min(sh - 1, static_cast<int>((2LL * y + 1) * sh / (2LL * h)))) * bpr);
+            uint16_t* d = out.half.data() + static_cast<size_t>(y) * w * 4;
+            for (int x = 0; x < w; ++x, d += 4) {
+                const uint16_t* s = row + static_cast<size_t>(std::min(sw - 1, static_cast<int>((2LL * x + 1) * sw / (2LL * w)))) * 4;
+                d[0] = s[0];
+                d[1] = s[1];
+                d[2] = s[2];
+                d[3] = one;
             }
         }
         CVPixelBufferUnlockBaseAddress(px, kCVPixelBufferLock_ReadOnly);
@@ -322,6 +371,7 @@ private:
     ProbeResult probe_;
     AVURLAsset* asset_ = nil;
     int maxW_ = 0, maxH_ = 0;
+    bool deep_ = false;
 
     AVAssetReader* vreader_ = nil;
     AVAssetReaderTrackOutput* vout_ = nil;

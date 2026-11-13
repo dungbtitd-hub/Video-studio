@@ -34,8 +34,9 @@ public:
     MediaPool(std::shared_ptr<IMediaBackend> backend, std::string projectDir);
     // maxW/maxH: decode straight to this box (0 = native). Preview passes the
     // preview size so a 4K source is never expanded to full-size RGBA.
+    // deep: sources with more than 8 bits come out as RGBA16F (see IMediaDecoder::setDeepOutput).
     IMediaDecoder* decoder(const MediaAsset& a, const std::string& purpose, std::string* error, int maxW = 0,
-                           int maxH = 0, bool allowProxy = false);
+                           int maxH = 0, bool allowProxy = false, bool deep = false);
     [[nodiscard]] std::string resolve(const MediaAsset& a) const;
     // Registers a low-resolution proxy file used for preview (never for export).
     void setProxy(const Id& assetId, std::string path);
@@ -67,9 +68,12 @@ public:
     // at the project sample rate/channels.
     AudioBuffer renderAudio(std::int64_t startSample, std::int64_t frames, const std::string& purpose = "audio");
     [[nodiscard]] const std::vector<std::string>& warnings() const { return warnings_; }
+    // Deep output: renderVideo returns RGBA16F (10-bit export). Default RGBA8 (preview).
+    void setDeepOutput(bool on) { deep_ = on; }
 
 private:
-    std::shared_ptr<const VideoFrame> sourceFrame(const VideoLayer& layer, int outW, int outH, const std::string& purpose);
+    std::shared_ptr<const VideoFrame> sourceFrame(const VideoLayer& layer, int outW, int outH, const std::string& purpose,
+                                                  bool deep);
     ICompositor& compositor();
 
     const Project& project_;
@@ -78,6 +82,7 @@ private:
     bool preview_;
     ModuleRegistry* modules_;
     std::shared_ptr<ICompositor> compositor_;
+    bool deep_ = false;
     std::vector<std::string> warnings_;
     void warn(std::string w);
 };

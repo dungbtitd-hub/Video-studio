@@ -895,3 +895,133 @@ TEST("transfer: cancel stops pack and unpack without partial files") {
     CHECK(!hasPartFiles(dir));
     fs::remove_all(dir);
 }
+
+// ------------------------------------------------------------------ deep colour (RGBA16F)
+
+#include <set>
+
+#include "vstudio/pixel.hpp"
+
+TEST("pixel: half floats and 8-bit values survive conversions") {
+    CHECK_EQ(floatToHalf(1.0f), std::uint16_t{0x3c00});
+    CHECK_EQ(floatToHalf(-2.0f), std::uint16_t{0xc000});
+    CHECK_EQ(floatToHalf(65504.0f), std::uint16_t{0x7bff});
+    CHECK_EQ(floatToHalf(1e6f), std::uint16_t{0x7c00});  // overflow -> inf
+    CHECK_EQ(halfToFloat(0x0001), 5.9604645e-8f);        // smallest subnormal
+    for (std::uint32_t h = 0; h < 0x7c00; ++h)  // every finite positive half round-trips exactly
+        if (floatToHalf(halfToFloat(static_cast<std::uint16_t>(h))) != h) CHECK(false);
+    // Every 8-bit value comes back unchanged through RGBA16F, dither included.
+    VideoFrame f;
+    f.allocate(256, 4);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 256; ++x)
+            for (int c = 0; c < 4; ++c) f.rgba[(y * 256 + x) * 4 + c] = static_cast<std::uint8_t>(x);
+    const VideoFrame original = f;
+    convertFrame(f, PixelFormat::RGBA16F);
+    CHECK(f.deep() && f.rgba.empty() && f.half.size() == 256u * 4 * 4);
+    CHECK_EQ(f.bytes(), original.bytes() * 2);
+    convertFrame(f, PixelFormat::RGBA8);
+    CHECK(f.rgba == original.rgba);
+}
+
+TEST("pixel: a smooth 10-bit gradient is dithered, not banded, on the way to 8 bits") {
+    VideoFrame f;
+    f.allocate(64, 16, PixelFormat::RGBA16F);
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 64; ++x)
+            for (int c = 0; c < 4; ++c)  // 64 steps spanning only 4 8-bit levels
+                f.half[(y * 64 + x) * 4 + c] = floatToHalf(c == 3 ? 1.0f : (100.0f + x / 16.0f) / 255.0f);
+    convertFrame(f, PixelFormat::RGBA8);
+    // Averaged over each 4x4 dither cell, the 8-bit picture follows the fine ramp
+    // (error well under one 8-bit step), where plain rounding would show 4 flat bands.
+    for (int bx = 0; bx < 64; bx += 4) {
+        double sum = 0, want = 0;
+        for (int y = 0; y < 4; ++y)
+            for (int x = bx; x < bx + 4; ++x) {
+                sum += f.rgba[(y * 64 + x) * 4];
+                want += 100.0 + x / 16.0;
+            }
+        CHECK(std::abs(sum - want) / 16 < 0.2);
+    }
+}
+
+TEST("deep grading keeps far more tonal levels than 8-bit grading") {
+    // A dark 10-bit ramp (e.g. underexposed Log footage), pushed hard by a look.
+    VideoFrame deep;
+    deep.allocate(1024, 1, PixelFormat::RGBA16F);
+    for (int x = 0; x < 1024; ++x)
+        for (int c = 0; c < 4; ++c) deep.half[x * 4 + c] = floatToHalf(c == 3 ? 1.0f : x / 1023.0f * 0.25f);
+    VideoFrame flat = convertedFrame(deep, PixelFormat::RGBA8);
+    const Json push = {{"exposure", 2.0}, {"contrast", 1.3}, {"saturation", 1.2}};
+    applyColorLook(deep, push);
+    applyColorLook(flat, push);
+    std::set<std::uint16_t> deepLevels;
+    std::set<std::uint8_t> flatLevels;
+    for (int x = 0; x < 1024; ++x) {
+        deepLevels.insert(deep.half[x * 4]);
+        flatLevels.insert(flat.rgba[x * 4]);
+    }
+    CHECK(flatLevels.size() <= 65u);  // 64 input levels: visible bands after a 4x push
+    CHECK(deepLevels.size() > 600u);
+    // Same look, same picture: deep and 8-bit agree within dithering/rounding.
+    const VideoFrame back = convertedFrame(deep, PixelFormat::RGBA8);
+    for (int x = 0; x < 1024; x += 37) CHECK(std::abs(int(back.rgba[x * 4]) - int(flat.rgba[x * 4])) <= 8);
+}
+
+namespace {
+
+// An effect from an older module: knows nothing of RGBA16F.
+class EightBitOnly final : public IVideoEffect {
+public:
+    mutable int deepSeen = 0;
+    void apply(VideoFrame& f, const Json&, Time) const override {
+        if (f.deep()) ++deepSeen;
+        for (std::size_t i = 0; i + 3 < f.rgba.size(); i += 4) f.rgba[i] = 255 - f.rgba[i];
+    }
+};
+
+// A GPU-like compositor that has no deep path: must never be handed half floats.
+class ShallowGpu final : public ICompositor {
+public:
+    int calls = 0;
+    std::string name() const override { return "test.shallow"; }
+    bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string*) override {
+        ++calls;
+        CHECK(!out.deep());
+        for (const auto& l : layers) CHECK(!l.frame->deep());
+        return createCpuCompositor()->composite(out, layers, nullptr);
+    }
+};
+
+}  // namespace
+
+TEST("render: deep output for 10-bit export, 8-bit for preview, old modules still work") {
+    Fixture f;
+    const Id c = f.ed.appendClip(f.v1, f.asset, sec(2), sec(6));
+    f.ed.addClipEffect(c, kColorLookEffect, {{"exposure", 0.5}});
+    f.ed.addClipEffect(c, "test.eight_bit", {});
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    auto old = std::make_shared<EightBitOnly>();
+    mods.add<IVideoEffect>({.id = "test.eight_bit", .capabilities = {"effect.color"}}, [old] { return old; });
+    auto gpu = std::make_shared<ShallowGpu>();
+    mods.add<ICompositor>({.id = "test.shallow", .capabilities = {"composite"}, .priority = 100}, [gpu] { return gpu; });
+
+    Renderer preview(f.ed.project(), pool, nullptr, true, &mods);
+    const VideoFrame p = preview.renderVideo(sec(1), 128, 72);
+    CHECK(!p.deep());
+    CHECK_EQ(gpu->calls, 1);
+
+    Renderer exp(f.ed.project(), pool, nullptr, false, &mods);
+    exp.setDeepOutput(true);
+    const VideoFrame d = exp.renderVideo(sec(1), 128, 72);
+    CHECK(d.deep());
+    CHECK_EQ(gpu->calls, 1);   // the shallow compositor was skipped for the deep frame
+    CHECK_EQ(old->deepSeen, 0);  // and the 8-bit effect only ever saw 8-bit frames
+    const VideoFrame d8 = convertedFrame(d, PixelFormat::RGBA8);
+    const std::size_t centre = (36 * 128 + 64) * 4;
+    for (int k = 0; k < 4; ++k) CHECK(std::abs(int(d8.rgba[centre + k]) - int(p.rgba[centre + k])) <= 2);
+    CHECK(exp.warnings().empty());
+}

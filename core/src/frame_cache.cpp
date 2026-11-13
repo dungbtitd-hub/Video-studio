@@ -22,11 +22,11 @@ void FrameCache::put(const std::string& k, std::shared_ptr<const VideoFrame> f) 
     if (!f) return;
     std::lock_guard lk(mu_);
     if (auto it = map_.find(k); it != map_.end()) {
-        bytes_ -= it->second->second->rgba.size();
+        bytes_ -= it->second->second->bytes();
         lru_.erase(it->second);
         map_.erase(it);
     }
-    bytes_ += f->rgba.size();
+    bytes_ += f->bytes();
     lru_.emplace_front(k, std::move(f));
     map_[k] = lru_.begin();
     evictLocked();
@@ -35,7 +35,7 @@ void FrameCache::put(const std::string& k, std::shared_ptr<const VideoFrame> f) 
 void FrameCache::evictLocked() {
     while (bytes_ > maxBytes_ && lru_.size() > 1) {
         auto& back = lru_.back();
-        bytes_ -= back.second->rgba.size();
+        bytes_ -= back.second->bytes();
         map_.erase(back.first);
         lru_.pop_back();
     }

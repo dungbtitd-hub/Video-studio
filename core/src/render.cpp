@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "detail/paths.hpp"
+#include "vstudio/pixel.hpp"
 
 namespace vstudio {
 
@@ -76,6 +77,8 @@ LayerRect layerRect(int srcW, int srcH, int dstW, int dstH, const Transform& tr)
 }
 
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) {
+    if (dst.deep()) return compositeOverDeep(dst, src, tr);
+    if (src.deep()) return compositeOver(dst, convertedFrame(src, PixelFormat::RGBA8), tr);
     if (src.empty() || dst.empty() || tr.opacity <= 0.0 || tr.scale <= 0.0) return;
     // Fit (contain) then scale, centred, then offset.
     const LayerRect r = layerRect(src.width, src.height, dst.width, dst.height, tr);
@@ -153,6 +156,65 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     }
 }
 
+namespace {
+
+// Straight-alpha RGBA as floats, from either pixel format.
+struct FloatReader {
+    const VideoFrame& f;
+    void at(int x, int y, float out[4]) const {
+        const std::size_t i = (static_cast<std::size_t>(y) * f.width + x) * 4;
+        if (f.deep()) {
+            for (int k = 0; k < 4; ++k) out[k] = halfToFloat(f.half[i + k]);
+        } else {
+            for (int k = 0; k < 4; ++k) out[k] = f.rgba[i + k] * (1.0f / 255.0f);
+        }
+    }
+};
+
+}  // namespace
+
+void compositeOverDeep(VideoFrame& dst, const VideoFrame& src, const Transform& tr) {
+    if (src.empty() || dst.empty() || !dst.deep() || tr.opacity <= 0.0 || tr.scale <= 0.0) return;
+    const LayerRect r = layerRect(src.width, src.height, dst.width, dst.height, tr);
+    const float opacity = static_cast<float>(std::clamp(tr.opacity, 0.0, 1.0));
+    const FloatReader rd{src};
+    const int x0 = std::max(0, static_cast<int>(std::floor(r.left)));
+    const int y0 = std::max(0, static_cast<int>(std::floor(r.top)));
+    const int x1 = std::min(dst.width, static_cast<int>(std::ceil(r.left + r.width)));
+    const int y1 = std::min(dst.height, static_cast<int>(std::ceil(r.top + r.height)));
+    const double invX = src.width / r.width, invY = src.height / r.height;
+    for (int y = y0; y < y1; ++y) {
+        if (y + 0.5 < r.top || y + 0.5 >= r.top + r.height) continue;
+        const double sy = (y + 0.5 - r.top) * invY - 0.5;
+        const int iy = std::clamp(static_cast<int>(std::floor(sy)), 0, src.height - 1);
+        const int iy1 = std::min(iy + 1, src.height - 1);
+        const float fy = r.unscaled ? 0.0f : static_cast<float>(std::clamp(sy - iy, 0.0, 1.0));
+        for (int x = x0; x < x1; ++x) {
+            if (x + 0.5 < r.left || x + 0.5 >= r.left + r.width) continue;
+            const double sx = (x + 0.5 - r.left) * invX - 0.5;
+            const int ix = std::clamp(static_cast<int>(std::floor(sx)), 0, src.width - 1);
+            const int ix1 = std::min(ix + 1, src.width - 1);
+            const float fx = r.unscaled ? 0.0f : static_cast<float>(std::clamp(sx - ix, 0.0, 1.0));
+            float a[4], b[4], c[4], d[4], px[4];
+            rd.at(ix, iy, a);
+            rd.at(ix1, iy, b);
+            rd.at(ix, iy1, c);
+            rd.at(ix1, iy1, d);
+            for (int k = 0; k < 4; ++k) {
+                const float top = a[k] + (b[k] - a[k]) * fx, bot = c[k] + (d[k] - c[k]) * fx;
+                px[k] = top + (bot - top) * fy;
+            }
+            const float sa = std::clamp(px[3], 0.0f, 1.0f) * opacity;
+            if (sa <= 0.0f) continue;
+            std::uint16_t* o = dst.half.data() + (static_cast<std::size_t>(y) * dst.width + x) * 4;
+            const float da = halfToFloat(o[3]) * (1.0f - sa), oa = sa + da;
+            for (int k = 0; k < 3; ++k)
+                o[k] = floatToHalf(oa > 0 ? (px[k] * sa + halfToFloat(o[k]) * da) / oa : 0.0f);
+            o[3] = floatToHalf(oa);
+        }
+    }
+}
+
 MediaPool::MediaPool(std::shared_ptr<IMediaBackend> backend, std::string projectDir)
     : backend_(std::move(backend)), projectDir_(std::move(projectDir)) {}
 
@@ -169,11 +231,11 @@ void MediaPool::setProxy(const Id& assetId, std::string path) {
 }
 
 IMediaDecoder* MediaPool::decoder(const MediaAsset& a, const std::string& purpose, std::string* error, int maxW,
-                                  int maxH, bool allowProxy) {
+                                  int maxH, bool allowProxy, bool deep) {
     const auto proxy = allowProxy ? proxies_.find(a.id) : proxies_.end();
     const bool useProxy = proxy != proxies_.end();
     const std::string key = a.id + "#" + purpose + "#" + std::to_string(maxW) + "x" + std::to_string(maxH) +
-                            (useProxy ? "#proxy" : "");
+                            (useProxy ? "#proxy" : "") + (deep ? "#deep" : "");
     if (auto it = decoders_.find(key); it != decoders_.end()) return it->second.get();
     if (!backend_) {
         if (error) *error = "no media backend";
@@ -182,12 +244,13 @@ IMediaDecoder* MediaPool::decoder(const MediaAsset& a, const std::string& purpos
     auto d = backend_->createDecoder();
     if (!d) return nullptr;
     d->setMaxOutputSize(maxW, maxH);
+    d->setDeepOutput(deep);
     if (!d->open(useProxy ? proxy->second : resolve(a), error)) return nullptr;
     return (decoders_[key] = std::move(d)).get();
 }
 
 std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer, int outW, int outH,
-                                                        const std::string& purpose) {
+                                                        const std::string& purpose, bool deep) {
     const MediaAsset& a = *layer.asset;
     const bool still = a.type == MediaType::Image;
     const Time src = still ? Time::zero() : layer.sourceTime;
@@ -196,11 +259,11 @@ std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer,
     std::string key;
     if (cache_) {
         const Rational fps = a.fps.num > 0 ? a.fps : project_.fps;
-        key = FrameCache::key(a.id, src.toFrame(fps), dw, dh);
+        key = FrameCache::key(deep ? a.id + "#deep" : a.id, src.toFrame(fps), dw, dh);
         if (auto hit = cache_->get(key)) return hit;
     }
     std::string err;
-    IMediaDecoder* d = pool_.decoder(a, purpose, &err, dw, dh, preview_);
+    IMediaDecoder* d = pool_.decoder(a, purpose, &err, dw, dh, preview_, deep);
     if (!d) {
         warn("media offline: " + a.uri + (err.empty() ? "" : " (" + err + ")"));
         return nullptr;
@@ -223,7 +286,16 @@ namespace {
 class CpuCompositor final : public ICompositor {
 public:
     std::string name() const override { return "builtin.cpu_compositor"; }
+    bool supportsDeep() const override { return true; }
     bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string*) override {
+        if (out.deep()) {
+            const std::uint16_t one = floatToHalf(1.0f);
+            std::fill(out.half.begin(), out.half.end(), std::uint16_t{0});
+            for (std::size_t i = 3; i < out.half.size(); i += 4) out.half[i] = one;  // opaque black
+            for (const auto& l : layers)
+                if (l.frame) compositeOverDeep(out, *l.frame, l.transform);
+            return true;
+        }
         std::fill(out.rgba.begin(), out.rgba.end(), std::uint8_t{0});
         for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
         for (const auto& l : layers)
@@ -247,13 +319,17 @@ ICompositor& Renderer::compositor() {
 
 VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::string& purpose) {
     VideoFrame out;
-    out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height);
+    out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height,
+                 deep_ ? PixelFormat::RGBA16F : PixelFormat::RGBA8);
     out.pts = t;
     std::vector<CompositeLayer> layers;
     for (const auto& layer : evaluateVideo(project_, t)) {
-        auto frame = sourceFrame(layer, out.width, out.height, purpose);
+        // Deep sources (10-bit, Log) stay deep through grading even in an 8-bit preview,
+        // so strong corrections do not band; plain clips skip the cost.
+        const bool graded = layer.clip->effects.is_array() && !layer.clip->effects.empty();
+        auto frame = sourceFrame(layer, out.width, out.height, purpose, deep_ || graded);
         if (!frame) continue;
-        if (modules_ && layer.clip->effects.is_array() && !layer.clip->effects.empty()) {
+        if (modules_ && graded) {
             // Effects work on a copy: cached source frames stay untouched.
             auto fx = std::make_shared<VideoFrame>(*frame);
             std::vector<std::string> w;
@@ -261,6 +337,8 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
             for (auto& m : w) warn(std::move(m));
             frame = std::move(fx);
         }
+        if (frame->deep() && !out.deep())  // 8-bit output: dither down once, after grading
+            frame = std::make_shared<const VideoFrame>(convertedFrame(*frame, PixelFormat::RGBA8));
         Transform tr = Transform::fromJson(layer.clip->transform);
         // Scale offsets from canvas pixels to output pixels (preview may be smaller).
         const double k = static_cast<double>(out.width) / project_.canvas.width;
@@ -269,6 +347,11 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
         layers.push_back({std::move(frame), tr});
     }
     std::string err;
+    if (out.deep() && !compositor().supportsDeep()) {
+        static const std::shared_ptr<ICompositor> cpu = createCpuCompositor();
+        cpu->composite(out, layers, nullptr);
+        return out;
+    }
     if (!compositor().composite(out, layers, &err)) {
         // GPU lost or failed: this renderer continues on the CPU reference.
         warn("compositor " + compositor_->name() + " failed, using CPU" + (err.empty() ? "" : ": " + err));
@@ -344,6 +427,7 @@ ExportResult exportProject(const Project& p, MediaPool& pool, IMediaEncoder& enc
     tmp.sampleRate = s.sampleRate;
     tmp.audioChannels = s.channels;
     Renderer renderer(tmp, pool, nullptr, false, modules);
+    renderer.setDeepOutput(s.bitDepth > 8 && enc.supportsDeep());
     if (!enc.open(outPath, s, &r.error)) return r;
     const std::int64_t total = p.duration().toFrame(s.fps, Rounding::Up);
     for (std::int64_t i = 0; i < total; ++i) {

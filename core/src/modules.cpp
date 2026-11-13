@@ -2,6 +2,7 @@
 
 #include "vstudio/compositor.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/pixel.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -122,39 +123,59 @@ namespace {
 
 std::uint8_t clamp8(double v) { return static_cast<std::uint8_t>(std::clamp(v + 0.5, 0.0, 255.0)); }
 
+// Runs `fn(r, g, b)` (floats, 0..1 for 8-bit input) on every pixel of either format.
+template <class Fn>
+void forEachRgb(VideoFrame& f, Fn&& fn) {
+    if (f.deep()) {
+        for (std::size_t i = 0; i + 3 < f.half.size(); i += 4) {
+            float c[3] = {halfToFloat(f.half[i]), halfToFloat(f.half[i + 1]), halfToFloat(f.half[i + 2])};
+            fn(c[0], c[1], c[2]);
+            for (int k = 0; k < 3; ++k) f.half[i + k] = floatToHalf(c[k]);
+        }
+        return;
+    }
+    for (std::size_t i = 0; i + 3 < f.rgba.size(); i += 4) {
+        float c[3] = {f.rgba[i] / 255.0f, f.rgba[i + 1] / 255.0f, f.rgba[i + 2] / 255.0f};
+        fn(c[0], c[1], c[2]);
+        for (int k = 0; k < 3; ++k) f.rgba[i + k] = clamp8(c[k] * 255.0);
+    }
+}
+
 // params: { "brightness": -1..1, "contrast": 0..2, "saturation": 0..2 }
 class ColorAdjust final : public IVideoEffect {
 public:
+    bool supportsDeep() const override { return true; }
     void apply(VideoFrame& f, const Json& p, Time) const override {
-        const double b = p.value("brightness", 0.0) * 255.0;
-        const double c = p.value("contrast", 1.0);
-        const double s = p.value("saturation", 1.0);
-        for (std::size_t i = 0; i + 3 < f.rgba.size(); i += 4) {
-            double r = f.rgba[i], g = f.rgba[i + 1], bl = f.rgba[i + 2];
-            const double l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
-            r = l + (r - l) * s;
-            g = l + (g - l) * s;
-            bl = l + (bl - l) * s;
-            f.rgba[i] = clamp8((r - 128.0) * c + 128.0 + b);
-            f.rgba[i + 1] = clamp8((g - 128.0) * c + 128.0 + b);
-            f.rgba[i + 2] = clamp8((bl - 128.0) * c + 128.0 + b);
-        }
+        const float b = static_cast<float>(p.value("brightness", 0.0));
+        const float c = static_cast<float>(p.value("contrast", 1.0));
+        const float s = static_cast<float>(p.value("saturation", 1.0));
+        constexpr float mid = 128.0f / 255.0f;
+        forEachRgb(f, [&](float& r, float& g, float& bl) {
+            const float l = 0.2126f * r + 0.7152f * g + 0.0722f * bl;
+            r = (l + (r - l) * s - mid) * c + mid + b;
+            g = (l + (g - l) * s - mid) * c + mid + b;
+            bl = (l + (bl - l) * s - mid) * c + mid + b;
+        });
     }
 };
 
 class ColorLookEffect final : public IVideoEffect {
 public:
+    bool supportsDeep() const override { return true; }
     void apply(VideoFrame& f, const Json& p, Time) const override { applyColorLook(f, p); }
 };
 
 class Grayscale final : public IVideoEffect {
 public:
+    bool supportsDeep() const override { return true; }
     void apply(VideoFrame& f, const Json& p, Time) const override {
-        const double amount = std::clamp(p.value("amount", 1.0), 0.0, 1.0);
-        for (std::size_t i = 0; i + 3 < f.rgba.size(); i += 4) {
-            const double l = 0.2126 * f.rgba[i] + 0.7152 * f.rgba[i + 1] + 0.0722 * f.rgba[i + 2];
-            for (int k = 0; k < 3; ++k) f.rgba[i + k] = clamp8(f.rgba[i + k] + (l - f.rgba[i + k]) * amount);
-        }
+        const float amount = static_cast<float>(std::clamp(p.value("amount", 1.0), 0.0, 1.0));
+        forEachRgb(f, [&](float& r, float& g, float& b) {
+            const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            r += (l - r) * amount;
+            g += (l - g) * amount;
+            b += (l - b) * amount;
+        });
     }
 };
 
@@ -184,6 +205,7 @@ void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Ti
             if (warnings) warnings->push_back("effect unavailable (kept in project): " + type);
             continue;
         }
+        if (frame.deep() && !effect->supportsDeep()) convertFrame(frame, PixelFormat::RGBA8);
         try {
             effect->apply(frame, fx.value("params", Json::object()), localTime);
         } catch (const std::exception& ex) {

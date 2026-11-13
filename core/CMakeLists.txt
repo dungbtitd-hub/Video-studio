@@ -16,6 +16,7 @@ add_library(vstudio_core STATIC
   src/export_presets.cpp
   src/looks.cpp
   src/transfer.cpp
+    src/pixel.cpp
 )
 add_library(vstudio::core ALIAS vstudio_core)
 target_include_directories(vstudio_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

@@ -41,6 +41,9 @@ public:
     virtual ~IVideoEffect() = default;
     // `localTime` is the time since the clip start, for animated effects.
     virtual void apply(VideoFrame& frame, const Json& params, Time localTime) const = 0;
+    // Handles RGBA16F frames. Effects that do not are given an 8-bit copy
+    // (applyClipEffects converts once), so older modules keep working.
+    [[nodiscard]] virtual bool supportsDeep() const { return false; }
 };
 
 class ModuleRegistry {

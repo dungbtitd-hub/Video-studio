@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
+
+#include "vstudio/pixel.hpp"
 
 namespace vstudio {
 
@@ -43,22 +46,39 @@ void applyColorLook(VideoFrame& f, const Json& p) {
     const auto lift = rgb(p, "lift", 0.0), gamma = rgb(p, "gamma", 1.0), gain = rgb(p, "gain", 1.0);
     const std::array<double, 3> wb{1.0 + 0.12 * temp, 1.0 - 0.10 * tint, 1.0 - 0.12 * temp};
 
-    // Per-channel tone curve as a 256-entry table: built once per frame (768 evaluations),
-    // so the per-pixel cost is a lookup.
+    // Per-channel tone curve as a table: built once per frame, so the per-pixel cost is a
+    // lookup. 256 entries for 8-bit frames; 4097 (interpolated) for deep ones.
+    auto curve = [&](int c, double v) {
+        const double g = std::max(0.05, gamma[c]);
+        double x = v * exposure * wb[c];
+        x = gain[c] * x + lift[c] * (1.0 - x);
+        x = std::pow(std::clamp(x, 0.0, 1.0), 1.0 / g);
+        x = x - k * std::sin(2 * kPi * x) / (2 * kPi);  // slope 1+k at mid-grey, 0 and 1 fixed
+        x = fade + x * (1.0 - fade);
+        return static_cast<float>(std::clamp(x, 0.0, 1.0));
+    };
+    constexpr int kDeepSteps = 4096;
     std::array<std::array<std::uint8_t, 256>, 3> lut{};
     std::array<std::array<float, 256>, 3> lutf{};
+    std::array<std::vector<float>, 3> deepLut;
     for (int c = 0; c < 3; ++c) {
-        const double g = std::max(0.05, gamma[c]);
+        if (f.deep()) {
+            deepLut[c].resize(kDeepSteps + 2);
+            for (int v = 0; v <= kDeepSteps; ++v) deepLut[c][v] = curve(c, static_cast<double>(v) / kDeepSteps);
+            deepLut[c][kDeepSteps + 1] = deepLut[c][kDeepSteps];
+            continue;
+        }
         for (int v = 0; v < 256; ++v) {
-            double x = v / 255.0 * exposure * wb[c];
-            x = gain[c] * x + lift[c] * (1.0 - x);
-            x = std::pow(std::clamp(x, 0.0, 1.0), 1.0 / g);
-            x = x - k * std::sin(2 * kPi * x) / (2 * kPi);  // slope 1+k at mid-grey, 0 and 1 fixed
-            x = fade + x * (1.0 - fade);
-            lutf[c][v] = static_cast<float>(std::clamp(x, 0.0, 1.0));
+            lutf[c][v] = curve(c, v / 255.0);
             lut[c][v] = static_cast<std::uint8_t>(std::lround(lutf[c][v] * 255.0));
         }
     }
+    auto deepCurve = [&](int c, float v) {
+        const float pos = std::clamp(v, 0.0f, 1.0f) * kDeepSteps;
+        const int i = static_cast<int>(pos);
+        const float t = pos - i;
+        return deepLut[c][i] + (deepLut[c][i + 1] - deepLut[c][i]) * t;
+    };
     const float sat = static_cast<float>(std::clamp(p.value("saturation", 1.0), 0.0, 3.0));
     const float vib = static_cast<float>(std::clamp(p.value("vibrance", 0.0), -1.0, 1.0));
     const bool mono = p.value("mono", false);
@@ -70,6 +90,50 @@ void applyColorLook(VideoFrame& f, const Json& p) {
     const float cx = f.width / 2.0f, cy = f.height / 2.0f, inv = 1.0f / std::sqrt(cx * cx + cy * cy);
     const float st = static_cast<float>(strength);
 
+    // Colour, split toning and vignette on curve output (floats 0..1).
+    auto grade = [&](float& r, float& g, float& b, int x, float dy) {
+        if (colour) {
+            const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            float s = mono ? 0.0f : sat;
+            if (vib != 0.0f && !mono) s *= 1.0f + vib * (1.0f - (std::max({r, g, b}) - std::min({r, g, b})));
+            r = l + (r - l) * s;
+            g = l + (g - l) * s;
+            b = l + (b - l) * s;
+            if (split) {
+                const float ws = (1.0f - l) * (1.0f - l), wh = l * l;
+                r += ws * sh[0] + wh * hi[0];
+                g += ws * sh[1] + wh * hi[1];
+                b += ws * sh[2] + wh * hi[2];
+            }
+        }
+        if (vig > 0.0f) {
+            const float dx = (x + 0.5f - cx) * inv, d2 = dx * dx + dy * dy;
+            if (d2 > 0.45f * 0.45f) {  // centre untouched: skip the sqrt there
+                const float t = std::min(1.0f, (std::sqrt(d2) - 0.45f) / 0.55f);
+                const float m = 1.0f - vig * t * t * (3.0f - 2.0f * t);
+                r *= m;
+                g *= m;
+                b *= m;
+            }
+        }
+    };
+
+    if (f.deep()) {
+        for (int y = 0; y < f.height; ++y) {
+            std::uint16_t* row = f.half.data() + static_cast<std::size_t>(y) * f.width * 4;
+            const float dy = (y + 0.5f - cy) * inv;
+            for (int x = 0; x < f.width; ++x) {
+                std::uint16_t* px = row + static_cast<std::size_t>(x) * 4;
+                const float in[3] = {halfToFloat(px[0]), halfToFloat(px[1]), halfToFloat(px[2])};
+                float r = deepCurve(0, in[0]), g = deepCurve(1, in[1]), b = deepCurve(2, in[2]);
+                grade(r, g, b, x, dy);
+                const float out[3] = {r, g, b};
+                for (int c = 0; c < 3; ++c)
+                    px[c] = floatToHalf(in[c] + (std::clamp(out[c], 0.0f, 1.0f) - in[c]) * st);
+            }
+        }
+        return;
+    }
     for (int y = 0; y < f.height; ++y) {
         std::uint8_t* row = f.rgba.data() + static_cast<std::size_t>(y) * f.width * 4;
         const float dy = (y + 0.5f - cy) * inv;
@@ -82,30 +146,7 @@ void applyColorLook(VideoFrame& f, const Json& p) {
                 continue;
             }
             float r = lutf[0][px[0]], g = lutf[1][px[1]], b = lutf[2][px[2]];
-            if (colour) {
-                const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-                float s = mono ? 0.0f : sat;
-                if (vib != 0.0f && !mono) s *= 1.0f + vib * (1.0f - (std::max({r, g, b}) - std::min({r, g, b})));
-                r = l + (r - l) * s;
-                g = l + (g - l) * s;
-                b = l + (b - l) * s;
-                if (split) {
-                    const float ws = (1.0f - l) * (1.0f - l), wh = l * l;
-                    r += ws * sh[0] + wh * hi[0];
-                    g += ws * sh[1] + wh * hi[1];
-                    b += ws * sh[2] + wh * hi[2];
-                }
-            }
-            if (vig > 0.0f) {
-                const float dx = (x + 0.5f - cx) * inv, d2 = dx * dx + dy * dy;
-                if (d2 > 0.45f * 0.45f) {  // centre untouched: skip the sqrt there
-                    const float t = std::min(1.0f, (std::sqrt(d2) - 0.45f) / 0.55f);
-                    const float m = 1.0f - vig * t * t * (3.0f - 2.0f * t);
-                    r *= m;
-                    g *= m;
-                    b *= m;
-                }
-            }
+            grade(r, g, b, x, dy);
             const float out[3] = {r, g, b};
             for (int c = 0; c < 3; ++c) {
                 const float v = std::clamp(out[c], 0.0f, 1.0f) * 255.0f;
