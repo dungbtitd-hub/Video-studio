@@ -42,4 +42,32 @@ void main() {
     expect(f, isNotNull);
     expect(f!.width, 320);
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  test('thumbnails, waveform and relink of a real file', () async {
+    final vs = VStudio.create('ffi-lib', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final asset = vs.importMedia(media!);
+    expect(vs.missingAssets(), isEmpty);
+    final serial = vs.librarySerial;
+    vs.requestThumbnails(asset, count: 4, height: 36);
+    vs.requestWaveform(asset, bucketsPerSecond: 50);
+    ThumbStrip? t;
+    WaveformData? w;
+    for (var i = 0; i < 1000 && (t == null || w == null); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      if (vs.librarySerial == serial) continue;
+      t ??= vs.thumbnails(asset);
+      w ??= vs.waveform(asset);
+    }
+    expect(t, isNotNull);
+    expect(t!.count, 4);
+    expect(t.height, 36);
+    expect(t.rgba.length, 4 * t.width * 36 * 4);
+    expect(w, isNotNull);
+    expect(w!.buckets, greaterThan(0));
+    // Relink to the same file through another path form is accepted and undoable.
+    vs.relink(asset, File(media).absolute.path);
+    expect(vs.undo(), isTrue);
+    expect(() => vs.relink('nope', media), throwsA(isA<VStudioException>()));
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
 }

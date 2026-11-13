@@ -8,12 +8,21 @@ double ticksToSeconds(int ticks) => ticks / ticksPerSecond;
 int secondsToTicks(double s) => (s * ticksPerSecond).round();
 
 class ClipView {
-  ClipView({required this.id, required this.assetId, required this.start, required this.duration, required this.name});
+  ClipView(
+      {required this.id,
+      required this.assetId,
+      required this.start,
+      required this.duration,
+      required this.name,
+      this.sourceIn = 0,
+      this.speed = 1});
   final String id;
   final String assetId;
   final double start; // seconds on the timeline
   final double duration;
   final String name;
+  final double sourceIn; // source seconds at `start`
+  final double speed; // source seconds per timeline second
   double get end => start + duration;
 }
 
@@ -77,6 +86,8 @@ class ProjectView {
           start: ticksToSeconds((m['timeline_in'] as num).toInt()),
           duration: speed > 0 ? srcDur / speed : srcDur,
           name: assets[m['asset_id']]?.name ?? '?',
+          sourceIn: ticksToSeconds((m['source_in'] as num).toInt()),
+          speed: speed > 0 ? speed : 1,
         ));
       }
       return TrackView(id: t['track_id'] as String, type: t['type'] as String, name: (t['name'] ?? '') as String, clips: clips);

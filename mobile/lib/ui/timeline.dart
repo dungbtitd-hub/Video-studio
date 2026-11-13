@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/project_model.dart';
+import 'media_cache.dart';
 import 'theme.dart';
 
 /// Touch timeline. Gestures only change what is drawn; the core is edited
@@ -15,9 +16,11 @@ class TimelineView extends StatefulWidget {
     required this.onSeek,
     required this.onSelect,
     required this.onMove,
+    this.media,
   });
 
   final ProjectView project;
+  final MediaCache? media; // thumbnails / waveforms drawn inside clips when ready
   final double playhead;
   final String? selectedClip;
   final ValueChanged<double> onSeek;
@@ -99,6 +102,7 @@ class _TimelineViewState extends State<TimelineView> {
             scroll: scroll,
             dragClip: _dragClip,
             dragDelta: _dragDelta,
+            media: widget.media,
           ),
         ),
       );
@@ -115,7 +119,8 @@ class _TimelinePainter extends CustomPainter {
     required this.scroll,
     required this.dragClip,
     required this.dragDelta,
-  });
+    this.media,
+  }) : super(repaint: media);
 
   final ProjectView project;
   final double playhead;
@@ -124,6 +129,7 @@ class _TimelinePainter extends CustomPainter {
   final double scroll;
   final String? dragClip;
   final double dragDelta;
+  final MediaCache? media;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -155,6 +161,16 @@ class _TimelinePainter extends CustomPainter {
         if (x > size.width || x + w < 0) continue; // cull off-screen clips
         final r = RRect.fromRectAndRadius(Rect.fromLTWH(x, top + 4, w < 3 ? 3 : w, trackH - 10), const Radius.circular(4));
         canvas.drawRRect(r, Paint()..color = audio ? VsColors.clipAudio2 : VsColors.clipVideo2);
+        if (media != null && w > 8) {
+          canvas.save();
+          canvas.clipRRect(r);
+          if (audio) {
+            _waveform(canvas, c, r.outerRect, size.width);
+          } else {
+            _thumbnails(canvas, c, r.outerRect, size.width);
+          }
+          canvas.restore();
+        }
         canvas.drawRRect(
             r,
             Paint()
@@ -178,6 +194,51 @@ class _TimelinePainter extends CustomPainter {
       ..strokeWidth = 2);
   }
 
+  // Thumbnail tiles across the visible part of a video clip (one image, sub-rects).
+  void _thumbnails(Canvas canvas, ClipView c, Rect r, double viewW) {
+    final t = media!.thumbs(c.assetId);
+    if (t == null || t.count == 0) return;
+    final th = r.height - 16, tw = th * t.width / t.height;
+    if (tw < 4) return;
+    final asset = project.assets.where((a) => a.id == c.assetId).firstOrNull;
+    final total = asset?.duration ?? c.duration; // the strip spans the whole asset
+    final paint = Paint()..filterQuality = FilterQuality.low;
+    final x0 = r.left < 0 ? r.left + ((-r.left) ~/ tw) * tw : r.left;
+    for (var x = x0; x < r.right && x < viewW; x += tw) {
+      final src = c.sourceIn + (x + tw / 2 - r.left) / pxPerSec * c.speed;
+      final i = total > 0 ? (src / total * t.count).floor().clamp(0, t.count - 1) : 0;
+      canvas.drawImageRect(t.image, Rect.fromLTWH(0, i * t.height.toDouble(), t.width.toDouble(), t.height.toDouble()),
+          Rect.fromLTWH(x, r.top + 15, tw, th), paint);
+    }
+  }
+
+  // Peak envelope, one vertical line per visible pixel column; quiet media scaled up (max 8x).
+  void _waveform(Canvas canvas, ClipView c, Rect r, double viewW) {
+    final w = media!.waveform(c.assetId);
+    if (w == null || w.buckets == 0) return;
+    final mid = r.center.dy + 6;
+    final half = (r.height - 16) / 2 / (w.loudest < 16 ? 16 : w.loudest) * 127;
+    final paint = Paint()
+      ..color = const Color(0xC878DCAA)
+      ..strokeWidth = 1;
+    final from = r.left < 0 ? 0.0 : r.left, to = r.right < viewW ? r.right : viewW;
+    for (var x = from.floorToDouble(); x < to; x += 1) {
+      final a = c.sourceIn + (x - r.left) / pxPerSec * c.speed;
+      var i0 = (a * w.bucketsPerSecond).floor();
+      var i1 = ((a + c.speed / pxPerSec) * w.bucketsPerSecond).floor() + 1;
+      if (i0 < 0) i0 = 0;
+      if (i0 >= w.buckets) break;
+      if (i1 > w.buckets) i1 = w.buckets;
+      var lo = 0, hi = 0;
+      for (var k = i0; k < i1; k++) {
+        final mn = w.peaks[k * 2], mx = w.peaks[k * 2 + 1];
+        if (mn < lo) lo = mn;
+        if (mx > hi) hi = mx;
+      }
+      canvas.drawLine(Offset(x + 0.5, mid - hi / 127 * half), Offset(x + 0.5, mid - lo / 127 * half), paint);
+    }
+  }
+
   @override
   bool shouldRepaint(_TimelinePainter old) =>
       old.project != project ||
@@ -186,5 +247,6 @@ class _TimelinePainter extends CustomPainter {
       old.pxPerSec != pxPerSec ||
       old.scroll != scroll ||
       old.dragClip != dragClip ||
-      old.dragDelta != dragDelta;
+      old.dragDelta != dragDelta ||
+      old.media != media;
 }

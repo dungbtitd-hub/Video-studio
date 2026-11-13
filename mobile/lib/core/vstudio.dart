@@ -1,5 +1,6 @@
 // Dart facade over the C API. Every call returns quickly: edits only touch
 // the timeline model inside the core; decoding runs on core threads.
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
@@ -21,6 +22,24 @@ class PreviewFrame {
   final int height;
   final Uint8List pixels; // RGBA8
   final double ptsSeconds;
+}
+
+/// `count` frames of `width` x `height` RGBA stacked top to bottom (one image of width x height*count).
+class ThumbStrip {
+  ThumbStrip(this.width, this.height, this.count, this.rgba);
+  final int width;
+  final int height;
+  final int count;
+  final Uint8List rgba;
+}
+
+/// Peak envelope of the mono mix: (min, max) per bucket in -127..127.
+class WaveformData {
+  WaveformData(this.bucketsPerSecond, this.peaks) : loudest = peaks.fold(0, (m, v) => v.abs() > m ? v.abs() : m);
+  final int bucketsPerSecond;
+  final Int8List peaks;
+  final int loudest;
+  int get buckets => peaks.length ~/ 2;
 }
 
 enum ExportState { idle, running, done, failed, cancelled }
@@ -147,5 +166,42 @@ class VStudio {
       });
 
   void cancelExport() => _b.exportCancel(_s);
+
+  // ---- media library: computed on a core background worker, cached on disk ----
+
+  void requestThumbnails(String assetId, {int count = 12, int height = 54}) =>
+      using((a) => _b.requestThumbnails(_s, assetId.toNativeUtf8(allocator: a), count, height));
+  void requestWaveform(String assetId, {int bucketsPerSecond = 100}) =>
+      using((a) => _b.requestWaveform(_s, assetId.toNativeUtf8(allocator: a), bucketsPerSecond));
+
+  /// Increases whenever a thumbnail strip or waveform becomes ready: poll it once per frame.
+  int get librarySerial => _b.librarySerial(_s);
+
+  ThumbStrip? thumbnails(String assetId) => using((a) {
+        final id = assetId.toNativeUtf8(allocator: a);
+        final n = a<Int32>(), w = a<Int32>(), h = a<Int32>();
+        if (_b.thumbnails(_s, id, nullptr, 0, n, w, h) != 1) return null;
+        final size = n.value * w.value * h.value * 4;
+        final buf = a<Uint8>(size);
+        if (_b.thumbnails(_s, id, buf, size, n, w, h) != 1) return null;
+        return ThumbStrip(w.value, h.value, n.value, Uint8List.fromList(buf.asTypedList(size)));
+      });
+
+  WaveformData? waveform(String assetId) => using((a) {
+        final id = assetId.toNativeUtf8(allocator: a);
+        final bps = a<Int32>();
+        final n = _b.waveform(_s, id, nullptr, 0, bps);
+        if (n <= 0) return null;
+        final buf = a<Int8>(n * 2);
+        _b.waveform(_s, id, buf, n * 2, bps);
+        return WaveformData(bps.value, Int8List.fromList(buf.asTypedList(n * 2)));
+      });
+
+  /// Assets whose media file is gone (moved, renamed, deleted).
+  List<String> missingAssets() => (jsonDecode(_take(_b.missingAssetsJson(_s))) as List).cast<String>();
+
+  /// Points an asset at another file; undoable.
+  void relink(String assetId, String path) => using((a) =>
+      _check(_b.relinkAsset(_s, assetId.toNativeUtf8(allocator: a), path.toNativeUtf8(allocator: a))));
   String get lastError => _b.lastError(_s).toDartString();
 }
