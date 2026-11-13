@@ -120,6 +120,12 @@ VS_API int vs_key_cover(vs_session* s, const char* clip_id, const char* cover_id
 VS_API int vs_clear_cover_keys(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time);
 VS_API char* vs_cover_state_at(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time);
 VS_API char* vs_covers_json(vs_session* s, const char* clip_id);
+/* The cover's region as shown on the canvas (0..1 of the output frame) at a time, and the reverse:
+ * set it from a rectangle drawn on the preview (keyed when the cover follows motion). */
+VS_API int vs_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time,
+                                double* xywh);
+VS_API int vs_set_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time,
+                                    double x, double y, double w, double h);
 VS_API int vs_cover_preview(const char* style, const char* shape, uint8_t* rgba, int width, int height);
 /* Follow a moving subject: tracks the cover's region from timeline_from to timeline_to (<= 0: the clip's
  * end) on a background thread. Poll vs_track_status (0 idle, 1 running, 2 done, -1 failed, -2 cancelled,

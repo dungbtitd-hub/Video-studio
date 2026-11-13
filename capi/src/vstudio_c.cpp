@@ -609,6 +609,40 @@ char* vs_covers_json(vs_session* s, const char* clip_id) {
     });
 }
 
+int vs_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t t, double* xywh) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Json* p = s->editor->coverParams(c.id, str(cover_id));
+        if (!p) throw std::runtime_error("cover not found");
+        const Time src = c.toSource(Time::fromTicks(t));
+        const auto r = sourceRectOnCanvas(s->editor->project(), c, src);
+        if (!r) throw std::runtime_error("clip has no picture size");
+        const Json now = coverParamsAt(*p, src);
+        const double W = s->editor->project().canvas.width, H = s->editor->project().canvas.height;
+        if (xywh) {
+            xywh[0] = ((*r)[0] + now.value("x", 0.0) * (*r)[2]) / W;
+            xywh[1] = ((*r)[1] + now.value("y", 0.0) * (*r)[3]) / H;
+            xywh[2] = now.value("w", 0.0) * (*r)[2] / W;
+            xywh[3] = now.value("h", 0.0) * (*r)[3] / H;
+        }
+    });
+}
+
+int vs_set_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t t, double x, double y,
+                             double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Time src = c.toSource(Time::fromTicks(t));
+        const auto r = sourceRectOnCanvas(s->editor->project(), c, src);
+        if (!r || (*r)[2] <= 0 || (*r)[3] <= 0) throw std::runtime_error("clip has no picture size");
+        const double W = s->editor->project().canvas.width, H = s->editor->project().canvas.height;
+        s->editor->setCoverAt(c.id, str(cover_id), src,
+                              {{"x", (x * W - (*r)[0]) / (*r)[2]}, {"y", (y * H - (*r)[1]) / (*r)[3]},
+                               {"w", w * W / (*r)[2]}, {"h", h * H / (*r)[3]}});
+        s->edited();
+    });
+}
+
 int vs_cover_preview(const char* style, const char* shape, uint8_t* rgba, int width, int height) {
     if (!rgba || width <= 0 || height <= 0 || !findCoverStyle(str(style))) return -1;
     try {

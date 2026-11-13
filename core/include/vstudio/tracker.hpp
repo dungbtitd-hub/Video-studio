@@ -52,6 +52,7 @@ private:
     int tw_ = 0, th_ = 0;        // template size (working px)
     std::vector<float> tmpl_, first_;
     double cx_ = 0, cy_ = 0, bw_ = 0, bh_ = 0;  // box in working px
+    double bw0_ = 0;                             // starting width: bounds how far the size may drift
     double vx_ = 0, vy_ = 0;
     int fw_ = 0, fh_ = 0;  // frame size
     int lowRun_ = 0;

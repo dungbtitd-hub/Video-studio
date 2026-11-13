@@ -1428,4 +1428,21 @@ TEST("tracker: follows a moving logo frame by frame, then few keys describe it")
     const TrackResult c = trackRegion(dec, Time{}, sec(2), {30, 1}, start, [](double) { return false; });
     CHECK(c.cancelled);
     CHECK(!trackRegion(dec, Time{}, sec(1), {30, 1}, TrackBox{0.5, 0.5, 0.001, 0.001}).error.empty());
+    // A box over a flat area (every candidate matches) neither balloons nor slows down:
+    // its size stays within 2x and it never leaves the picture.
+    struct FlatDecoder : MovingBoxDecoder {
+        std::optional<VideoFrame> videoFrameAt(Time) override {
+            VideoFrame f;
+            f.width = 320;
+            f.height = 180;
+            f.rgba.assign(static_cast<std::size_t>(320) * 180 * 4, 128);
+            return f;
+        }
+    } flat;
+    const TrackResult fr = trackRegion(flat, Time{}, sec(5), {30, 1}, TrackBox{0.6, 0.6, 0.3, 0.3});
+    CHECK(fr.samples.size() >= 140u);
+    for (const auto& s : fr.samples) {
+        CHECK(s.box.w <= 0.6 + 1e-9 && s.box.w >= 0.15 - 1e-9);
+        CHECK(s.box.x + s.box.w / 2 >= 0 && s.box.x + s.box.w / 2 <= 1);
+    }
 }

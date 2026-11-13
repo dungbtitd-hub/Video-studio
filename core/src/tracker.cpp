@@ -13,6 +13,8 @@ namespace {
 constexpr int kTemplateSide = 40;     // working template size (largest side), px
 constexpr double kMinBoxPx = 6;       // smaller boxes cannot be tracked
 constexpr double kLowConfidence = 0.45;
+constexpr int kMaxCoarseRadius = 24;  // half-res px: bounds the cost of one frame whatever happens
+constexpr double kMaxSizeDrift = 2.0;  // the box stays within 1/2x..2x of its starting size
 }  // namespace
 
 float RegionTracker::Gray::at(int x, int y) const {
@@ -111,6 +113,7 @@ bool RegionTracker::init(const VideoFrame& first, TrackBox box) {
     scale_ = std::min(1.0, kTemplateSide / std::max(bw, bh));
     bw_ = bw * scale_;
     bh_ = bh * scale_;
+    bw0_ = bw_;
     cx_ = (box.x + box.w / 2) * fw_ * scale_;
     cy_ = (box.y + box.h / 2) * fh_ * scale_;
     tw_ = std::max(4, static_cast<int>(std::lround(bw_)));
@@ -128,7 +131,9 @@ TrackSample RegionTracker::update(const VideoFrame& next, Time t) {
     std::vector<float> patch;
     // 1) Coarse: half resolution, whole window around the predicted centre.
     const double px = cx_ + vx_, py = cy_ + vy_;
-    const int radius = static_cast<int>(std::ceil(std::max(6.0, 0.75 * std::max(bw_, bh_) + std::hypot(vx_, vy_)) / 2));
+    const int radius = std::min(
+        kMaxCoarseRadius,
+        static_cast<int>(std::ceil(std::max(6.0, 0.75 * std::max(bw_, bh_) + std::hypot(vx_, vy_)) / 2)));
     double best = -2, bx = px, by = py;
     for (int dy = -radius; dy <= radius; ++dy)
         for (int dx = -radius; dx <= radius; ++dx) {
@@ -154,8 +159,12 @@ TrackSample RegionTracker::update(const VideoFrame& next, Time t) {
         vy_ = 0.6 * vy_ + 0.4 * (fy - cy_);
         cx_ = fx;
         cy_ = fy;
-        bw_ *= bestScale;
-        bh_ *= bestScale;
+        // Flat or repeating content can make "a bit bigger" win every frame: bound the drift.
+        const double grown = bw_ * bestScale;
+        if (grown >= bw0_ / kMaxSizeDrift && grown <= bw0_ * kMaxSizeDrift) {
+            bw_ = grown;
+            bh_ *= bestScale;
+        }
         lowRun_ = 0;
         // Adapt slowly to lighting / perspective, anchored to the first look to limit drift.
         if (conf > 0.8) {
@@ -167,6 +176,9 @@ TrackSample RegionTracker::update(const VideoFrame& next, Time t) {
         cx_ += vx_;
         cy_ += vy_;
     }
+    // The centre never leaves the picture.
+    cx_ = std::clamp(cx_, 0.0, fw_ * scale_);
+    cy_ = std::clamp(cy_, 0.0, fh_ * scale_);
     TrackSample s;
     s.sourceTime = t;
     s.confidence = conf;

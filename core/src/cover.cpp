@@ -97,6 +97,16 @@ Json coverParamsAt(const Json& params, Time sourceTime) {
     return out;
 }
 
+std::optional<std::array<double, 4>> sourceRectOnCanvas(const Project& p, const Clip& c, Time sourceTime) {
+    const MediaAsset* a = p.findAsset(c.assetId);
+    if (!a || a->width <= 0 || a->height <= 0) return std::nullopt;
+    const double W = p.canvas.width, H = p.canvas.height;
+    const Transform tf = animatedTransform(c, sourceTime);
+    const double fit = std::min(W / a->width, H / a->height) * tf.scale;
+    const double w = a->width * fit, h = a->height * fit;
+    return std::array<double, 4>{W / 2 + tf.x - w / 2, H / 2 + tf.y - h / 2, w, h};
+}
+
 Json defaultCover(const std::string& style, const std::string& shape) {
     return Json{{"x", 0.35}, {"y", 0.35}, {"w", 0.3}, {"h", 0.3}, {"rotation", 0.0}, {"shape", shape},
                 {"style", style}, {"amount", 0.5}, {"feather", 0.15}, {"invert", false}, {"color", "#000000"}};

@@ -21,7 +21,9 @@
 // margin), so a small cover on a 4K frame stays cheap.
 #pragma once
 
+#include <array>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,10 @@ Json coverParamsAt(const Json& params, Time sourceTime);
 
 // Default params for a new cover: centred box, the given style and shape.
 Json defaultCover(const std::string& style, const std::string& shape = "rect");
+
+// Where the clip's source frame lands on the canvas at `sourceTime` (left, top, width,
+// height in canvas pixels): converts cover regions to and from what the preview shows.
+std::optional<std::array<double, 4>> sourceRectOnCanvas(const Project& p, const Clip& c, Time sourceTime);
 
 // Applies one cover to the frame (RGBA8 or RGBA16F). `t` drives animated styles.
 void applyCover(VideoFrame& frame, const Json& params, Time t);
