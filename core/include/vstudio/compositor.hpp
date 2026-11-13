@@ -33,6 +33,15 @@ struct Transform {
     static Transform fromJson(const Json& j);
 };
 
+// Where a layer lands in the output, in output pixels. Every compositor uses
+// this: positions are snapped to 1/256 pixel so that CPU (double) and GPU
+// (float) agree exactly on which pixel centres a layer covers: [left, left+width).
+struct LayerRect {
+    double left = 0, top = 0, width = 0, height = 0;
+    bool unscaled = false;  // 1:1 at an integer offset: a plain copy, no filtering
+};
+LayerRect layerRect(int srcW, int srcH, int dstW, int dstH, const Transform& tr);
+
 // Draws `src` onto `dst` (straight-alpha RGBA) fitted to dst, then transformed.
 // This is the reference the GPU compositors are checked against.
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr);

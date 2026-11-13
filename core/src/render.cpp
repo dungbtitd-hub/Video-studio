@@ -61,14 +61,25 @@ inline void blendPixel(std::uint8_t* d, const std::uint8_t* c, unsigned a) {
 
 }  // namespace
 
+LayerRect layerRect(int srcW, int srcH, int dstW, int dstH, const Transform& tr) {
+    // Fit (contain) then scale, centred, then offset.
+    const double fit = std::min(static_cast<double>(dstW) / srcW, static_cast<double>(dstH) / srcH);
+    const double s = fit * tr.scale;
+    auto snap = [](double v) { return std::round(v * 256.0) / 256.0; };
+    LayerRect r;
+    r.width = snap(srcW * s);
+    r.height = snap(srcH * s);
+    r.left = snap((dstW - r.width) / 2.0 + tr.x);
+    r.top = snap((dstH - r.height) / 2.0 + tr.y);
+    r.unscaled = r.width == srcW && r.height == srcH && r.left == std::floor(r.left) && r.top == std::floor(r.top);
+    return r;
+}
+
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) {
     if (src.empty() || dst.empty() || tr.opacity <= 0.0 || tr.scale <= 0.0) return;
     // Fit (contain) then scale, centred, then offset.
-    const double fit = std::min(static_cast<double>(dst.width) / src.width, static_cast<double>(dst.height) / src.height);
-    const double s = fit * tr.scale;
-    const double w = src.width * s, h = src.height * s;
-    const double left = (dst.width - w) / 2.0 + tr.x;
-    const double top = (dst.height - h) / 2.0 + tr.y;
+    const LayerRect r = layerRect(src.width, src.height, dst.width, dst.height, tr);
+    const double w = r.width, h = r.height, left = r.left, top = r.top;
     const unsigned opacity = static_cast<unsigned>(std::lround(std::clamp(tr.opacity, 0.0, 1.0) * 255.0));
     const int sw = src.width, sh = src.height;
     const std::uint8_t* sp = src.rgba.data();
@@ -76,7 +87,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     // Fast path: the decoder already produced the exact output size (preview
     // decodes to the preview box), so no resampling is needed - copy/blend rows.
     const int ileft = static_cast<int>(std::lround(left)), itop = static_cast<int>(std::lround(top));
-    if (std::abs(s - 1.0) < 1e-9 && std::abs(left - ileft) < 1e-6 && std::abs(top - itop) < 1e-6) {
+    if (r.unscaled) {
         const int x0 = std::max(0, ileft), x1 = std::min(dst.width, ileft + sw);
         const int y0 = std::max(0, itop), y1 = std::min(dst.height, itop + sh);
         if (x1 <= x0) return;
@@ -102,7 +113,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     const int x1 = std::min(dst.width, static_cast<int>(std::ceil(left + w)));
     const int y1 = std::min(dst.height, static_cast<int>(std::ceil(top + h)));
     if (x1 <= x0 || y1 <= y0) return;
-    const double inv = 1.0 / s;
+    const double invX = src.width / w, invY = src.height / h;
     struct Col {
         int i0, i1;
         unsigned f;  // 0..256
@@ -110,7 +121,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     };
     std::vector<Col> cols(static_cast<std::size_t>(x1 - x0));
     for (int x = x0; x < x1; ++x) {
-        const double sx = (x + 0.5 - left) * inv - 0.5;
+        const double sx = (x + 0.5 - left) * invX - 0.5;
         Col& c = cols[static_cast<std::size_t>(x - x0)];
         // Half-open coverage by pixel centre: [left, left + w). Shared with the GPU compositors.
         c.inside = x + 0.5 >= left && x + 0.5 < left + w;
@@ -121,7 +132,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     }
     for (int y = y0; y < y1; ++y) {
         if (y + 0.5 < top || y + 0.5 >= top + h) continue;
-        const double sy = (y + 0.5 - top) * inv - 0.5;
+        const double sy = (y + 0.5 - top) * invY - 0.5;
         const int iy = std::clamp(static_cast<int>(std::floor(sy)), 0, sh - 1);
         const int iy1 = std::min(iy + 1, sh - 1);
         const unsigned fy = static_cast<unsigned>(std::lround(std::clamp(sy - iy, 0.0, 1.0) * 256));

@@ -94,11 +94,9 @@ public:
                 const VideoFrame& src = *l.frame;
                 const Transform& tr = l.transform;
                 if (tr.opacity <= 0.0 || tr.scale <= 0.0) continue;
-                // Geometry identical to compositeOver().
-                const double fit = std::min(double(W) / src.width, double(H) / src.height);
-                const double s = fit * tr.scale;
-                const double w = src.width * s, h = src.height * s;
-                const double left = (W - w) / 2.0 + tr.x, top = (H - h) / 2.0 + tr.y;
+                // Geometry shared with compositeOver() (snapped, so float == double).
+                const LayerRect r = layerRect(src.width, src.height, W, H, tr);
+                const double w = r.width, h = r.height, left = r.left, top = r.top;
                 if (left >= W || top >= H || left + w <= 0 || top + h <= 0) continue;
                 id<MTLTexture> tex = texture(l.frame);
                 if (!tex) {
@@ -106,7 +104,7 @@ public:
                     return fail(error, "cannot upload a layer texture");
                 }
                 const long ileft = std::lround(left), itop = std::lround(top);
-                const bool exact = std::abs(s - 1.0) < 1e-9 && std::abs(left - ileft) < 1e-6 && std::abs(top - itop) < 1e-6;
+                const bool exact = r.unscaled;
                 QuadU q{{float((left - 1) / W * 2.0 - 1.0), float(1.0 - (top - 1) / H * 2.0),
                          float((left + w + 1) / W * 2.0 - 1.0), float(1.0 - (top + h + 1) / H * 2.0)}};
                 // CPU reference quantises opacity to 1/255.
