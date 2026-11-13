@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: '6.10.*'  # 6.8 links the AGL framework, which the macOS 26 SDK no longer ships
           modules: qtmultimedia
           cache: true
       - uses: ilammy/msvc-dev-cmd@v1
@@ -111,6 +111,7 @@ jobs:
           cmake --build build --target VideoStudio VideoStudioWidgets
       - name: Timeline smoothness (300 and 3000 clips)
         shell: bash
+        timeout-minutes: 20
         env:
           QT_FORCE_STDERR_LOGGING: '1'  # GUI-subsystem apps on Windows log to the debugger otherwise
         run: |
@@ -128,7 +129,7 @@ jobs:
           for n in 300 3000; do
             for app in "$W:widgets" "$Q:qml"; do
               exe=${app%:*}; tag=${app##*:}
-              timeout 600 "$exe" --bench-timeline $n --screenshot $tag-$n.png > out.txt 2>&1
+              "$exe" --bench-timeline $n --screenshot $tag-$n.png > out.txt 2>&1
               rc=$?
               cat out.txt | tee -a timeline-bench.txt
               if [ $rc -ne 0 ]; then printf '%s %s clips: exit code %d (0x%X)\n' "$tag" "$n" $rc $rc | tee -a timeline-bench.txt; fail=1; fi
