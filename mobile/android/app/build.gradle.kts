@@ -17,9 +17,6 @@ android {
     defaultConfig {
         applicationId = "com.videostudio.video_studio"
         minSdk = 26  // the MediaCodec module (adapters/android) needs API 26
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")  // phones + emulator
-        }
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)

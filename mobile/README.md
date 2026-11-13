@@ -19,7 +19,7 @@ C API (`capi/include/vstudio/vstudio_c.h`) with `dart:ffi`.
 The Android and iOS projects are committed (`android/`, `ios/`).
 
 * **Android**: `flutter run` or `flutter build apk`. Gradle builds the core, the C API and the MediaCodec
-  module from `native/CMakeLists.txt` into `libvstudio.so` (minSdk 26, arm64-v8a + x86_64).
+  module from `native/CMakeLists.txt` into `libvstudio.so` (minSdk 26; the ABIs Flutter targets: arm64-v8a, armeabi-v7a, x86_64).
 * **iOS**: first build the core once from the repository root with `scripts/build_ios_core.sh` (writes
   `build-ios/`), then `flutter run` / `flutter build ios`. `ios/Flutter/VStudioCore.xcconfig` force-loads the
   static core into the Runner app; `DynamicLibrary.process()` finds the symbols.
