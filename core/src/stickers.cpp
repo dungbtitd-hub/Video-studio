@@ -1552,6 +1552,7 @@ const std::vector<Entry>& entries() {
         add("bee", "Ong", N, bee);
         add("fish", "Cá", N, fish);
         addMoreStickers(add);
+        addExtraStickers(add);
         return e;
     }();
     return kAll;
