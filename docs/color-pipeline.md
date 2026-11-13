@@ -126,3 +126,27 @@ chỉnh màu trong float rồi mới ghép và lượng tử về 8-bit. GPU dù
 tạo một lần cho mỗi bộ thông số và được cache, nên kéo bánh xe chỉ đổi vài số và một texture nhỏ.
 Compositor CPU và cảnh chuyển vẫn chỉnh trên CPU (cùng kết quả). Kiểm thử chung cho mọi compositor
 ("colour grade in the compositor matches the CPU grade") so 5 bản chỉnh trên lớp 8-bit và 10-bit với kết quả CPU.
+
+# Bước 4: Xuất H.265 10-bit
+
+Hộp thoại xuất (desktop) và bảng xuất (mobile) có thêm lựa chọn **định dạng**, dùng chung danh sách
+`exportFormats()` (`vstudio/export_presets.hpp`, C API `vs_export_formats_json`, `vs_export_start_preset_format`):
+
+| Định dạng | Codec | Bitrate so với H.264 | Dùng khi |
+|---|---|---|---|
+| H.264 | H.264 High, 8-bit | 1× | Phát ở mọi nơi |
+| H.265 (HEVC) | H.265 Main, 8-bit | ≈ 0,65× | File nhỏ hơn, máy đời mới |
+| H.265 10-bit | H.265 Main 10 | ≈ 0,75× | Video Log/10-bit đã chỉnh màu: không vệt bậc màu |
+
+Với H.265 10-bit, `exportProject` dựng hình ở 16-bit float (`setDeepOutput`) và bộ mã hoá nhận thẳng khung
+RGBA16F, đổi sang YCbCr Rec.709 giới hạn 10-bit (gắn thẻ màu BT.709 trong file). Bộ mã hoá theo nền tảng,
+ưu tiên phần cứng (GPU / media engine):
+
+- macOS / iOS: AVFoundation + VideoToolbox (`AVVideoCodecTypeHEVC`, `HEVC_Main10_AutoLevel`, bộ đệm 10-bit 4:2:0).
+- Windows / Linux (FFmpeg): `hevc_videotoolbox`, `hevc_nvenc` (NVIDIA), `hevc_qsv` (Intel), `hevc_amf` (AMD),
+  `hevc_mf` (Media Foundation), cuối cùng `libx265` nếu bản FFmpeg có. File MP4 gắn `hvc1` để QuickTime/iPhone phát được.
+- Android: MediaCodec `video/hevc`, Main 10 với đầu vào P010 (Android 13+).
+
+Máy không có bộ mã hoá cho định dạng đã chọn thì việc xuất dừng ngay với thông báo rõ ràng; không bao giờ lặng lẽ
+xuất ra 8-bit hay H.264. Kiểm thử: dải xám 1024 cột qua H.265 10-bit còn ≈ 870 mức (8-bit tối đa 256); clip 10-bit
+có chỉnh màu xuất ra còn ≈ 770 mức. Bộ kiểm thử chung chạy trên cả FFmpeg, AVFoundation và MediaCodec.

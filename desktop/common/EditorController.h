@@ -88,9 +88,13 @@ public:
     Q_INVOKABLE void stepFrames(int frames);
     Q_INVOKABLE void exportTo(const QUrl& file, int width, int height);
     // Export with a shared preset (vstudio/export_presets.hpp), sized for this project.
-    Q_INVOKABLE void exportWithPreset(const QUrl& file, const QString& presetId);
-    // For the export dialog: id, name, description, width, height, fps, bitrate, estimatedBytes.
-    [[nodiscard]] QVariantList exportPresets() const;
+    // formatId: "h264", "hevc" or "hevc10" (H.265 10-bit), see vstudio::exportFormats().
+    Q_INVOKABLE void exportWithPreset(const QUrl& file, const QString& presetId, const QString& formatId = "h264");
+    // For the export dialog: id, name, description, width, height, fps, bitrate, estimatedBytes
+    // (bitrate and size for that format).
+    [[nodiscard]] QVariantList exportPresets(const QString& formatId = "h264") const;
+    // id, name, description of each video format.
+    [[nodiscard]] QVariantList exportFormats() const;
     Q_INVOKABLE void cancelExport();
 
     QString projectName() const;

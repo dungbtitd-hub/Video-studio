@@ -217,6 +217,12 @@ class VStudioBindings {
             'vs_export_presets_json'),
         exportStartPreset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
             int Function(Pointer<VsSession>, CStr, CStr)>('vs_export_start_preset'),
+        exportFormatsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
+            'vs_export_formats_json'),
+        exportPresetsFormatJson = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr),
+            CStr Function(Pointer<VsSession>, CStr)>('vs_export_presets_format_json'),
+        exportStartPresetFormat = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr)>('vs_export_start_preset_format'),
         exportStart = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32, Int32, Int64),
             int Function(Pointer<VsSession>, CStr, int, int, int, int, int)>('vs_export_start'),
         exportStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
@@ -339,6 +345,9 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) zoomToRegion;
   final CStr Function(Pointer<VsSession>, CStr, int) clipStateAt;
   final int Function(Pointer<VsSession>, CStr, CStr) exportStartPreset;
+  final CStr Function(Pointer<VsSession>) exportFormatsJson;
+  final CStr Function(Pointer<VsSession>, CStr) exportPresetsFormatJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr) exportStartPresetFormat;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;
   final int Function(Pointer<VsSession>, CStr, int, int) requestThumbnails;

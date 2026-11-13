@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include "vstudio/pixel.hpp"
+
 namespace vstudio::android {
 
 namespace {
@@ -27,6 +29,8 @@ constexpr int64_t kTimeoutUs = 10'000;
 constexpr int32_t kColorI420 = 19;          // COLOR_FormatYUV420Planar
 constexpr int32_t kColorNV12 = 21;          // COLOR_FormatYUV420SemiPlanar
 constexpr int32_t kColorFlexible = 0x7F420888;
+constexpr int32_t kColorP010 = 54;          // COLOR_FormatYUVP010 (10-bit, Android 13+)
+constexpr int32_t kHevcMain10 = 2;          // MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
 
 void logE(const std::string& m) { __android_log_print(ANDROID_LOG_ERROR, "vstudio", "%s", m.c_str()); }
 void logI(const std::string& m) { __android_log_print(ANDROID_LOG_INFO, "vstudio", "%s", m.c_str()); }
@@ -510,21 +514,43 @@ public:
         muxer_ = AMediaMuxer_new(fd_, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
         if (!muxer_) return fail(error, "cannot create MP4 muxer");
 
+        // H.265 and H.265 Main 10 go to the phone's hardware encoder; 10 bits need P010 input
+        // (Android 13+). A device without one says so: no silent 8-bit or H.264 file.
+        const bool hevc = s.videoCodec == "hevc" || s.videoCodec == "h265";
+        tenBit_ = s.bitDepth > 8;
+        if (tenBit_ && !hevc) return fail(error, "10-bit export needs H.265 (videoCodec \"hevc\")");
+        const char* mime = hevc ? "video/hevc" : "video/avc";
         FormatPtr vf(AMediaFormat_new());
-        AMediaFormat_setString(vf.get(), AMEDIAFORMAT_KEY_MIME, "video/avc");
+        AMediaFormat_setString(vf.get(), AMEDIAFORMAT_KEY_MIME, mime);
         AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_WIDTH, s.width);
         AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_HEIGHT, s.height);
-        AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, kColorNV12);
+        AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, tenBit_ ? kColorP010 : kColorNV12);
+        if (tenBit_) {
+            AMediaFormat_setInt32(vf.get(), "profile", kHevcMain10);
+            AMediaFormat_setInt32(vf.get(), "color-standard", 1);  // BT.709
+            AMediaFormat_setInt32(vf.get(), "color-range", 2);     // limited
+            AMediaFormat_setInt32(vf.get(), "color-transfer", 3);  // SDR video
+        }
         AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_BIT_RATE, static_cast<int32_t>(s.videoBitrate));
         AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_FRAME_RATE,
                               static_cast<int32_t>(std::lround(s.fps.toDouble())));
         AMediaFormat_setInt32(vf.get(), AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
                               s.gopSize > 0 ? std::max(1, static_cast<int>(s.gopSize / std::max(1.0, s.fps.toDouble()))) : 2);
-        venc_.reset(AMediaCodec_createEncoderByType("video/avc"));
+        venc_.reset(AMediaCodec_createEncoderByType(mime));
         if (!venc_ || AMediaCodec_configure(venc_.get(), vf.get(), nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE) != AMEDIA_OK ||
             AMediaCodec_start(venc_.get()) != AMEDIA_OK)
-            return fail(error, "this device has no usable H.264 encoder for " + std::to_string(s.width) + "x" +
-                                   std::to_string(s.height));
+            return fail(error, std::string("this device has no usable ") +
+                                   (hevc ? (tenBit_ ? "H.265 10-bit" : "H.265") : "H.264") + " encoder for " +
+                                   std::to_string(s.width) + "x" + std::to_string(s.height));
+        if (tenBit_) {
+            if (__builtin_available(android 28, *)) {
+                // Some encoders take the configuration but not the 10-bit input: check what they took.
+                FormatPtr in(AMediaCodec_getInputFormat(venc_.get()));
+                int32_t cf = 0;
+                if (in && AMediaFormat_getInt32(in.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, &cf) && cf != kColorP010)
+                    return fail(error, "this device has no H.265 10-bit encoder (input format " + std::to_string(cf) + ")");
+            }
+        }
 
         if (s.includeAudio) {
             FormatPtr af(AMediaFormat_new());
@@ -538,14 +564,20 @@ public:
                 AMediaCodec_start(aenc_.get()) != AMEDIA_OK)
                 return fail(error, "this device has no AAC encoder");
         }
-        nv12_.resize(static_cast<size_t>(s.width) * s.height * 3 / 2);
+        nv12_.resize(static_cast<size_t>(s.width) * s.height * 3 / 2 * (tenBit_ ? 2 : 1));
         logI("encoder open " + std::to_string(s.width) + "x" + std::to_string(s.height) + (aenc_ ? " +aac" : ""));
         return true;
     }
 
     bool writeVideo(const VideoFrame& f, std::string* error) override {
         if (f.width != s_.width || f.height != s_.height) return fail(error, "frame size mismatch");
-        rgbaToNv12(f);
+        if (tenBit_) {
+            rgbToP010(f);
+        } else if (f.deep()) {
+            rgbaToNv12(convertedFrame(f, PixelFormat::RGBA8));
+        } else {
+            rgbaToNv12(f);
+        }
         const int64_t pts = toUs(Time::fromFrame(videoIndex_++, s_.fps));
         return queue(venc_.get(), vTrack_, nv12_.data(), nv12_.size(), pts, false, error);
     }
@@ -595,6 +627,41 @@ private:
         setErr(e, m);
         logE(m);
         return false;
+    }
+
+    // Deep frames are taken by every codec (an 8-bit export converts them here).
+    [[nodiscard]] bool supportsDeep() const override { return true; }
+
+    // RGB 0..1 -> Rec.709 limited-range 10-bit 4:2:0 P010 (Y plane, then interleaved CbCr;
+    // 10 bits in the high bits of 16-bit words). Chroma is the average of each 2x2 block.
+    void rgbToP010(const VideoFrame& f) {
+        const int w = f.width, h = f.height;
+        auto* Y = reinterpret_cast<uint16_t*>(nv12_.data());
+        uint16_t* UV = Y + static_cast<size_t>(w) * h;
+        auto rgb = [&](int x, int y, float* o) {
+            const size_t i = (static_cast<size_t>(y) * w + x) * 4;
+            for (int k = 0; k < 3; ++k)
+                o[k] = f.deep() ? std::clamp(halfToFloat(f.half[i + k]), 0.0f, 1.0f) : f.rgba[i + k] / 255.0f;
+        };
+        auto word = [](double v, double lo, double range) {
+            return static_cast<uint16_t>(std::clamp(std::lround(lo + v * range), 0L, 1023L) << 6);
+        };
+        for (int y = 0; y < h; y += 2)
+            for (int x = 0; x < w; x += 2) {
+                double cb = 0, cr = 0;
+                int n = 0;
+                for (int dy = 0; dy < 2 && y + dy < h; ++dy)
+                    for (int dx = 0; dx < 2 && x + dx < w; ++dx, ++n) {
+                        float c[3];
+                        rgb(x + dx, y + dy, c);
+                        const double l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                        Y[static_cast<size_t>(y + dy) * w + x + dx] = word(l, 64, 876);
+                        cb += (c[2] - l) / 1.8556;
+                        cr += (c[0] - l) / 1.5748;
+                    }
+                UV[static_cast<size_t>(y / 2) * w + x] = word(cb / n, 512, 896);
+                UV[static_cast<size_t>(y / 2) * w + x + 1] = word(cr / n, 512, 896);
+            }
     }
 
     void rgbaToNv12(const VideoFrame& f) {
@@ -695,7 +762,7 @@ private:
     CodecPtr venc_, aenc_;
     ssize_t vTrack_ = -1, aTrack_ = -1;
     int tracksAdded_ = 0;
-    bool started_ = false, finished_ = false;
+    bool started_ = false, finished_ = false, tenBit_ = false;
     std::vector<Held> held_;
     std::vector<uint8_t> nv12_;
     std::vector<int16_t> pcm_;

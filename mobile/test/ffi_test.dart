@@ -55,6 +55,12 @@ void main() {
     final fhd = presets.firstWhere((p) => p.id == 'fhd1080');
     expect((fhd.width, fhd.height), (1920, 1080));
     expect(() => vs.startExportPreset('/tmp/x.mp4', 'nope'), throwsA(isA<VStudioException>()));
+    final formats = vs.exportFormats();
+    expect(formats.map((f) => f.id), ['h264', 'hevc', 'hevc10']);
+    final h264 = vs.exportPresets('h264').firstWhere((p) => p.id == 'fhd1080');
+    final ten = vs.exportPresets('hevc10').firstWhere((p) => p.id == 'fhd1080');
+    expect(ten.videoBitrate, lessThan(h264.videoBitrate));
+    expect(() => vs.startExportPresetFormat('/tmp/x.mp4', 'fhd1080', 'nope'), throwsA(isA<VStudioException>()));
     // No clips: nothing to snap to except 0 and the playhead.
     expect(() => vs.snapClipMove('nope', 1, 0.1), returnsNormally);
   }, skip: skip);

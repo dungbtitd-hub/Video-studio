@@ -30,6 +30,24 @@ const ExportPreset* findExportPreset(const std::string& id);
 // frame rate and bitrate (clamped to 1..100 Mbit/s).
 ExportSettings exportSettingsFor(const Project& p, const ExportPreset& preset);
 
+// Video formats offered next to the presets. "h264" plays everywhere; "hevc" gives about a
+// third smaller files; "hevc10" is H.265 Main 10: the render stays in 16-bit float and the
+// file keeps 10 bits, so graded Log / 10-bit footage shows no banding. H.265 runs on the GPU's
+// media engine where there is one (VideoToolbox, NVENC, Quick Sync, AMF, MediaCodec); a device
+// without an encoder for the format fails the export with a clear message.
+struct ExportFormat {
+    std::string id;
+    std::string name;         // Vietnamese UI
+    std::string description;
+};
+const std::vector<ExportFormat>& exportFormats();
+const ExportFormat* findExportFormat(const std::string& id);
+
+// Sets codec and bit depth, and scales the H.264 bitrate to the same visual quality
+// (H.265 needs about 35% less, 10-bit a little more than 8-bit). Unknown id: unchanged, false.
+bool applyExportFormat(ExportSettings& s, const std::string& formatId);
+ExportSettings exportSettingsFor(const Project& p, const ExportPreset& preset, const std::string& formatId);
+
 // Rough output size in bytes for `seconds` of video (video + audio bitrate).
 std::int64_t estimateExportBytes(const ExportSettings& s, double seconds);
 

@@ -2,6 +2,7 @@
 #include <set>
 
 #include "backend_conformance.hpp"
+#include "vstudio/export_presets.hpp"
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #include "vstudio/pixel.hpp"
 
@@ -122,3 +123,38 @@ TEST("ffmpeg: 10-bit sources keep their precision when deep output is asked") {
 }
 
 static vtest::BackendSuite suite("ffmpeg", [] { return ffmpeg::createBackend(); });
+
+TEST("ffmpeg: graded 10-bit footage exports as H.265 10-bit without losing levels") {
+    auto b = ffmpeg::createBackend();
+    const std::string src = makeTenBitRamp();
+    std::string err;
+    auto pr = b->probe(src, &err);
+    CHECK(pr.has_value());
+    Editor ed{Editor::newProject("Ramp", 880, 16, {25, 1}, ModuleRegistry::currentPlatform())};
+    const Id asset = ed.addAsset(assetFromProbe(newId(), src, *pr, ""));
+    const Id v = ed.addTrack(TrackType::Video, "V1");
+    const Id c = ed.appendClip(v, asset);
+    ed.setClipGrade({c}, Json{{"contrast", 1.15}, {"gamma", Json::array({0, 0, 0, 0.1})}});  // a real grade, not neutral
+    MediaPool pool(b, "");
+    ExportSettings s = exportSettingsFor(ed.project(), *findExportPreset("master"), "hevc10");
+    s.includeAudio = false;
+    auto enc = b->createEncoder();
+    const std::string out = (vtest::conformance::workDir() / "graded10.mp4").string();
+    const auto r = exportProject(ed.project(), pool, *enc, out, s);
+    if (!r.ok) {
+        // A build without any H.265 encoder must say so (CI images have x265 or a GPU encoder).
+        CHECK(!r.error.empty());
+        std::printf("       %s\n", r.error.c_str());
+        return;
+    }
+    auto d = b->createDecoder();
+    d->setDeepOutput(true);
+    CHECK(d->open(out, &err));
+    auto f = d->videoFrameAt(Time::zero());
+    CHECK(f.has_value() && f->deep());
+    std::set<int> levels;
+    for (int x = 0; x < f->width; ++x)
+        levels.insert(static_cast<int>(std::lround(halfToFloat(f->half[(static_cast<std::size_t>(f->height / 2) * f->width + x) * 4 + 1]) * 1023)));
+    std::printf("       %zu levels after grade + H.265 10-bit\n", levels.size());
+    CHECK(levels.size() > 400u);  // an 8-bit path keeps at most 256
+}

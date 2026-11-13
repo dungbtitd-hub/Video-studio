@@ -761,17 +761,25 @@ void EditorController::exportTo(const QUrl& file, int width, int height) {
     startExport(file, es);
 }
 
-void EditorController::exportWithPreset(const QUrl& file, const QString& presetId) {
+void EditorController::exportWithPreset(const QUrl& file, const QString& presetId, const QString& formatId) {
     const ExportPreset* pr = findExportPreset(s(presetId));
     if (!pr) return setStatus(tr("Unknown export preset"));
-    startExport(file, exportSettingsFor(editor_->project(), *pr));
+    if (!findExportFormat(s(formatId))) return setStatus(tr("Unknown export format"));
+    startExport(file, exportSettingsFor(editor_->project(), *pr, s(formatId)));
 }
 
-QVariantList EditorController::exportPresets() const {
+QVariantList EditorController::exportFormats() const {
+    QVariantList out;
+    for (const auto& f : vstudio::exportFormats())
+        out.push_back(QVariantMap{{"id", q(f.id)}, {"name", q(f.name)}, {"description", q(f.description)}});
+    return out;
+}
+
+QVariantList EditorController::exportPresets(const QString& formatId) const {
     QVariantList out;
     const Project& p = editor_->project();
     for (const auto& pr : vstudio::exportPresets()) {
-        const ExportSettings es = exportSettingsFor(p, pr);
+        const ExportSettings es = exportSettingsFor(p, pr, s(formatId));
         out.push_back(QVariantMap{{"id", q(pr.id)},
                                   {"name", q(pr.name)},
                                   {"description", q(pr.description)},

@@ -1,6 +1,7 @@
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -439,20 +440,48 @@ public:
         // then the OS encoder (Media Foundation on Windows, VideoToolbox on macOS), then
         // OpenH264. Hardware encoders can be listed but fail to open (no GPU, driver),
         // so each is opened in turn; MPEG-4 Part 2 is the last resort.
+        // H.265 (and every 10-bit export): the GPU / OS encoders first (VideoToolbox, NVENC,
+        // Quick Sync, AMF, Media Foundation), x265 only where the FFmpeg build has it. There is
+        // no silent fallback to another codec: an export asked in H.265 10-bit is H.265 10-bit.
+        const bool hevc = s.videoCodec == "hevc" || s.videoCodec == "h265";
+        tenBit_ = s.bitDepth > 8;
+        if (tenBit_ && !hevc) return fail(error, "10-bit export needs H.265 (videoCodec \"hevc\")");
         std::vector<const AVCodec*> candidates;
-        if (s.videoCodec == "h264") {
+        if (hevc) {
+            for (const char* n : {"hevc_videotoolbox", "hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf", "libx265"})
+                if (const AVCodec* c = avcodec_find_encoder_by_name(n)) candidates.push_back(c);
+            if (candidates.empty())
+                return fail(error, std::string("no H.265 encoder on this device") + (tenBit_ ? " (10-bit)" : ""));
+        } else if (s.videoCodec == "h264") {
             for (const char* n : {"libx264", "h264_mf", "h264_videotoolbox", "libopenh264"})
                 if (const AVCodec* c = avcodec_find_encoder_by_name(n)) candidates.push_back(c);
             if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_H264)) candidates.push_back(c);
         }
-        if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_MPEG4)) candidates.push_back(c);
+        if (!hevc)
+            if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_MPEG4)) candidates.push_back(c);
         if (candidates.empty()) return fail(error, "no video encoder available");
+        // 10-bit: planar for software encoders, P010 for hardware ones; each is tried.
+        const std::vector<AVPixelFormat> pixFmts =
+            tenBit_ ? std::vector<AVPixelFormat>{AV_PIX_FMT_YUV420P10LE, AV_PIX_FMT_P010LE}
+                    : std::vector<AVPixelFormat>{AV_PIX_FMT_YUV420P, AV_PIX_FMT_NV12};
         std::string lastErr;
+        // Hardware encoders that are compiled in but have no device log loudly when they fail
+        // to open; that is expected here, the next candidate is tried.
+        const int logLevel = av_log_get_level();
+        av_log_set_level(AV_LOG_QUIET);
         for (const AVCodec* vc : candidates) {
+          for (AVPixelFormat pf : pixFmts) {
+            if (!hevc && pf != AV_PIX_FMT_YUV420P) break;  // every H.264 / MPEG-4 candidate accepts it
             vctx_.reset(avcodec_alloc_context3(vc));
             vctx_->width = s.width;
             vctx_->height = s.height;
-            vctx_->pix_fmt = AV_PIX_FMT_YUV420P;  // every candidate above accepts it
+            vctx_->pix_fmt = pf;
+            // Rec.709, limited range, tagged so players (and our decoder) read the colours back exactly.
+            vctx_->color_primaries = AVCOL_PRI_BT709;
+            vctx_->color_trc = AVCOL_TRC_BT709;
+            vctx_->colorspace = AVCOL_SPC_BT709;
+            vctx_->color_range = AVCOL_RANGE_MPEG;
+            if (hevc) vctx_->profile = tenBit_ ? 2 : 1;  // Main 10 / Main (AV_PROFILE_HEVC_*)
             vctx_->time_base = AVRational{static_cast<int>(s.fps.den), static_cast<int>(s.fps.num)};
             vctx_->framerate = AVRational{static_cast<int>(s.fps.num), static_cast<int>(s.fps.den)};
             vctx_->bit_rate = s.videoBitrate;
@@ -460,17 +489,29 @@ public:
             if (s.gopSize > 0) vctx_->gop_size = s.gopSize;
             if (std::strcmp(vc->name, "libx264") == 0) {
                 av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "veryfast", 0);
-            } else if (std::strcmp(vc->name, "h264_mf") == 0) {
+            } else if (std::strcmp(vc->name, "libx265") == 0) {
+                av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "fast", 0);
+                av_opt_set(vctx_->priv_data, "x265-params", "log-level=error", 0);
+            } else if (std::strcmp(vc->name, "h264_mf") == 0 || std::strcmp(vc->name, "hevc_mf") == 0) {
                 av_opt_set(vctx_->priv_data, "rate_control", "cbr", 0);  // honour bit_rate
+                av_opt_set(vctx_->priv_data, "hw_encoding", "1", 0);
             }
             if (fmt_->oformat->flags & AVFMT_GLOBALHEADER) vctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             if ((e = avcodec_open2(vctx_.get(), vc, nullptr)) >= 0) break;
             lastErr = std::string(vc->name) + ": " + avErr(e);
             vctx_.reset();
+          }
+          if (vctx_) break;
         }
-        if (!vctx_) return fail(error, "cannot open video encoder: " + lastErr);
+        av_log_set_level(logLevel);
+        if (!vctx_) {
+            if (hevc && tenBit_) return fail(error, "no H.265 10-bit encoder could be opened on this device (" + lastErr + ")");
+            return fail(error, "cannot open video encoder: " + lastErr);
+        }
         vst_ = avformat_new_stream(fmt_, nullptr);
         avcodec_parameters_from_context(vst_->codecpar, vctx_.get());
+        // "hvc1" so QuickTime, iOS and Photos play the file (FFmpeg writes "hev1" by default).
+        if (hevc && s.container == "mp4") vst_->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
         vst_->time_base = vctx_->time_base;
         vst_->avg_frame_rate = vctx_->framerate;
 
@@ -496,23 +537,50 @@ public:
         if ((e = avformat_write_header(fmt_, nullptr)) < 0) return fail(error, "cannot write header: " + avErr(e));
         pkt_.reset(av_packet_alloc());
         yuv_.reset(av_frame_alloc());
-        yuv_->format = AV_PIX_FMT_YUV420P;
+        yuv_->format = vctx_->pix_fmt;
         yuv_->width = s.width;
         yuv_->height = s.height;
         av_frame_get_buffer(yuv_.get(), 0);
         return true;
     }
 
+    // Deep (RGBA16F) frames are taken by every codec: a 10-bit export keeps them, an 8-bit one
+    // is converted here like any other frame.
+    [[nodiscard]] bool supportsDeep() const override { return true; }
+
     bool writeVideo(const VideoFrame& f, std::string* error) override {
         if (f.width != s_.width || f.height != s_.height) return fail(error, "frame size mismatch");
         av_frame_make_writable(yuv_.get());
-        if (!sws_) {
-            sws_.reset(sws_getContext(f.width, f.height, AV_PIX_FMT_RGBA, s_.width, s_.height, AV_PIX_FMT_YUV420P, SWS_BILINEAR,
+        const AVPixelFormat srcFmt = f.deep() ? AV_PIX_FMT_RGBA64LE : AV_PIX_FMT_RGBA;
+        if (!sws_ || swsSrc_ != srcFmt) {
+            sws_.reset(sws_getContext(f.width, f.height, srcFmt, s_.width, s_.height, vctx_->pix_fmt, SWS_BILINEAR,
                                       nullptr, nullptr, nullptr));
+            if (!sws_) return fail(error, "cannot convert frames for the encoder");
+            // RGB (full range) -> Rec.709 limited range YCbCr, as tagged on the stream.
+            const int* c709 = sws_getCoefficients(SWS_CS_ITU709);
+            sws_setColorspaceDetails(sws_.get(), c709, 1, c709, 0, 0, 1 << 16, 1 << 16);
+            swsSrc_ = srcFmt;
         }
-        const std::uint8_t* src[1] = {f.rgba.data()};
-        const int stride[1] = {f.width * 4};
-        sws_scale(sws_.get(), src, stride, 0, f.height, yuv_->data, yuv_->linesize);
+        if (f.deep()) {
+            // Half floats -> 16-bit integers (clamped to 0..1); swscale takes it to 10 bits.
+            static const std::vector<std::uint16_t> table = [] {
+                std::vector<std::uint16_t> t(65536);
+                for (std::uint32_t i = 0; i < 65536; ++i) {
+                    const float v = halfToFloat(static_cast<std::uint16_t>(i));
+                    t[i] = static_cast<std::uint16_t>(std::lround(std::clamp(v == v ? v : 0.0f, 0.0f, 1.0f) * 65535.0f));
+                }
+                return t;
+            }();
+            deepBuf_.resize(f.half.size());
+            for (std::size_t i = 0; i < f.half.size(); ++i) deepBuf_[i] = table[f.half[i]];
+            const std::uint8_t* src[1] = {reinterpret_cast<const std::uint8_t*>(deepBuf_.data())};
+            const int stride[1] = {f.width * 8};
+            sws_scale(sws_.get(), src, stride, 0, f.height, yuv_->data, yuv_->linesize);
+        } else {
+            const std::uint8_t* src[1] = {f.rgba.data()};
+            const int stride[1] = {f.width * 4};
+            sws_scale(sws_.get(), src, stride, 0, f.height, yuv_->data, yuv_->linesize);
+        }
         yuv_->pts = videoIndex_++;
         return encode(vctx_.get(), vst_, yuv_.get(), error);
     }
@@ -587,6 +655,9 @@ private:
     PacketPtr pkt_;
     FramePtr yuv_;
     SwsPtr sws_;
+    AVPixelFormat swsSrc_ = AV_PIX_FMT_NONE;
+    std::vector<std::uint16_t> deepBuf_;
+    bool tenBit_ = false;
     std::vector<float> fifo_;
     std::int64_t videoIndex_ = 0, audioSamples_ = 0;
     bool finished_ = false;
@@ -610,7 +681,7 @@ std::shared_ptr<IMediaBackend> createBackend() {
 void registerModule(ModuleRegistry& r, int priority) {
     r.add<IMediaBackend>({.id = "ffmpeg",
                           .displayName = "FFmpeg",
-                          .capabilities = {"probe", "decode", "encode.h264", "encode.aac"},
+                          .capabilities = {"probe", "decode", "encode.h264", "encode.hevc", "encode.aac"},
                           .priority = priority},
                          [] { return createBackend(); });
 }

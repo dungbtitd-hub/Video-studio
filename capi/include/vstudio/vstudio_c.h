@@ -251,6 +251,15 @@ VS_API int vs_export_start(vs_session* s, const char* out_path, int width, int h
  * {"id","name","description","width","height","fps","video_bitrate","estimated_bytes"}. */
 VS_API char* vs_export_presets_json(vs_session* s);
 VS_API int vs_export_start_preset(vs_session* s, const char* out_path, const char* preset_id);
+/* Video formats: JSON array of {"id","name","description"}; ids "h264", "hevc", "hevc10"
+ * (H.265 Main 10, rendered in 16-bit float). */
+VS_API char* vs_export_formats_json(vs_session* s);
+/* vs_export_presets_json with bitrate and size for a format (NULL or "" = "h264"). */
+VS_API char* vs_export_presets_format_json(vs_session* s, const char* format_id);
+/* As vs_export_start_preset in a format (NULL or "" = "h264"). A device without an encoder for
+ * the format ends the export with VS_EXPORT_FAILED (vs_export_status) and the reason in vs_last_error. */
+VS_API int vs_export_start_preset_format(vs_session* s, const char* out_path, const char* preset_id,
+                                         const char* format_id);
 VS_API int vs_export_status(vs_session* s, double* progress); /* VS_EXPORT_* */
 VS_API void vs_export_cancel(vs_session* s);
 

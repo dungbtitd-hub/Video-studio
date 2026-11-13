@@ -49,7 +49,7 @@ private:
     void buildMenus();
     void importMedia();
     void exportVideo();
-    QString choosePreset();  // empty = cancelled
+    QString choosePreset(QString* format = nullptr);  // empty = cancelled; *format = "h264" | "hevc" | "hevc10"
     void showShortcuts();
     bool confirmDiscard();  // false = user cancelled
     void refreshAssets();

@@ -160,6 +160,16 @@ private slots:
                 QVERIFY(m["estimatedBytes"].toLongLong() > 0);
             }
         }
+        // Formats: H.265 10-bit is offered and sized smaller than H.264 at the same preset.
+        const QVariantList formats = ctrl_->exportFormats();
+        QCOMPARE(formats.size(), 3);
+        QCOMPARE(formats.back().toMap()["id"].toString(), QString("hevc10"));
+        auto bitrate = [&](const QString& fmt) {
+            for (const QVariant& v : ctrl_->exportPresets(fmt))
+                if (v.toMap()["id"] == "fhd1080") return v.toMap()["bitrate"].toLongLong();
+            return qint64(0);
+        };
+        QVERIFY(bitrate("hevc10") > 0 && bitrate("hevc10") < bitrate("h264"));
     }
 
     void oneTapLooks() {

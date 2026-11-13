@@ -1230,13 +1230,17 @@ int vs_export_start(vs_session* s, const char* out_path, int width, int height, 
     });
 }
 
-char* vs_export_presets_json(vs_session* s) {
+char* vs_export_presets_json(vs_session* s) { return vs_export_presets_format_json(s, nullptr); }
+
+char* vs_export_presets_format_json(vs_session* s, const char* format_id) {
     return guardStr(s, [&] {
         const Project& p = s->editor->project();
         const double seconds = p.duration().seconds();
+        const std::string fmt = str(format_id).empty() ? "h264" : str(format_id);
+        if (!findExportFormat(fmt)) throw std::runtime_error("unknown export format: " + fmt);
         Json out = Json::array();
         for (const auto& pr : exportPresets()) {
-            const ExportSettings es = exportSettingsFor(p, pr);
+            const ExportSettings es = exportSettingsFor(p, pr, fmt);
             out.push_back({{"id", pr.id},
                            {"name", pr.name},
                            {"description", pr.description},
@@ -1255,6 +1259,25 @@ int vs_export_start_preset(vs_session* s, const char* out_path, const char* pres
         const ExportPreset* pr = findExportPreset(str(preset_id));
         if (!pr) throw std::runtime_error("unknown export preset: " + str(preset_id));
         startExport(s, out_path, exportSettingsFor(s->editor->project(), *pr));
+    });
+}
+
+char* vs_export_formats_json(vs_session* s) {
+    return guardStr(s, [&] {
+        Json out = Json::array();
+        for (const auto& f : exportFormats())
+            out.push_back({{"id", f.id}, {"name", f.name}, {"description", f.description}});
+        return out.dump();
+    });
+}
+
+int vs_export_start_preset_format(vs_session* s, const char* out_path, const char* preset_id, const char* format_id) {
+    return guard(s, [&] {
+        const ExportPreset* pr = findExportPreset(str(preset_id));
+        if (!pr) throw std::runtime_error("unknown export preset: " + str(preset_id));
+        const std::string fmt = str(format_id).empty() ? "h264" : str(format_id);
+        if (!findExportFormat(fmt)) throw std::runtime_error("unknown export format: " + fmt);
+        startExport(s, out_path, exportSettingsFor(s->editor->project(), *pr, fmt));
     });
 }
 

@@ -75,6 +75,14 @@ int main(void) {
     EXPECT(presets != NULL && strstr(presets, "\"fhd1080\"") && strstr(presets, "\"width\":1920"));
     vs_free(presets);
     EXPECT(vs_export_start_preset(s, "/tmp/x.mp4", "nope") != 0);
+    char* formats = vs_export_formats_json(s);
+    EXPECT(formats != NULL && strstr(formats, "\"hevc10\"") && strstr(formats, "\"h264\""));
+    vs_free(formats);
+    char* p10 = vs_export_presets_format_json(s, "hevc10");
+    EXPECT(p10 != NULL && strstr(p10, "\"fhd1080\""));
+    vs_free(p10);
+    EXPECT(vs_export_start_preset_format(s, "/tmp/x.mp4", "fhd1080", "nope") != 0);
+    EXPECT(vs_export_start_preset_format(s, "/tmp/x.mp4", "nope", "hevc10") != 0);
 
     /* Looks: catalog, preview on a buffer, refusal for unknown clips. */
     char* looks = vs_looks_json();

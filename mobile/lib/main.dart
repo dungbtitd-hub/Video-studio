@@ -973,6 +973,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   String? _exportPath; // file being written; moved to Photos when done
 
+  String _exportFormat = 'h264';
+
   Future<void> _export() async {
     final vs = _vs;
     if (vs == null) return;
@@ -980,39 +982,63 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       vs.cancelExport();
       return;
     }
-    final presets = vs.exportPresets();
-    final preset = await showModalBottomSheet<ExportPresetView>(
+    final formats = vs.exportFormats();
+    var format = _exportFormat;
+    final chosen = await showModalBottomSheet<(ExportPresetView, String)>(
       context: context,
       backgroundColor: VsColors.panel,
       isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
-          child: ListView(shrinkWrap: true, children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Text('Xuất video', style: TextStyle(color: VsColors.fg, fontSize: 16)),
-            ),
-            for (final p in presets)
-              ListTile(
-                title: Text(p.name),
-                subtitle: Text(
-                    '${p.width} × ${p.height} · ${p.fps.round()} khung/giây · khoảng ${_size(p.estimatedBytes)}\n'
-                    '${p.description}',
-                    style: const TextStyle(fontSize: 12)),
-                isThreeLine: true,
-                onTap: () => Navigator.pop(context, p),
+      builder: (context) => StatefulBuilder(builder: (context, setSheet) {
+        final presets = vs.exportPresets(format);
+        final note = formats.where((f) => f.id == format).firstOrNull?.description ?? '';
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
+            child: ListView(shrinkWrap: true, children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Text('Xuất video', style: TextStyle(color: VsColors.fg, fontSize: 16)),
               ),
-          ]),
-        ),
-      ),
+              // H.264 / H.265 / H.265 10-bit: 10-bit keeps graded Log footage free of banding.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Wrap(spacing: 8, children: [
+                  for (final f in formats)
+                    ChoiceChip(
+                      key: ValueKey('format-${f.id}'),
+                      label: Text(f.name),
+                      selected: f.id == format,
+                      onSelected: (_) => setSheet(() => format = f.id),
+                    ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Text(note, style: const TextStyle(color: VsColors.fg2, fontSize: 12)),
+              ),
+              for (final p in presets)
+                ListTile(
+                  title: Text(p.name),
+                  subtitle: Text(
+                      '${p.width} × ${p.height} · ${p.fps.round()} khung/giây · khoảng ${_size(p.estimatedBytes)}\n'
+                      '${p.description}',
+                      style: const TextStyle(fontSize: 12)),
+                  isThreeLine: true,
+                  onTap: () => Navigator.pop(context, (p, format)),
+                ),
+            ]),
+          ),
+        );
+      }),
     );
-    if (preset == null || !mounted) return;
+    if (chosen == null || !mounted) return;
+    final (preset, fmt) = chosen;
+    _exportFormat = fmt;
     // Written to the app's temporary folder, then handed to the photo library.
     final out = '${Directory.systemTemp.path}/${_safeName(_project?.name ?? 'video')} ${preset.height}p.mp4';
     _exportPath = out;
     _edit((vs) {
-      vs.startExportPreset(out, preset.id);
+      vs.startExportPresetFormat(out, preset.id, fmt);
       _exportProgress = 0;
       _status = 'Đang xuất ${preset.name}…';
     });

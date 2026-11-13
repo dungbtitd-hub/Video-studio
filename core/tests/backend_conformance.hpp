@@ -10,11 +10,13 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 
 #include "vstudio/editor.hpp"
 #include "vstudio/media_library.hpp"
+#include "vstudio/pixel.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
@@ -102,6 +104,7 @@ public:
         add("import -> edit -> export MP4 (P0 flow)", exportFlow);
         add("proxy generation", proxy);
         add("media library thumbnails and waveform", library);
+        add("H.265 10-bit export keeps more than 8-bit levels (or says no encoder)", hevc10);
     }
 
 private:
@@ -212,6 +215,64 @@ private:
         CHECK_NEAR(centreRed(*d->videoFrameAt(Time::zero())), 120, 12);
         CHECK_NEAR(centreRed(*d->videoFrameAt(Time::fromFrame(60, {30, 1}))), 0, 12);
         CHECK_NEAR(rms(d->readAudio(Time::fromSeconds(1.5), 4800, 48000, 2)), 0.5 / std::sqrt(2.0), 0.05);
+    }
+
+    // A grey ramp over 1024 columns in half floats, encoded H.265 Main10 and decoded deep:
+    // an 8-bit path keeps at most 256 grey levels, 10 bits keep several hundred more.
+    static void hevc10(const BackendFactory& make, const std::string&) {
+        using namespace conformance;
+        auto b = make();
+        auto enc = b->createEncoder();
+        CHECK(enc->supportsDeep());
+        ExportSettings s;
+        s.videoCodec = "hevc";
+        s.bitDepth = 10;
+        s.width = 1024;
+        s.height = 64;
+        s.fps = {30, 1};
+        s.videoBitrate = 20'000'000;
+        s.includeAudio = false;
+        const std::string out = (workDir() / "hevc10.mp4").string();
+        std::string err;
+        if (!enc->open(out, s, &err)) {
+            CHECK(!err.empty());  // a clear reason, never a silent 8-bit or H.264 file
+            std::printf("       no H.265 10-bit encoder here: %s\n", err.c_str());
+            return;
+        }
+        for (int i = 0; i < 10; ++i) {
+            VideoFrame f;
+            f.allocate(s.width, s.height, PixelFormat::RGBA16F);
+            for (int y = 0; y < s.height; ++y)
+                for (int x = 0; x < s.width; ++x) {
+                    const std::size_t k = (static_cast<std::size_t>(y) * s.width + x) * 4;
+                    const std::uint16_t v = floatToHalf(static_cast<float>(x) / (s.width - 1));
+                    f.half[k] = f.half[k + 1] = f.half[k + 2] = v;
+                    f.half[k + 3] = floatToHalf(1.0f);
+                }
+            f.pts = Time::fromFrame(i, s.fps);
+            CHECK(enc->writeVideo(f, &err));
+        }
+        CHECK(enc->finish(&err));
+        auto pr = b->probe(out, &err);
+        CHECK(pr.has_value());
+        CHECK_EQ(pr->bitDepth, 10);
+        CHECK(pr->videoCodec.find("hev") != std::string::npos || pr->videoCodec.find("hvc") != std::string::npos);
+        auto d = b->createDecoder();
+        d->setDeepOutput(true);
+        CHECK(d->open(out, &err));
+        auto f = d->videoFrameAt(Time::fromFrame(5, s.fps));
+        CHECK(f.has_value() && f->deep());
+        std::set<int> levels;
+        float lo = 1, hi = 0;
+        for (int x = 0; x < f->width; ++x) {
+            const float v = halfToFloat(f->half[(static_cast<std::size_t>(f->height / 2) * f->width + x) * 4 + 1]);
+            levels.insert(static_cast<int>(std::lround(v * 1023)));
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+        std::printf("       %zu grey levels survive\n", levels.size());
+        CHECK(lo < 0.02f && hi > 0.98f);
+        CHECK(levels.size() > 400u);
     }
 
     static void proxy(const BackendFactory& make, const std::string& clip) {

@@ -408,8 +408,13 @@ public:
             if (!writer_) return fail(error, "cannot write " + path + ": " + str(e));
 
             const double fps = std::max(1.0, s.fps.toDouble());
+            // H.265 runs on the media engine of every Apple-silicon Mac and iPhone (VideoToolbox);
+            // Main 10 takes 10-bit 4:2:0 buffers that writeVideo() fills straight from the float frame.
+            const bool hevc = s.videoCodec == "hevc" || s.videoCodec == "h265";
+            tenBit_ = s.bitDepth > 8;
+            if (tenBit_ && !hevc) return fail(error, "10-bit export needs H.265 (videoCodec \"hevc\")");
             NSDictionary* video = @{
-                AVVideoCodecKey : AVVideoCodecTypeH264,
+                AVVideoCodecKey : hevc ? AVVideoCodecTypeHEVC : AVVideoCodecTypeH264,
                 AVVideoWidthKey : @(s.width),
                 AVVideoHeightKey : @(s.height),
                 // Tag the colour space so every decoder converts back with the same matrix.
@@ -421,7 +426,9 @@ public:
                 AVVideoCompressionPropertiesKey : @{
                     AVVideoAverageBitRateKey : @(s.videoBitrate),
                     AVVideoMaxKeyFrameIntervalKey : @(s.gopSize > 0 ? s.gopSize : static_cast<int>(std::lround(fps * 2))),
-                    AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
+                    // kVTProfileLevel_HEVC_Main10_AutoLevel / _Main_AutoLevel (VideoToolbox constants' values).
+                    AVVideoProfileLevelKey : hevc ? (tenBit_ ? @"HEVC_Main10_AutoLevel" : @"HEVC_Main_AutoLevel")
+                                                  : AVVideoProfileLevelH264HighAutoLevel,
                 },
             };
             vin_ = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:video];
@@ -429,11 +436,15 @@ public:
             adaptor_ = [AVAssetWriterInputPixelBufferAdaptor
                 assetWriterInputPixelBufferAdaptorWithAssetWriterInput:vin_
                                            sourcePixelBufferAttributes:@{
-                                               (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+                                               (id)kCVPixelBufferPixelFormatTypeKey :
+                                                   @(tenBit_ ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                                                             : kCVPixelFormatType_32BGRA),
                                                (id)kCVPixelBufferWidthKey : @(s.width),
                                                (id)kCVPixelBufferHeightKey : @(s.height),
                                            }];
-            if (![writer_ canAddInput:vin_]) return fail(error, "H.264 encoding is not available");
+            if (![writer_ canAddInput:vin_])
+                return fail(error, hevc ? (tenBit_ ? "no H.265 10-bit encoder on this device" : "H.265 encoding is not available")
+                                        : "H.264 encoding is not available");
             [writer_ addInput:vin_];
 
             if (s.includeAudio) {
@@ -468,6 +479,9 @@ public:
         }
     }
 
+    // Deep frames are taken by every codec (an 8-bit export converts them here).
+    [[nodiscard]] bool supportsDeep() const override { return true; }
+
     bool writeVideo(const VideoFrame& f, std::string* error) override {
         if (f.width != s_.width || f.height != s_.height) return fail(error, "frame size mismatch");
         @autoreleasepool {
@@ -475,6 +489,25 @@ public:
             if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, adaptor_.pixelBufferPool, &px) != kCVReturnSuccess)
                 return fail(error, "cannot allocate a pixel buffer");
             CVPixelBufferLockBaseAddress(px, 0);
+            if (tenBit_) {
+                fillTenBit(f, px);
+            } else if (f.deep()) {
+                VideoFrame f8 = f;
+                convertFrame(f8, PixelFormat::RGBA8);
+                fillBgra(f8, px);
+            } else {
+                fillBgra(f, px);
+            }
+            CVPixelBufferUnlockBaseAddress(px, 0);
+            const CMTime pts = CMTimeMake(videoIndex_ * s_.fps.den, static_cast<int32_t>(s_.fps.num));
+            ++videoIndex_;
+            vq_.push_back({px, pts});
+            return pump(false, error);
+        }
+    }
+
+    static void fillBgra(const VideoFrame& f, CVPixelBufferRef px) {
+        {
             auto* base = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(px));
             const size_t bpr = CVPixelBufferGetBytesPerRow(px);
             for (int y = 0; y < f.height; ++y) {
@@ -487,11 +520,40 @@ public:
                     d[3] = 255;
                 }
             }
-            CVPixelBufferUnlockBaseAddress(px, 0);
-            const CMTime pts = CMTimeMake(videoIndex_ * s_.fps.den, static_cast<int32_t>(s_.fps.num));
-            ++videoIndex_;
-            vq_.push_back({px, pts});
-            return pump(false, error);
+        }
+    }
+
+    // RGB 0..1 -> Rec.709 limited-range 10-bit 4:2:0, two planes (Y; interleaved CbCr),
+    // 10 bits in the high bits of 16-bit words. Chroma is the average of each 2x2 block.
+    static void fillTenBit(const VideoFrame& f, CVPixelBufferRef px) {
+        auto rgb = [&](int x, int y, float* o) {
+            const std::size_t i = (static_cast<std::size_t>(y) * f.width + x) * 4;
+            for (int k = 0; k < 3; ++k)
+                o[k] = f.deep() ? std::clamp(halfToFloat(f.half[i + k]), 0.0f, 1.0f) : f.rgba[i + k] / 255.0f;
+        };
+        auto word = [](double v, double lo, double range) {
+            return static_cast<std::uint16_t>(std::clamp(std::lround(lo + v * range), 0L, 1023L) << 6);
+        };
+        auto* yBase = static_cast<std::uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(px, 0));
+        auto* cBase = static_cast<std::uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(px, 1));
+        const size_t yBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 0), cBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 1);
+        for (int y = 0; y < f.height; y += 2) {
+            for (int x = 0; x < f.width; x += 2) {
+                double cb = 0, cr = 0;
+                int n = 0;
+                for (int dy = 0; dy < 2 && y + dy < f.height; ++dy)
+                    for (int dx = 0; dx < 2 && x + dx < f.width; ++dx, ++n) {
+                        float c[3];
+                        rgb(x + dx, y + dy, c);
+                        const double l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                        reinterpret_cast<std::uint16_t*>(yBase + (y + dy) * yBpr)[x + dx] = word(l, 64, 876);
+                        cb += (c[2] - l) / 1.8556;
+                        cr += (c[0] - l) / 1.5748;
+                    }
+                auto* c = reinterpret_cast<std::uint16_t*>(cBase + (y / 2) * cBpr) + x;
+                c[0] = word(cb / n, 512, 896);
+                c[1] = word(cr / n, 512, 896);
+            }
         }
     }
 
@@ -604,6 +666,7 @@ private:
     std::deque<std::pair<CVPixelBufferRef, CMTime>> vq_;
     std::deque<CMSampleBufferRef> aq_;
     std::int64_t videoIndex_ = 0, audioFrames_ = 0;
+    bool tenBit_ = false;
     bool finished_ = false, vFinished_ = false, aFinished_ = false;
 };
 
@@ -622,7 +685,7 @@ std::shared_ptr<IMediaBackend> createBackend() { return std::make_shared<Backend
 void registerModule(ModuleRegistry& r, int priority) {
     r.add<IMediaBackend>({.id = "apple.avfoundation",
                           .displayName = "Apple AVFoundation",
-                          .capabilities = {"probe", "decode", "encode.h264", "encode.aac"},
+                          .capabilities = {"probe", "decode", "encode.h264", "encode.hevc", "encode.aac"},
                           .platforms = {"macos", "ios"},
                           .priority = priority},
                          [] { return createBackend(); });

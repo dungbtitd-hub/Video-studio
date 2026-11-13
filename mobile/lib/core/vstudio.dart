@@ -76,6 +76,14 @@ class ExportPresetView {
   final double fps;
 }
 
+class ExportFormatView {
+  ExportFormatView.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        description = j['description'] as String;
+  final String id, name, description;
+}
+
 class CoverStyleInfo {
   const CoverStyleInfo(this.id, this.name, this.category, this.animated);
   final String id, name, category;
@@ -678,10 +686,19 @@ class VStudio {
         return Uint8List.fromList(buf.asTypedList(rgba.length));
       });
 
-  /// Shared presets, sized for this project (its aspect is kept).
-  List<ExportPresetView> exportPresets() => (jsonDecode(_take(_b.exportPresetsJson(_s))) as List)
-      .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
+  /// Shared presets, sized for this project (its aspect is kept); bitrate and size for [format].
+  List<ExportPresetView> exportPresets([String format = 'h264']) => using((a) =>
+      (jsonDecode(_take(_b.exportPresetsFormatJson(_s, format.toNativeUtf8(allocator: a)))) as List)
+          .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  /// Video formats: h264, hevc, hevc10 (H.265 10-bit).
+  List<ExportFormatView> exportFormats() => (jsonDecode(_take(_b.exportFormatsJson(_s))) as List)
+      .map((e) => ExportFormatView.fromJson(e as Map<String, dynamic>))
       .toList();
+  void startExportPresetFormat(String outPath, String presetId, String format) => using((a) => _check(
+      _b.exportStartPresetFormat(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a),
+          format.toNativeUtf8(allocator: a))));
   void startExportPreset(String outPath, String presetId) => using(
       (a) => _check(_b.exportStartPreset(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a))));
 
