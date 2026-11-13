@@ -118,6 +118,10 @@ public:
     // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.
     void setClipLut(const std::vector<Id>& clipIds, const std::string& path, double strength = 1.0);
 
+    // Colour grade (grade.hpp) on one or many clips, one undo step: replaces the clips'
+    // grade, keeping its place in the effect chain; null or neutral params remove it.
+    void setClipGrade(const std::vector<Id>& clipIds, const Json& params);
+
     bool undo();
     bool redo();
     [[nodiscard]] bool canUndo() const { return history_.canUndo(); }

@@ -14,6 +14,7 @@
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
+#include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/transitions.hpp"
@@ -444,6 +445,94 @@ int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, 
         s->editor->setClipLut(clipIdsFrom(clip_ids_json), p, strength);
         s->edited();
     });
+}
+
+namespace {
+Json jsonOrNull(const char* text) {
+    const std::string t = str(text);
+    return t.empty() ? Json() : Json::parse(t);
+}
+}  // namespace
+
+int vs_set_clip_grade(vs_session* s, const char* clip_ids_json, const char* params_json) {
+    return guard(s, [&] {
+        s->editor->setClipGrade(clipIdsFrom(clip_ids_json), jsonOrNull(params_json));
+        if (s->preview) s->preview->setEffectOverride(nullptr);  // the committed grade replaces the live one
+        s->edited();
+    });
+}
+
+char* vs_clip_grade_json(vs_session* s, const char* clip_id) {
+    if (!s) return nullptr;
+    try {
+        const Clip* c = s->editor->project().findClip(str(clip_id));
+        if (!c) throw std::runtime_error("clip not found");
+        Json out = Json::object();
+        if (c->effects.is_array())
+            for (const auto& e : c->effects)
+                if (e.is_object() && e.value("type", std::string{}) == kColorGradeEffect) out = e.value("params", Json::object());
+        return dup(out.dump());
+    } catch (const std::exception& ex) {
+        s->error = ex.what();
+        return nullptr;
+    }
+}
+
+char* vs_hsl_bands_json(void) {
+    try {
+        Json out = Json::array();
+        for (const auto& b : hslBands()) out.push_back({{"id", b.id}, {"name", b.name}, {"hue", b.hue}});
+        return dup(out.dump());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int vs_grade_curve(const char* points_json, int n, float* out) {
+    if (!out || n < 2) return -1;
+    try {
+        const auto c = sampleCurve(jsonOrNull(points_json), n);
+        std::copy(c.begin(), c.end(), out);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+void vs_wheel_to_balance(double angle_deg, double distance, double* rgb3) {
+    if (!rgb3) return;
+    const auto b = wheelToBalance(angle_deg, distance);
+    std::copy(b.begin(), b.end(), rgb3);
+}
+
+void vs_balance_to_wheel(const double* rgb3, double* angle_deg, double* distance) {
+    if (!rgb3) return;
+    balanceToWheel({rgb3[0], rgb3[1], rgb3[2]}, angle_deg, distance);
+}
+
+int vs_set_effect_preview(vs_session* s, const char* clip_id, const char* type, const char* params_json) {
+    return guard(s, [&] {
+        const std::string clip = str(clip_id);
+        std::shared_ptr<const EffectOverride> o;
+        if (!clip.empty()) o = std::make_shared<EffectOverride>(EffectOverride{clip, str(type), jsonOrNull(params_json)});
+        else if (!s->preview) return;  // nothing to clear
+        s->previewEngine().setEffectOverride(std::move(o));
+    });
+}
+
+int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int height) {
+    if (!rgba || width <= 0 || height <= 0) return -1;
+    try {
+        VideoFrame f;
+        f.width = width;
+        f.height = height;
+        f.rgba.assign(rgba, rgba + static_cast<std::size_t>(width) * height * 4);
+        applyColorGrade(f, jsonOrNull(params_json));
+        std::copy(f.rgba.begin(), f.rgba.end(), rgba);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {

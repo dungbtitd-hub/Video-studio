@@ -21,6 +21,15 @@ namespace vstudio {
 
 struct ActiveTransition;  // transitions.hpp
 
+// A not-yet-committed effect change shown by the preview while the user drags a
+// control (colour wheel, curve point): only this clip's effect chain is swapped,
+// the project and its undo history stay untouched until the change is committed.
+struct EffectOverride {
+    Id clipId;
+    std::string type;    // effect type, e.g. "builtin.color_grade"
+    Json params;         // null = preview without the effect
+};
+
 struct VideoLayer {
     const Clip* clip = nullptr;
     const MediaAsset* asset = nullptr;
@@ -74,6 +83,7 @@ public:
     [[nodiscard]] const std::vector<std::string>& warnings() const { return warnings_; }
     // Deep output: renderVideo returns RGBA16F (10-bit export). Default RGBA8 (preview).
     void setDeepOutput(bool on) { deep_ = on; }
+    void setEffectOverride(std::shared_ptr<const EffectOverride> o) { override_ = std::move(o); }
 
 private:
     std::shared_ptr<const VideoFrame> sourceFrame(const VideoLayer& layer, int outW, int outH, const std::string& purpose,
@@ -92,6 +102,7 @@ private:
     ModuleRegistry* modules_;
     std::shared_ptr<ICompositor> compositor_;
     bool deep_ = false;
+    std::shared_ptr<const EffectOverride> override_;
     std::vector<std::string> warnings_;
     void warn(std::string w);
 };

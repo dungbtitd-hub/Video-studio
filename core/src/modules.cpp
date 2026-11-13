@@ -5,6 +5,7 @@
 #include "vstudio/color_space.hpp"
 #include "vstudio/compositor.hpp"
 #include "vstudio/cover.hpp"
+#include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/pixel.hpp"
 
@@ -181,6 +182,12 @@ public:
     void apply(VideoFrame& f, const Json& p, Time) const override { applyLut(f, p); }
 };
 
+class ColorGradeEffect final : public IVideoEffect {
+public:
+    bool supportsDeep() const override { return true; }
+    void apply(VideoFrame& f, const Json& p, Time) const override { applyColorGrade(f, p); }
+};
+
 class Grayscale final : public IVideoEffect {
 public:
     bool supportsDeep() const override { return true; }
@@ -220,6 +227,8 @@ void registerBuiltinModules(ModuleRegistry& r) {
                         [] { return std::make_shared<ColorSpaceEffect>(); });
     r.add<IVideoEffect>({.id = kLutEffect, .displayName = "3D LUT", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<LutEffect>(); });
+    r.add<IVideoEffect>({.id = kColorGradeEffect, .displayName = "Colour grade", .capabilities = {"effect.color"}},
+                        [] { return std::make_shared<ColorGradeEffect>(); });
     r.add<IVideoEffect>({.id = kCoverEffect, .displayName = "Cover region", .capabilities = {"effect.cover"}},
                         [] { return std::make_shared<CoverEffect>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},

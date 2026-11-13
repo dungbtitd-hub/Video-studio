@@ -92,6 +92,28 @@ int main(void) {
     EXPECT(vs_set_clip_color_space(s, "[\"nope\"]", "slog3", 0) != 0);
     EXPECT(vs_set_clip_lut(s, "[]", "/nonexistent.cube", 1.0) != 0);
     EXPECT(strstr(vs_last_error(s), "cannot open") != NULL);
+    /* Grade: catalog, curve sampling, wheel round trip, buffer preview, refusals. */
+    {
+        char* bands = vs_hsl_bands_json();
+        EXPECT(bands && strstr(bands, "\"orange\"") && strstr(bands, "\"magenta\""));
+        vs_free(bands);
+        float curve[11];
+        EXPECT(vs_grade_curve("[[0.5,0.7]]", 11, curve) == 0);
+        EXPECT(curve[0] == 0.0f && curve[10] == 1.0f && curve[5] > 0.69f && curve[5] < 0.71f);
+        double rgb[3], ang = 0, dist = 0;
+        vs_wheel_to_balance(120.0, 0.5, rgb);
+        EXPECT(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
+        vs_balance_to_wheel(rgb, &ang, &dist);
+        EXPECT(ang > 119.9 && ang < 120.1 && dist > 0.499 && dist < 0.501);
+        uint8_t g[4] = {100, 100, 100, 255};
+        EXPECT(vs_grade_preview("{\"offset\":[0,0,0,0.4]}", g, 1, 1) == 0);
+        EXPECT(g[0] > 140 && g[0] == g[1] && g[3] == 255);
+        EXPECT(vs_grade_preview("not json", g, 1, 1) != 0);
+        EXPECT(vs_set_clip_grade(s, "[\"nope\"]", "{\"saturation\":1.2}") != 0);
+        EXPECT(vs_set_clip_grade(s, "[]", "[1]") != 0);
+        EXPECT(vs_clip_grade_json(s, "nope") == NULL);
+        EXPECT(vs_set_effect_preview(s, "", "", "") == 0);
+    }
     /* Keyframes: unknown clips and bad input are refused with a message. */
     EXPECT(vs_add_keyframe(s, "nope", 0, 0) != 0);
     EXPECT(strstr(vs_last_error(s), "unknown clip") != NULL);

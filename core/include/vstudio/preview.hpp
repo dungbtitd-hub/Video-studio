@@ -55,6 +55,10 @@ public:
     void setFrameCallback(FrameCallback cb);
     void setPreviewSize(int width, int height);
 
+    // Live preview of an uncommitted effect change on one clip (see EffectOverride);
+    // nullptr clears it. Latest wins; re-renders the current frame when paused.
+    void setEffectOverride(std::shared_ptr<const EffectOverride> o);
+
     // Latest-wins frame request (scrubbing / paused seek).
     void requestFrame(Time t);
 
@@ -84,6 +88,7 @@ private:
 
     mutable std::mutex snapMu_;
     std::shared_ptr<const Project> project_;
+    std::shared_ptr<const EffectOverride> override_;
     std::string projectDir_;
     std::vector<std::pair<Id, std::string>> pendingProxies_;
     std::uint64_t projectGen_ = 0;

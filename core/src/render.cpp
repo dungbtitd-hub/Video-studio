@@ -1,5 +1,7 @@
 #include "vstudio/render.hpp"
 
+#include "vstudio/grade.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -322,16 +324,42 @@ ICompositor& Renderer::compositor() {
 
 std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const VideoFrame& out,
                                                   const std::string& purpose) {
+    // Live preview of an uncommitted effect change: swap only this clip's effects.
+    std::optional<Clip> live;
+    if (override_ && override_->clipId == layer.clip->id) {
+        live = *layer.clip;
+        live->effects = override_->type == kColorGradeEffect
+                            ? withGradeEffect(live->effects, override_->params, "live")
+                            : Json::array();
+        if (override_->type != kColorGradeEffect) {
+            bool placed = false;
+            for (const auto& e : layer.clip->effects) {
+                if (e.is_object() && e.value("type", std::string{}) == override_->type) {
+                    if (!override_->params.is_null()) {
+                        Json c = e;
+                        c["params"] = override_->params;
+                        live->effects.push_back(std::move(c));
+                    }
+                    placed = true;
+                    continue;
+                }
+                live->effects.push_back(e);
+            }
+            if (!placed && !override_->params.is_null())
+                live->effects.push_back({{"type", override_->type}, {"enabled", true}, {"params", override_->params}});
+        }
+    }
+    const Clip& clip = live ? *live : *layer.clip;
     // Deep sources (10-bit, Log) stay deep through grading even in an 8-bit preview,
     // so strong corrections do not band; plain clips skip the cost.
-    const bool graded = layer.clip->effects.is_array() && !layer.clip->effects.empty();
+    const bool graded = clip.effects.is_array() && !clip.effects.empty();
     auto frame = sourceFrame(layer, out.width, out.height, purpose, deep_ || graded);
     if (!frame) return std::nullopt;
     if (modules_ && graded) {
         // Effects work on a copy: cached source frames stay untouched.
         auto fx = std::make_shared<VideoFrame>(*frame);
         std::vector<std::string> w;
-        applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
+        applyClipEffects(*modules_, clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
         for (auto& m : w) warn(std::move(m));
         frame = std::move(fx);
     }

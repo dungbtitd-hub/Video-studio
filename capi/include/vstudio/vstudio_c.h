@@ -83,6 +83,23 @@ VS_API int vs_set_clip_color_space(vs_session* s, const char* clip_ids_json, con
 /* .cube file, absolute or relative to the project's media folder; "" removes. Bad files fail here. */
 VS_API int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, double strength);
 VS_API char* vs_suggested_log_format(vs_session* s, const char* asset_id); /* "hlg" or "" */
+/* ---- pro colour grade (grade.hpp): wheels, curves, HSL mixer, qualifier; one effect per clip ----
+ * vs_set_clip_grade: params_json is the grade object; "" / "null" / neutral params remove it. One undo step.
+ * vs_clip_grade_json: the clip's grade params ("{}" when none).
+ * vs_hsl_bands_json: [{"id","name","hue"}].
+ * vs_grade_curve: samples the curve through points_json [[x,y],...] at n inputs into out (what is applied).
+ * vs_wheel_to_balance / vs_balance_to_wheel: wheel position (deg, 0..1) <-> luma-neutral rgb[3].
+ * vs_set_effect_preview: live preview of an uncommitted change while dragging (no undo step, project
+ *   untouched): type e.g. "builtin.color_grade"; clip_id "" clears. Commit with vs_set_clip_grade on release.
+ * vs_grade_preview: applies grade params to an RGBA buffer in place (thumbnails; no session needed). */
+VS_API int vs_set_clip_grade(vs_session* s, const char* clip_ids_json, const char* params_json);
+VS_API char* vs_clip_grade_json(vs_session* s, const char* clip_id);
+VS_API char* vs_hsl_bands_json(void);
+VS_API int vs_grade_curve(const char* points_json, int n, float* out);
+VS_API void vs_wheel_to_balance(double angle_deg, double distance, double* rgb3);
+VS_API void vs_balance_to_wheel(const double* rgb3, double* angle_deg, double* distance);
+VS_API int vs_set_effect_preview(vs_session* s, const char* clip_id, const char* type, const char* params_json);
+VS_API int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int height);
 /* ---- keyframes inside one clip (keyframes.hpp); all undoable, times are TIMELINE ticks ----
  * group: 0 = picture (scale, x, y, opacity), 1 = audio (volume); the two are independent.
  * vs_add_keyframe captures the clip's current values at t. vs_remove_keyframe: 1 removed, 0 none there.
