@@ -15,6 +15,7 @@ import 'core/project_store.dart';
 import 'core/transfer.dart';
 import 'core/vstudio.dart';
 import 'ui/cover_panel.dart';
+import 'ui/grade_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
@@ -61,6 +62,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   late final AppLifecycleListener _lifecycle;
   // Covers (blur / mosaic... over a region) of the selected video clip.
   bool _coverMode = false;
+  bool _gradeMode = false; // "Chỉnh màu" panel under the preview
+  bool _picking = false; // eyedropper: next tap on the preview picks a colour
+  final _gradeKey = GlobalKey<GradePanelState>();
   String? _activeCover;
   bool _tracking = false;
   double _trackProgress = 0;
@@ -699,6 +703,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void _enterCovers() {
     final ids = _coverIds();
     setState(() {
+      _gradeMode = false;
       _coverMode = true;
       _activeCover = ids.isEmpty ? null : ids.first;
       _status = 'Chọn kiểu che, rồi kéo vùng trên khung hình. Kéo góc dưới bên phải hoặc dùng hai ngón để đổi cỡ.';
@@ -743,6 +748,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   /// The active cover over the preview, while covering and the clip is on screen.
   Widget _coverable(Widget preview, ClipKeyState? keys) {
+    if (_picking) {
+      return LayoutBuilder(
+        builder: (context, box) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (d) {
+            final c = _vs?.pickPreviewColor(d.localPosition.dx / box.maxWidth, d.localPosition.dy / box.maxHeight);
+            setState(() => _picking = false);
+            if (c != null) _gradeKey.currentState?.pickColor(Color.from(alpha: 1, red: c.$1, green: c.$2, blue: c.$3));
+          },
+          child: preview,
+        ),
+      );
+    }
     final vs = _vs, clip = _selectedVideoClip, cover = _activeCover;
     if (!_coverMode || vs == null || clip == null || cover == null || keys == null || _playing) {
       return _objectBox(preview, keys) ?? _zoomable(preview, keys);
@@ -767,6 +785,50 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       ),
     ]);
   }
+
+  Widget _gradePanel(VStudio vs, ClipView clip) => GradePanel(
+        key: _gradeKey,
+        vs: vs,
+        clipId: clip.id,
+        params: clip.grade ?? const <String, dynamic>{},
+        onLive: (p) {
+          try {
+            // null = compare with the original: preview the clip without its grade.
+            vs.setEffectPreview(clip.id, 'builtin.color_grade', p);
+          } on VStudioException catch (e) {
+            setState(() => _status = e.message);
+          }
+        },
+        onCommit: (p) {
+          _edit((vs) => vs.setClipGrade([clip.id], p.isEmpty ? null : p));
+          _vs?.seek(_playhead);
+        },
+        onApplyAll: (p) {
+          final ids = [
+            for (final t in _project!.tracks)
+              if (!t.audio && !t.locked)
+                for (final c in t.clips)
+                  if (!c.generated) c.id
+          ];
+          _edit((vs) {
+            vs.setClipGrade(ids, p);
+            _status = 'Đã áp dụng chỉnh màu cho ${ids.length} clip';
+          });
+          _vs?.seek(_playhead);
+        },
+        onPickMode: (on) => setState(() {
+          _picking = on;
+          _status = on ? 'Chạm vào màu cần chỉnh trên khung hình' : null;
+        }),
+        onDone: () {
+          vs.setEffectPreview('', '', null);
+          setState(() {
+            _gradeMode = false;
+            _picking = false;
+            _status = null;
+          });
+        },
+      );
 
   Widget _coverPanel(VStudio vs, ClipView clip) {
     final ids = _coverIds();
@@ -1124,7 +1186,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
             ]),
           ),
-          if (_coverMode && _selectedVideoClip != null)
+          if (_gradeMode && _selectedMediaClip != null)
+            _gradePanel(_vs!, _selectedMediaClip!)
+          else if (_coverMode && _selectedVideoClip != null)
             _coverPanel(_vs!, _selectedVideoClip!)
           else if (_selectedClip != null)
             KeyframeBar(
@@ -1148,6 +1212,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 if (id != _selected) _activeCover = null;
                 _selected = id;
                 if (_selectedVideoClip == null) _coverMode = false;
+                if (_selectedMediaClip == null) _gradeMode = false;
                 if (_coverMode) _activeCover = _coverIds().firstOrNull;
               }),
               onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
@@ -1193,6 +1258,16 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.title, label: 'Chữ', onTap: _vs == null ? null : _text),
             _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
+            _Tool(
+                icon: Icons.palette_outlined,
+                label: 'Chỉnh màu',
+                onTap: _selectedMediaClip == null
+                    ? null
+                    : () => setState(() {
+                          _gradeMode = true;
+                          _coverMode = false;
+                          _status = 'Kéo để xem ngay; nhấc tay là lưu (hoàn tác được)';
+                        })),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(

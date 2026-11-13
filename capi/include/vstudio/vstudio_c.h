@@ -100,6 +100,9 @@ VS_API void vs_wheel_to_balance(double angle_deg, double distance, double* rgb3)
 VS_API void vs_balance_to_wheel(const double* rgb3, double* angle_deg, double* distance);
 VS_API int vs_set_effect_preview(vs_session* s, const char* clip_id, const char* type, const char* params_json);
 VS_API int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int height);
+/* Eyedropper: average colour (0..1 RGB) of a 5x5 spot of the newest preview frame at x, y (0..1 of
+ * the frame). Returns 0, or -1 when no frame has been shown yet. */
+VS_API int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3);
 /* ---- keyframes inside one clip (keyframes.hpp); all undoable, times are TIMELINE ticks ----
  * group: 0 = picture (scale, x, y, opacity), 1 = audio (volume); the two are independent.
  * vs_add_keyframe captures the clip's current values at t. vs_remove_keyframe: 1 removed, 0 none there.

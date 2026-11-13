@@ -20,6 +20,7 @@ class ClipView {
       this.lookStrength = 1,
       this.colorSpace,
       this.lut,
+      this.grade,
       this.pictureKeys = const [],
       this.audioKeys = const [],
       this.content});
@@ -34,6 +35,7 @@ class ClipView {
   final double lookStrength;
   final String? colorSpace; // Log/HDR input id (builtin.color_space), if any
   final String? lut; // .cube path (builtin.lut), if any
+  final Map<String, dynamic>? grade; // pro grade params (builtin.color_grade), if any
   // Keyframes inside the clip, as timeline seconds (sorted). Picture (zoom, position,
   // opacity) and audio (volume) keys are independent.
   final List<double> pictureKeys;
@@ -171,6 +173,7 @@ class ProjectView {
           lookStrength: ((look?['strength'] ?? 1) as num).toDouble(),
           colorSpace: effect('builtin.color_space')?['input'] as String?,
           lut: effect('builtin.lut')?['path'] as String?,
+          grade: effect('builtin.color_grade'),
           pictureKeys: keys(const ['scale', 'x', 'y', 'opacity']),
           audioKeys: keys(const ['volume']),
           content: content,

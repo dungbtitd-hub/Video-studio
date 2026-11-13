@@ -535,6 +535,28 @@ int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int heig
     }
 }
 
+int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3) {
+    if (!s || !rgb3) return -1;
+    std::shared_ptr<const VideoFrame> f;
+    {
+        std::lock_guard lk(s->frameMu);
+        f = s->latest;
+    }
+    if (!f || f->empty() || f->deep()) return -1;
+    const int cx = std::clamp(static_cast<int>(x * f->width), 0, f->width - 1);
+    const int cy = std::clamp(static_cast<int>(y * f->height), 0, f->height - 1);
+    double sum[3] = {0, 0, 0};
+    int n = 0;
+    for (int yy = std::max(0, cy - 2); yy <= std::min(f->height - 1, cy + 2); ++yy)
+        for (int xx = std::max(0, cx - 2); xx <= std::min(f->width - 1, cx + 2); ++xx) {
+            const std::uint8_t* px = f->rgba.data() + (static_cast<std::size_t>(yy) * f->width + xx) * 4;
+            for (int c = 0; c < 3; ++c) sum[c] += px[c] / 255.0;
+            ++n;
+        }
+    for (int c = 0; c < 3; ++c) rgb3[c] = sum[c] / n;
+    return 0;
+}
+
 int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {
     return guard(s, [&] {
         const Clip& c = clipOrThrow(s, clip_id);

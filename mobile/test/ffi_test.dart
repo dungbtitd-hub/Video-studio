@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:video_studio/core/transfer.dart';
 import 'package:video_studio/core/vstudio.dart';
 import 'package:video_studio/ui/cover_panel.dart';
+import 'package:video_studio/ui/grade_panel.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
 import 'package:video_studio/ui/transition_sheet.dart';
 import 'package:video_studio/core/project_model.dart';
@@ -310,6 +311,101 @@ void main() {
     expect(applied.last, 'input slog3');
     expect(tester.takeException(), isNull); // no overflow at phone width
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
+
+  test('grade: commit, read back, live preview, helpers', () {
+    final vs = VStudio.create('ffi-grade', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single.id;
+    expect(vs.hslBands().map((b) => b.id), containsAll(['red', 'orange', 'blue', 'magenta']));
+    vs.setClipGrade([
+      clip
+    ], {
+      'saturation': 1.3,
+      'lift': [0.0, 0.0, 0.1, 0.05]
+    });
+    expect(vs.clipGrade(clip)['saturation'], 1.3);
+    expect(vs.project().tracks.single.clips.single.grade?['saturation'], 1.3);
+    vs.setEffectPreview(clip, 'builtin.color_grade', {'saturation': 0.0}); // no undo step
+    expect(vs.clipGrade(clip)['saturation'], 1.3);
+    vs.setEffectPreview('', '', null);
+    expect(vs.undo(), isTrue);
+    expect(vs.clipGrade(clip), isEmpty);
+    expect(() => vs.setClipGrade(['nope'], {'saturation': 2}), throwsA(isA<VStudioException>()));
+    final b = vs.wheelToBalance(240, 0.5);
+    final (angle, dist) = vs.balanceToWheel(b);
+    expect(angle, closeTo(240, 1e-6));
+    expect(dist, closeTo(0.5, 1e-6));
+    final c = vs.gradeCurve([
+      [0.5, 0.7]
+    ], 11);
+    expect(c[5], closeTo(0.7, 1e-3));
+    final g = vs.gradePreview({'saturation': 0.0}, Uint8List.fromList([200, 40, 10, 255]), 1, 1)!;
+    expect(g[0], g[1]);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  testWidgets('grade panel: live while dragging, one commit on release, fits a phone', (tester) async {
+    final vs = VStudio.create('ffi-grade-ui', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final live = <Map<String, dynamic>?>[];
+    final commits = <Map<String, dynamic>>[];
+    final key = GlobalKey<GradePanelState>();
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 360,
+            child: GradePanel(
+              key: key,
+              vs: vs,
+              clipId: 'c1',
+              params: const {},
+              onLive: live.add,
+              onCommit: commits.add,
+              onApplyAll: (_) {},
+              onDone: () {},
+            ),
+          ),
+        ),
+      ),
+    ));
+    // Drag the wheel puck towards blue: previews while moving, commits once.
+    final wheel = tester.getRect(find.byType(ColorWheelView));
+    final g = await tester.startGesture(wheel.center);
+    for (var i = 0; i < 4; i++) {
+      await g.moveBy(const Offset(-6, 8));
+      await tester.pump();
+    }
+    expect(live, isNotEmpty);
+    expect(commits, isEmpty);
+    await g.up();
+    await tester.pump();
+    expect(commits, hasLength(1));
+    expect(commits.single['lift'], isA<List>());
+    // Curves page: a tap adds a point, committed at once.
+    await tester.tap(find.text('Đường cong'));
+    await tester.pump();
+    final curve = tester.getRect(find.byType(CurveView));
+    await tester.tapAt(curve.center + const Offset(0, -20));
+    await tester.pump();
+    expect((commits.last['curves'] as Map)['master'], hasLength(3));
+    // Eyedropper result fills the qualifier and commits.
+    key.currentState!.pickColor(const Color(0xFF3C78E6));
+    await tester.pump();
+    final q = commits.last['qualifier'] as Map;
+    expect((q['hue'] as List).first, closeTo(219, 3));
+    expect(find.text('Chọn vùng màu'), findsOneWidget);
+    // Reset: an empty grade (removes the effect).
+    await tester.ensureVisible(find.text('Đặt lại'));
+    await tester.pump();
+    await tester.tap(find.text('Đặt lại'));
+    await tester.pump();
+    expect(commits.last, isEmpty);
+    await tester.pump(const Duration(seconds: 1)); // let double-tap / long-press timers expire
+    expect(tester.takeException(), isNull); // no overflow at phone width
+  }, skip: skip != null);
 
   test('covers: add, region from the preview, keyed follow, tracking in the background', () async {
     final vs = VStudio.create('Covers', width: 640, height: 360);
