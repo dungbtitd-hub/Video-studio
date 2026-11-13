@@ -1,6 +1,7 @@
 #include "EditorController.h"
 
 #include "vstudio/export_presets.hpp"
+#include "vstudio/looks.hpp"
 
 #include <QDir>
 #include <QFileInfo>
@@ -279,6 +280,35 @@ void EditorController::deleteSelected() {
 void EditorController::rippleDeleteSelected() {
     if (selected_.isEmpty()) return;
     if (edit([&] { editor_->rippleDelete(s(selected_)); })) setSelectedClip({});
+}
+
+void EditorController::setClipLook(const QStringList& clipIds, const QString& lookId, double strength) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    edit([&] { editor_->setClipLook(ids, s(lookId), strength); });
+}
+
+QPair<QString, double> EditorController::clipLook(const QString& clipId) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (c && c->effects.is_array())
+        for (const auto& e : c->effects)
+            if (e.is_object() && e.value("type", std::string{}) == kColorLookEffect && e.value("enabled", true))
+                return {q(e["params"].value("look", std::string{})), e["params"].value("strength", 1.0)};
+    return {{}, 1.0};
+}
+
+QString EditorController::clipAsset(const QString& clipId) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    return c ? q(c->assetId) : QString{};
+}
+
+QStringList EditorController::lookableClips() const {
+    QStringList out;
+    if (!snapshot_) return out;
+    for (const auto& t : snapshot_->tracks)
+        if (t.type == TrackType::Video && !t.locked)
+            for (const auto& c : t.clips) out << q(c.id);
+    return out;
 }
 
 void EditorController::seekBy(double seconds) { seek(std::max(0.0, playhead_ + seconds)); }

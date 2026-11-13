@@ -12,6 +12,7 @@ set_tests_properties(timeline_widget_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFO
 qt_add_executable(main_window_tests
   test_main_window.cpp
   ../widgets/MainWindow.cpp ../widgets/MainWindow.h
+  ../widgets/LooksPanel.cpp ../widgets/LooksPanel.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )

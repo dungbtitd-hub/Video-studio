@@ -44,6 +44,11 @@ class WaveformData {
 
 enum ExportState { idle, running, done, failed, cancelled }
 
+class LookInfo {
+  const LookInfo(this.id, this.name, this.category);
+  final String id, name, category;
+}
+
 class ExportPresetView {
   ExportPresetView.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -197,6 +202,29 @@ class VStudio {
 
   void startExport(String outPath, {int width = 0, int height = 0}) =>
       using((a) => _check(_b.exportStart(_s, outPath.toNativeUtf8(allocator: a), width, height, 0, 0, 0)));
+
+  /// One-tap colour looks (same catalog and rendering as desktop).
+  List<LookInfo> looks() {
+    final p = _b.looksJson();
+    if (p == nullptr) return const [];
+    final list = jsonDecode(_take(p)) as List;
+    return [
+      for (final e in list.cast<Map<String, dynamic>>())
+        LookInfo(e['id'] as String, e['name'] as String, e['category'] as String)
+    ];
+  }
+
+  /// Applies [lookId] ('' removes) to [clipIds] as one undo step.
+  void setClipLook(List<String> clipIds, String lookId, {double strength = 1}) => using((a) => _check(_b.setClipLook(
+      _s, jsonEncode(clipIds).toNativeUtf8(allocator: a), lookId.toNativeUtf8(allocator: a), strength)));
+
+  /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
+  Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {
+        final buf = a<Uint8>(rgba.length);
+        buf.asTypedList(rgba.length).setAll(0, rgba);
+        if (_b.lookPreview(lookId.toNativeUtf8(allocator: a), strength, buf, width, height) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(rgba.length));
+      });
 
   /// Shared presets, sized for this project (its aspect is kept).
   List<ExportPresetView> exportPresets() => (jsonDecode(_take(_b.exportPresetsJson(_s))) as List)

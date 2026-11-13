@@ -9,6 +9,7 @@
 class EditorController;
 class PreviewWidget;
 class TimelineWidget;
+class LooksPanel;
 class QListWidget;
 class QLabel;
 class QToolButton;
@@ -20,6 +21,7 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(EditorController* editor, QWidget* parent = nullptr);
     [[nodiscard]] TimelineWidget* timeline() const { return timeline_; }
+    [[nodiscard]] LooksPanel* looks() const { return looks_; }
     // Every shortcut in the menus, as shown in Trợ giúp > Phím tắt (menu, action, keys).
     [[nodiscard]] QList<QStringList> shortcutTable() const;
     // Layout persistence: QSettings group "workspace" (geometry + dock state).
@@ -44,6 +46,7 @@ private:
     EditorController* editor_;
     PreviewWidget* preview_;
     TimelineWidget* timeline_;
+    LooksPanel* looks_;
     QListWidget* assets_;
     QLabel* timecode_;
     QLabel* inspector_;

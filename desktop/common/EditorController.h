@@ -101,6 +101,13 @@ public:
     QString timecode() const;
     bool playing() const;
     QString selectedClip() const { return selected_; }
+    // Colour looks (vstudio/looks.hpp): one undo step for any number of clips; "" removes.
+    void setClipLook(const QStringList& clipIds, const QString& lookId, double strength);
+    // Look on a clip: (look id, strength); empty id if none.
+    [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
+    [[nodiscard]] QString clipAsset(const QString& clipId) const;
+    // Every clip that can take a look: video tracks that are not locked.
+    [[nodiscard]] QStringList lookableClips() const;
     void setSelectedClip(const QString& id);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }

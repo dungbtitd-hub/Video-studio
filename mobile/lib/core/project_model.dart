@@ -15,7 +15,9 @@ class ClipView {
       required this.duration,
       required this.name,
       this.sourceIn = 0,
-      this.speed = 1});
+      this.speed = 1,
+      this.look,
+      this.lookStrength = 1});
   final String id;
   final String assetId;
   final double start; // seconds on the timeline
@@ -23,6 +25,8 @@ class ClipView {
   final String name;
   final double sourceIn; // source seconds at `start`
   final double speed; // source seconds per timeline second
+  final String? look; // colour look id (builtin.color_look), if any
+  final double lookStrength;
   double get end => start + duration;
 }
 
@@ -92,6 +96,11 @@ class ProjectView {
       for (final c in (t['clips'] as List? ?? const [])) {
         final m = c as Map<String, dynamic>;
         final speed = _rational((m['speed'] ?? '1/1') as String);
+        final look = (m['effects'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .where((e) => e['type'] == 'builtin.color_look' && (e['enabled'] ?? true) == true)
+            .map((e) => e['params'] as Map<String, dynamic>?)
+            .firstOrNull;
         final srcDur = ticksToSeconds((m['source_out'] as num).toInt() - (m['source_in'] as num).toInt());
         clips.add(ClipView(
           id: m['clip_id'] as String,
@@ -101,6 +110,8 @@ class ProjectView {
           name: assets[m['asset_id']]?.name ?? '?',
           sourceIn: ticksToSeconds((m['source_in'] as num).toInt()),
           speed: speed > 0 ? speed : 1,
+          look: look?['look'] as String?,
+          lookStrength: ((look?['strength'] ?? 1) as num).toDouble(),
         ));
       }
       return TrackView(

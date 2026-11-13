@@ -10,6 +10,7 @@
 
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
+#include "vstudio/looks.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -334,6 +335,41 @@ int vs_remove_clip(vs_session* s, const char* clip_id) {
         s->editor->removeClip(str(clip_id));
         s->edited();
     });
+}
+
+char* vs_looks_json(void) {
+    try {
+        Json out = Json::array();
+        for (const auto& l : colorLooks()) out.push_back({{"id", l.id}, {"name", l.name}, {"category", l.category}});
+        return dup(out.dump());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_id, double strength) {
+    return guard(s, [&] {
+        const Json ids = Json::parse(str(clip_ids_json));
+        if (!ids.is_array()) throw std::runtime_error("clip_ids_json must be a JSON array");
+        std::vector<Id> clips;
+        for (const auto& id : ids) clips.push_back(id.get<std::string>());
+        s->editor->setClipLook(clips, str(look_id), strength);
+        s->edited();
+    });
+}
+
+int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height) {
+    const ColorLook* look = findColorLook(str(look_id));
+    if (!look || !rgba || width <= 0 || height <= 0) return -1;
+    VideoFrame f;
+    f.width = width;
+    f.height = height;
+    f.rgba.assign(rgba, rgba + static_cast<std::size_t>(width) * height * 4);
+    Json p = look->params;
+    p["strength"] = strength;
+    applyColorLook(f, p);
+    std::memcpy(rgba, f.rgba.data(), f.rgba.size());
+    return 0;
 }
 
 int vs_ripple_delete(vs_session* s, const char* clip_id) {

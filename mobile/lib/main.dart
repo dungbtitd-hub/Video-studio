@@ -12,6 +12,7 @@ import 'core/project_model.dart';
 import 'core/native_preview.dart';
 import 'core/project_store.dart';
 import 'core/vstudio.dart';
+import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
@@ -354,6 +355,45 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     }
   }
 
+  ClipView? get _selectedVideoClip {
+    for (final t in _project?.tracks ?? const <TrackView>[]) {
+      if (t.audio) continue;
+      for (final c in t.clips) {
+        if (c.id == _selected) return c;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _looks() async {
+    final vs = _vs, clip = _selectedVideoClip;
+    if (vs == null || clip == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26, // keep the preview visible while trying looks
+      builder: (context) => LooksSheet(
+        vs: vs,
+        clip: clip,
+        onApply: (look, strength) {
+          _edit((vs) => vs.setClipLook([clip.id], look, strength: strength));
+          _vs?.seek(_playhead);
+        },
+        onApplyAll: (look, strength) {
+          final ids = [
+            for (final t in _project!.tracks)
+              if (!t.audio && !t.locked) ...t.clips.map((c) => c.id)
+          ];
+          _edit((vs) {
+            vs.setClipLook(ids, look, strength: strength);
+            _status = 'Đã áp dụng bộ lọc cho ${ids.length} clip';
+          });
+          _vs?.seek(_playhead);
+        },
+      ),
+    );
+  }
+
   static String _ago(DateTime t) {
     final d = DateTime.now().difference(t);
     if (d.inMinutes < 1) return 'vừa xong';
@@ -639,6 +679,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
           _Tool(icon: Icons.add_photo_alternate_outlined, label: 'Nhập', onTap: _import),
           _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
+          _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedVideoClip == null ? null : _looks),
           _Tool(
               icon: Icons.delete_outline,
               label: 'Xóa',
