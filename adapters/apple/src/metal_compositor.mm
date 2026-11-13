@@ -24,26 +24,30 @@ const char* kShader = R"(
 #include <metal_stdlib>
 using namespace metal;
 
-struct VOut { float4 pos [[position]]; float2 uv; };
-struct Quad { float4 rect; };  // NDC x0, y0 (top), x1, y1 (bottom)
-struct Layer { float opacity; uint exact; int2 offset; };
+struct VOut { float4 pos [[position]]; };
+struct Quad { float4 rect; };  // NDC x0, y0 (top), x1, y1 (bottom), one pixel larger than the layer
+// rect: layer in output pixels (left, top, right, bottom). Coverage and texture
+// coordinates come from the pixel centre, exactly as the CPU reference computes
+// them, so edges do not depend on the rasteriser's rules or snapping.
+struct Layer { float4 rect; float opacity; uint exact; int2 offset; };
 
 vertex VOut vs_quad(uint vid [[vertex_id]], constant Quad& q [[buffer(0)]]) {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
     VOut o;
     o.pos = float4(mix(q.rect.x, q.rect.z, t.x), mix(q.rect.y, q.rect.w, t.y), 0.0, 1.0);
-    o.uv = t;
     return o;
 }
 
 fragment float4 fs_layer(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                          constant Layer& l [[buffer(0)]]) {
+    float2 p = in.pos.xy;  // pixel centre (x + 0.5, y + 0.5)
+    if (p.x < l.rect.x || p.x >= l.rect.z || p.y < l.rect.y || p.y >= l.rect.w) discard_fragment();
     float4 c;
     if (l.exact != 0u) {
-        c = tex.read(uint2(int2(floor(in.pos.xy)) - l.offset));
+        c = tex.read(uint2(int2(floor(p)) - l.offset));
     } else {
         constexpr sampler s(filter::linear, address::clamp_to_edge, coord::normalized);
-        c = tex.sample(s, in.uv);
+        c = tex.sample(s, (p - l.rect.xy) / (l.rect.zw - l.rect.xy));
     }
     c.a *= l.opacity;
     return c;
@@ -54,6 +58,7 @@ struct QuadU {
     float rect[4];
 };
 struct LayerU {
+    float rect[4];
     float opacity;
     uint32_t exact;
     int32_t offset[2];
@@ -102,11 +107,14 @@ public:
                 }
                 const long ileft = std::lround(left), itop = std::lround(top);
                 const bool exact = std::abs(s - 1.0) < 1e-9 && std::abs(left - ileft) < 1e-6 && std::abs(top - itop) < 1e-6;
-                QuadU q{{float(left / W * 2.0 - 1.0), float(1.0 - top / H * 2.0), float((left + w) / W * 2.0 - 1.0),
-                         float(1.0 - (top + h) / H * 2.0)}};
+                QuadU q{{float((left - 1) / W * 2.0 - 1.0), float(1.0 - (top - 1) / H * 2.0),
+                         float((left + w + 1) / W * 2.0 - 1.0), float(1.0 - (top + h + 1) / H * 2.0)}};
                 // CPU reference quantises opacity to 1/255.
                 const double op = std::lround(std::clamp(tr.opacity, 0.0, 1.0) * 255.0) / 255.0;
-                LayerU u{float(op), exact ? 1u : 0u, {int32_t(ileft), int32_t(itop)}};
+                LayerU u{{float(left), float(top), float(left + w), float(top + h)},
+                         float(op),
+                         exact ? 1u : 0u,
+                         {int32_t(ileft), int32_t(itop)}};
                 [enc setVertexBytes:&q length:sizeof q atIndex:0];
                 [enc setFragmentBytes:&u length:sizeof u atIndex:0];
                 [enc setFragmentTexture:tex atIndex:0];

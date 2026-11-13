@@ -112,15 +112,16 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     for (int x = x0; x < x1; ++x) {
         const double sx = (x + 0.5 - left) * inv - 0.5;
         Col& c = cols[static_cast<std::size_t>(x - x0)];
-        c.inside = sx >= -0.5 && sx <= sw - 0.5;
+        // Half-open coverage by pixel centre: [left, left + w). Shared with the GPU compositors.
+        c.inside = x + 0.5 >= left && x + 0.5 < left + w;
         const int ix = std::clamp(static_cast<int>(std::floor(sx)), 0, sw - 1);
         c.i0 = ix * 4;
         c.i1 = std::min(ix + 1, sw - 1) * 4;
         c.f = static_cast<unsigned>(std::lround(std::clamp(sx - ix, 0.0, 1.0) * 256));
     }
     for (int y = y0; y < y1; ++y) {
+        if (y + 0.5 < top || y + 0.5 >= top + h) continue;
         const double sy = (y + 0.5 - top) * inv - 0.5;
-        if (sy < -0.5 || sy > sh - 0.5) continue;
         const int iy = std::clamp(static_cast<int>(std::floor(sy)), 0, sh - 1);
         const int iy1 = std::min(iy + 1, sh - 1);
         const unsigned fy = static_cast<unsigned>(std::lround(std::clamp(sy - iy, 0.0, 1.0) * 256));
