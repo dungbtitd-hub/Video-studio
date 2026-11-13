@@ -9,6 +9,7 @@
 #include <string>
 
 #include "vstudio/editor.hpp"
+#include "vstudio/export_presets.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -494,17 +495,55 @@ int vs_audio_format(vs_session* s, int* sr, int* ch) {
     return 0;
 }
 
+namespace {
+void startExport(vs_session* s, const char* out_path, const ExportSettings& es);
+}
+
 int vs_export_start(vs_session* s, const char* out_path, int width, int height, int fps_num, int fps_den,
                     int64_t video_bitrate) {
     return guard(s, [&] {
-        if (s->exportStatus == VS_EXPORT_RUNNING) throw std::runtime_error("an export is already running");
-        if (!s->media()) throw std::runtime_error("no media module available");
-        if (!s->jobs) s->jobs = std::make_unique<JobScheduler>(1);
         ExportSettings es;
         es.width = width > 0 ? width : s->editor->project().canvas.width;
         es.height = height > 0 ? height : s->editor->project().canvas.height;
         es.fps = fps_num > 0 && fps_den > 0 ? Rational{fps_num, fps_den} : s->editor->project().fps;
         if (video_bitrate > 0) es.videoBitrate = video_bitrate;
+        startExport(s, out_path, es);
+    });
+}
+
+char* vs_export_presets_json(vs_session* s) {
+    return guardStr(s, [&] {
+        const Project& p = s->editor->project();
+        const double seconds = p.duration().seconds();
+        Json out = Json::array();
+        for (const auto& pr : exportPresets()) {
+            const ExportSettings es = exportSettingsFor(p, pr);
+            out.push_back({{"id", pr.id},
+                           {"name", pr.name},
+                           {"description", pr.description},
+                           {"width", es.width},
+                           {"height", es.height},
+                           {"fps", static_cast<double>(es.fps.num) / es.fps.den},
+                           {"video_bitrate", es.videoBitrate},
+                           {"estimated_bytes", estimateExportBytes(es, seconds)}});
+        }
+        return out.dump();
+    });
+}
+
+int vs_export_start_preset(vs_session* s, const char* out_path, const char* preset_id) {
+    return guard(s, [&] {
+        const ExportPreset* pr = findExportPreset(str(preset_id));
+        if (!pr) throw std::runtime_error("unknown export preset: " + str(preset_id));
+        startExport(s, out_path, exportSettingsFor(s->editor->project(), *pr));
+    });
+}
+
+namespace {
+void startExport(vs_session* s, const char* out_path, const ExportSettings& es) {
+        if (s->exportStatus == VS_EXPORT_RUNNING) throw std::runtime_error("an export is already running");
+        if (!s->media()) throw std::runtime_error("no media module available");
+        if (!s->jobs) s->jobs = std::make_unique<JobScheduler>(1);
         s->exportCancel = CancelToken{};
         s->exportProgress = 0.0;
         s->exportStatus = VS_EXPORT_RUNNING;
@@ -527,8 +566,8 @@ int vs_export_start(vs_session* s, const char* out_path, int width, int height, 
                             s->exportStatus = r.ok ? VS_EXPORT_DONE : (r.cancelled ? VS_EXPORT_CANCELLED : VS_EXPORT_FAILED);
                         },
                         s->exportCancel);
-    });
 }
+}  // namespace
 
 int vs_export_status(vs_session* s, double* progress) {
     if (!s) return VS_EXPORT_FAILED;

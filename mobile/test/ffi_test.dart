@@ -41,6 +41,12 @@ void main() {
     vs.removeTrack(v2);
     expect(vs.project().tracks.single.id, v1);
     expect(() => vs.removeTrack('nope'), throwsA(isA<VStudioException>()));
+    // Export presets: sized from the 640x360 canvas, unknown ids refused.
+    final presets = vs.exportPresets();
+    expect(presets.map((p) => p.id), containsAll(['social', 'fhd1080', 'uhd2160']));
+    final fhd = presets.firstWhere((p) => p.id == 'fhd1080');
+    expect((fhd.width, fhd.height), (1920, 1080));
+    expect(() => vs.startExportPreset('/tmp/x.mp4', 'nope'), throwsA(isA<VStudioException>()));
     // No clips: nothing to snap to except 0 and the playhead.
     expect(() => vs.snapClipMove('nope', 1, 0.1), returnsNormally);
   }, skip: skip);
@@ -57,6 +63,17 @@ void main() {
     final right = vs.project().tracks.single.clips[1];
     expect(vs.snapClipMove(right.id, 3.05, 0.1, playhead: 3.0), closeTo(3.0, 1e-9));
     expect(vs.snapClipMove(right.id, 3.5, 0.1, playhead: 3.0), isNull);
+    // A real export through a preset finishes and writes a file.
+    final out = '${Directory.systemTemp.path}/vs_ffi_export_${DateTime.now().microsecondsSinceEpoch}.mp4';
+    addTearDown(() => File(out).existsSync() ? File(out).deleteSync() : null);
+    vs.startExportPreset(out, 'hd720');
+    var (state, _) = vs.exportStatus();
+    for (var i = 0; i < 3000 && state == ExportState.running; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      (state, _) = vs.exportStatus();
+    }
+    expect(state, ExportState.done, reason: vs.lastError);
+    expect(File(out).lengthSync(), greaterThan(1000));
     vs.setPreviewSize(320, 180);
     vs.seek(1.5);
     PreviewFrame? f;

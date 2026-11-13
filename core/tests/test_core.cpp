@@ -4,6 +4,7 @@
 
 #include "fake_media.hpp"
 #include "vstudio/editor.hpp"
+#include "vstudio/export_presets.hpp"
 #include "vstudio/frame_cache.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -633,6 +634,34 @@ TEST("ripple delete closes the gap; edit points for navigation") {
     CHECK(p.findClip(b));
     f.ed.setTrackFlags(f.v1, true, true, false);
     CHECK_THROWS(f.ed.rippleDelete(a));
+}
+
+TEST("export presets keep the canvas aspect") {
+    Project portrait = Editor::newProject("P", 1080, 1920, {30, 1}, "test");
+    Project wide = Editor::newProject("W", 3840, 2160, {60, 1}, "test");
+    Project odd = Editor::newProject("O", 1000, 750, {25, 1}, "test");
+    auto s = exportSettingsFor(portrait, *findExportPreset("fhd1080"));
+    CHECK_EQ(s.width, 1080);
+    CHECK_EQ(s.height, 1920);
+    s = exportSettingsFor(wide, *findExportPreset("hd720"));
+    CHECK_EQ(s.width, 1280);
+    CHECK_EQ(s.height, 720);
+    CHECK_EQ(s.fps.num, 30);  // 720p preset caps at 30 fps
+    s = exportSettingsFor(wide, *findExportPreset("social"));
+    CHECK_EQ(s.fps.num, 60);  // up to 60 kept
+    s = exportSettingsFor(odd, *findExportPreset("fhd1080"));
+    CHECK_EQ(s.height, 1080);
+    CHECK_EQ(s.width, 1440);
+    CHECK(s.width % 2 == 0 && s.height % 2 == 0);
+    s = exportSettingsFor(wide, *findExportPreset("master"));
+    CHECK_EQ(s.width, 3840);
+    CHECK(s.videoBitrate <= 100'000'000 && s.videoBitrate >= 1'000'000);
+    // 1080p30 portrait: about 7.5 Mbit/s -> ~1 MB per second of video.
+    s = exportSettingsFor(portrait, *findExportPreset("fhd1080"));
+    const auto bytes = estimateExportBytes(s, 10);
+    CHECK(bytes > 9'000'000 && bytes < 11'000'000);
+    CHECK(findExportPreset("nope") == nullptr);
+    for (const auto& pr : exportPresets()) CHECK(!pr.name.empty() && !pr.id.empty());
 }
 
 TEST("snap: thousands of clips stay fast") {

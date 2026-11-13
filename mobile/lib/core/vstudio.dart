@@ -44,6 +44,21 @@ class WaveformData {
 
 enum ExportState { idle, running, done, failed, cancelled }
 
+class ExportPresetView {
+  ExportPresetView.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        description = j['description'] as String,
+        width = j['width'] as int,
+        height = j['height'] as int,
+        fps = (j['fps'] as num).toDouble(),
+        videoBitrate = j['video_bitrate'] as int,
+        estimatedBytes = j['estimated_bytes'] as int;
+  final String id, name, description;
+  final int width, height, videoBitrate, estimatedBytes;
+  final double fps;
+}
+
 class VStudio {
   VStudio._(this._b, this._s);
 
@@ -182,6 +197,13 @@ class VStudio {
 
   void startExport(String outPath, {int width = 0, int height = 0}) =>
       using((a) => _check(_b.exportStart(_s, outPath.toNativeUtf8(allocator: a), width, height, 0, 0, 0)));
+
+  /// Shared presets, sized for this project (its aspect is kept).
+  List<ExportPresetView> exportPresets() => (jsonDecode(_take(_b.exportPresetsJson(_s))) as List)
+      .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
+      .toList();
+  void startExportPreset(String outPath, String presetId) => using(
+      (a) => _check(_b.exportStartPreset(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a))));
 
   (ExportState, double) exportStatus() => using((a) {
         final p = a<Double>();

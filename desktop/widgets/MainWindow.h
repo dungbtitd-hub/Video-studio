@@ -33,6 +33,7 @@ private:
     void buildMenus();
     void importMedia();
     void exportVideo();
+    QString choosePreset();  // empty = cancelled
     void showShortcuts();
     bool confirmDiscard();  // false = user cancelled
     void refreshAssets();

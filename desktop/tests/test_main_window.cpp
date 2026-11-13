@@ -100,6 +100,19 @@ private slots:
         QVERIFY(std::abs(tl->pxPerSec() - fit) < 1e-6);
     }
 
+    void exportPresetsForProject() {
+        const QVariantList presets = ctrl_->exportPresets();
+        QCOMPARE(presets.size(), 6);
+        for (const QVariant& v : presets) {
+            const QVariantMap m = v.toMap();
+            if (m["id"] == "fhd1080") {
+                QCOMPARE(m["width"].toInt(), 1920);  // synthetic project is 1920x1080
+                QCOMPARE(m["height"].toInt(), 1080);
+                QVERIFY(m["estimatedBytes"].toLongLong() > 0);
+            }
+        }
+    }
+
     void layoutResets() {
         auto* media = win_->findChild<QDockWidget*>("media");
         QVERIFY(media);
