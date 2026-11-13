@@ -1,0 +1,13 @@
+{
+  "$comment": "Windows dependencies (used when configuring with the vcpkg toolchain). Linux and macOS use system packages. FFmpeg is built LGPL (no 'gpl' feature): H.264 export uses the Windows Media Foundation encoder, with OpenH264 as fallback.",
+  "name": "video-studio",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "nlohmann-json",
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": ["avcodec", "avformat", "swscale", "swresample", "openh264"]
+    }
+  ]
+}
