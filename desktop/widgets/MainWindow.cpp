@@ -5,7 +5,10 @@
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QPixmap>
 #include <QListWidget>
+#include <QPainter>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QToolBar>
@@ -94,6 +97,13 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     auto* importBtn = new QPushButton("+ Nhập", mediaBox);
     ml->addWidget(importBtn);
     assets_ = new QListWidget(mediaBox);
+    assets_->setViewMode(QListView::IconMode);
+    assets_->setIconSize(QSize(128, 72));
+    assets_->setGridSize(QSize(140, 120));
+    assets_->setResizeMode(QListView::Adjust);
+    assets_->setMovement(QListView::Static);
+    assets_->setWordWrap(true);
+    assets_->setContextMenuPolicy(Qt::CustomContextMenu);
     ml->addWidget(assets_);
     mediaDock->setWidget(mediaBox);
     addDockWidget(Qt::LeftDockWidgetArea, mediaDock);
@@ -102,8 +112,31 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
             "Media (*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.mp3 *.wav *.m4a *.aac *.flac *.jpg *.jpeg *.png *.webp);;All (*)");
         if (!files.isEmpty()) editor_->importMedia(files);
     });
-    connect(assets_, &QListWidget::itemDoubleClicked, this,
-            [this](QListWidgetItem* it) { editor_->addToTimeline(it->data(Qt::UserRole).toString()); });
+    connect(assets_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) {
+        const QString id = it->data(Qt::UserRole).toString();
+        if (editor_->assetMissing(id)) return relinkAsset(id);
+        editor_->addToTimeline(id);
+    });
+    connect(assets_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        QListWidgetItem* it = assets_->itemAt(pos);
+        if (!it) return;
+        const QString id = it->data(Qt::UserRole).toString();
+        QMenu menu(this);
+        menu.addAction("Thêm vào Timeline", this, [this, id] { editor_->addToTimeline(id); })
+            ->setEnabled(!editor_->assetMissing(id));
+        menu.addAction("Tìm file trong thư mục…", this, [this, id] { relinkAsset(id); });
+        menu.addAction("Chọn file thay thế…", this, [this, id] {
+            const QUrl f = QFileDialog::getOpenFileUrl(this, "Chọn file thay thế");
+            if (!f.isEmpty()) editor_->relinkToFile(id, f);
+        });
+        menu.exec(assets_->viewport()->mapToGlobal(pos));
+    });
+    // A thumbnail strip arrived: update only that item's icon.
+    connect(editor_, &EditorController::mediaLibraryChanged, this, [this](const QString& id) {
+        icons_.remove(id);
+        for (int i = 0; i < assets_->count(); ++i)
+            if (assets_->item(i)->data(Qt::UserRole).toString() == id) assets_->item(i)->setIcon(assetIcon(id));
+    });
 
     auto* inspectorDock = new QDockWidget("Thuộc tính", this);
     auto* ib = new QWidget(inspectorDock);
@@ -156,15 +189,57 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     refreshState();
 }
 
+QIcon MainWindow::assetIcon(const QString& id) {
+    const QString key = id + (editor_->assetMissing(id) ? "!" : "");
+    if (auto it = icons_.constFind(key); it != icons_.constEnd()) return *it;
+    QPixmap pm(128, 72);
+    pm.fill(QColor("#1b1f27"));
+    if (auto t = editor_->thumbnails(id); t && t->count() > 0) {
+        // Middle frame of the strip, contained in the icon.
+        const int i = t->count() / 2;
+        const QImage img(t->frame(i), t->width, t->height, t->width * 4, QImage::Format_RGBA8888);
+        QPainter p(&pm);
+        const QImage scaled = img.scaled(pm.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        p.drawImage((pm.width() - scaled.width()) / 2, (pm.height() - scaled.height()) / 2, scaled);
+    }
+    else if (auto w = editor_->waveform(id); w && w->buckets() > 0) {
+        // Audio-only media: the envelope across the icon.
+        QPainter p(&pm);
+        p.setPen(QColor(120, 220, 170));
+        const double k = 30.0 / std::max(16, w->loudest);
+        for (int x = 0; x < pm.width(); ++x) {
+            const std::size_t i = std::size_t(x) * w->buckets() / pm.width();
+            p.drawLine(x, int(36 - w->peaks[i * 2 + 1] * k), x, int(36 - w->peaks[i * 2] * k));
+        }
+    }
+    if (editor_->assetMissing(id)) {
+        QPainter p(&pm);
+        p.fillRect(pm.rect(), QColor(120, 20, 20, 170));
+        p.setPen(Qt::white);
+        p.drawText(pm.rect(), Qt::AlignCenter, "⚠ Mất file");
+    }
+    const QIcon icon(pm);
+    if (editor_->thumbnails(id) || editor_->waveform(id) || editor_->assetMissing(id)) icons_.insert(key, icon);  // placeholder is not cached
+    return icon;
+}
+
+void MainWindow::relinkAsset(const QString& id) {
+    const QUrl dir = QFileDialog::getExistingDirectoryUrl(this, "Tìm file media trong thư mục");
+    if (!dir.isEmpty()) editor_->relinkFromFolder(id, dir);
+}
+
 void MainWindow::refreshAssets() {
     assets_->clear();
     for (const QVariant& v : editor_->assets()) {
         const QVariantMap a = v.toMap();
-        auto* it = new QListWidgetItem(QString("%1\n%2  %3  %4 s")
-                                           .arg(a["name"].toString(), a["type"].toString(), a["resolution"].toString())
-                                           .arg(a["duration"].toDouble(), 0, 'f', 1));
-        it->setData(Qt::UserRole, a["id"]);
-        it->setToolTip("Nhấp đúp để thêm vào Timeline");
+        const QString id = a["id"].toString();
+        const bool missing = editor_->assetMissing(id);
+        auto* it = new QListWidgetItem(assetIcon(id), QString("%1\n%2 s").arg(a["name"].toString())
+                                                          .arg(a["duration"].toDouble(), 0, 'f', 1));
+        it->setData(Qt::UserRole, id);
+        it->setToolTip(missing ? "Không tìm thấy file. Nhấp đúp để tìm trong một thư mục."
+                               : QString("%1  %2\nNhấp đúp để thêm vào Timeline").arg(a["type"].toString(), a["resolution"].toString()));
+        if (missing) it->setForeground(QColor("#ff8a80"));
         assets_->addItem(it);
     }
 }

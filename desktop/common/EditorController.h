@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
@@ -14,6 +15,7 @@
 #include <optional>
 
 #include "vstudio/editor.hpp"
+#include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/scheduler.hpp"
@@ -89,6 +91,14 @@ public:
     int pendingJobs() const { return pendingJobs_; }
     double fps() const;
 
+    // ---- media library: thumbnails / waveforms built in the background ----
+    [[nodiscard]] std::shared_ptr<const vstudio::ThumbnailStrip> thumbnails(const QString& assetId) const;
+    [[nodiscard]] std::shared_ptr<const vstudio::Waveform> waveform(const QString& assetId) const;
+    [[nodiscard]] bool assetMissing(const QString& assetId) const { return missing_.contains(assetId); }
+    // Searches `folder` (in the background) for the moved file and relinks it.
+    Q_INVOKABLE void relinkFromFolder(const QString& assetId, const QUrl& folder);
+    Q_INVOKABLE void relinkToFile(const QString& assetId, const QUrl& file);
+
 signals:
     void projectChanged();
     void playheadChanged();
@@ -98,6 +108,7 @@ signals:
     void statusChanged();
     void jobsChanged();
     void frameReady(const QImage& frame);
+    void mediaLibraryChanged(const QString& assetId);  // a thumbnail strip or waveform is ready
 
 private:
     template <class F>
@@ -110,11 +121,17 @@ private:
     void onProbed(const std::optional<vstudio::MediaAsset>& asset, const std::string& err, const std::string& path,
                   bool appendToTimeline);
     void resetSession(vstudio::Project p, const QString& packageDir);
+    void refreshLibrary();  // missing files + background requests, only when the asset list changed
+    [[nodiscard]] std::string resolve(const vstudio::MediaAsset& a) const;
 
     vstudio::ModuleRegistry modules_;
     std::shared_ptr<vstudio::IMediaBackend> backend_;
     std::unique_ptr<vstudio::Editor> editor_;
     std::unique_ptr<vstudio::JobScheduler> jobs_;
+    std::unique_ptr<vstudio::JobScheduler> libJobs_;  // thumbnails, waveforms, relink search
+    std::unique_ptr<vstudio::MediaLibrary> library_;
+    QSet<QString> missing_;
+    std::size_t assetsSignature_ = 0;
     std::unique_ptr<vstudio::PreviewEngine> preview_;
     std::unique_ptr<AudioOutput> audio_;
     int previewW_ = 960, previewH_ = 540;

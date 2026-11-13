@@ -460,6 +460,7 @@ TEST("media library: thumbnails and waveform in the background, cached on disk")
         CHECK_EQ(w->buckets(), std::size_t(500));
         CHECK_EQ(int(w->peaks[0]), 0);  // min of the sawtooth
         CHECK(w->peaks[1] >= 30 && w->peaks[1] <= 32);  // max ~0.245 * 127
+        CHECK_EQ(w->loudest, int(w->peaks[1]));
     }
     // A new library (next session) reads both from the disk cache without decoding.
     const int decodes = fake::decodes.load();

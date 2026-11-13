@@ -22,6 +22,7 @@ TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWid
     connect(editor_, &EditorController::projectChanged, this, &TimelineWidget::rebuild);
     connect(editor_, &EditorController::playheadChanged, this, qOverload<>(&QWidget::update));
     connect(editor_, &EditorController::selectionChanged, this, qOverload<>(&QWidget::update));
+    connect(editor_, &EditorController::mediaLibraryChanged, this, qOverload<>(&QWidget::update));
     rebuild();
 }
 
@@ -51,7 +52,8 @@ void TimelineWidget::rebuild() {
             const double st = c.timelineIn.seconds();
             t.clips.push_back({QString::fromStdString(c.id), st, st + c.duration().seconds(),
                                names.value(QString::fromStdString(c.assetId), QStringLiteral("?")),
-                               c.effects.is_array() && !c.effects.empty()});
+                               c.effects.is_array() && !c.effects.empty(), QString::fromStdString(c.assetId),
+                               c.sourceIn.seconds(), double(c.speed.num) / c.speed.den});
         }
         tracks_.push_back(std::move(t));
     }
@@ -129,6 +131,16 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             p.setPen(QPen(selected ? Theme::accent() : (t.audio ? Theme::clipAudio() : Theme::clipVideo()), selected ? 2 : 1));
             p.setBrush(t.audio ? Theme::clipAudio2() : Theme::clipVideo2());
             p.drawRoundedRect(r, 4, 4);
+            if (r.width() > 8) {
+                p.save();
+                p.setClipRect(r.adjusted(1, 1, -1, -1).intersected(QRectF(kHeaderW, kRulerH, w - kHeaderW, h - kRulerH)));
+                if (t.audio) paintWaveform(p, *it, r);
+                else paintThumbnails(p, *it, r);
+                p.restore();
+                p.setPen(QPen(selected ? Theme::accent() : (t.audio ? Theme::clipAudio() : Theme::clipVideo()), selected ? 2 : 1));
+                p.setBrush(Qt::NoBrush);
+                p.drawRoundedRect(r, 4, 4);
+            }
             if (r.width() > 30) {
                 p.setPen(Theme::fg());
                 p.drawText(r.adjusted(6, 3, -4, 0), Qt::AlignLeft | Qt::AlignTop,
@@ -239,5 +251,47 @@ void TimelineWidget::wheelEvent(QWheelEvent* e) {
         update();
     } else {
         hbar_->setValue(hbar_->value() - e->angleDelta().y() * 2);
+    }
+}
+
+void TimelineWidget::paintThumbnails(QPainter& p, const Clip& c, const QRectF& r) const {
+    const auto strip = editor_->thumbnails(c.assetId);
+    if (!strip || strip->count() == 0) return;
+    const double th = r.height() - 16, tw = th * strip->width / strip->height;  // keep the clip name readable
+    if (tw < 4) return;
+    const double total = strip->times.size() > 1 ? (strip->times.back() - strip->times.front()).seconds() *
+                                                       strip->count() / (strip->count() - 1)
+                                                 : 0.0;
+    // Tiles only across the visible part of the clip.
+    const double x0 = std::max(r.left(), double(kHeaderW)), x1 = std::min(r.right(), double(width()));
+    for (double x = r.left() + std::floor((x0 - r.left()) / tw) * tw; x < x1; x += tw) {
+        const double src = c.srcIn + (x + tw / 2 - r.left()) / pxPerSec_ * c.speed;
+        const int i = total > 0 ? std::clamp(int(src / total * strip->count()), 0, strip->count() - 1) : 0;
+        const QImage img(strip->frame(i), strip->width, strip->height, strip->width * 4, QImage::Format_RGBA8888);
+        p.drawImage(QRectF(x, r.top() + 15, tw, th), img);
+    }
+}
+
+void TimelineWidget::paintWaveform(QPainter& p, const Clip& c, const QRectF& r) const {
+    const auto wf = editor_->waveform(c.assetId);
+    if (!wf || wf->buckets() == 0) return;
+    // Quiet media is scaled up (at most 8x) so its shape stays visible.
+    const double mid = r.center().y() + 6,
+                 half = (r.height() - 16) / 2 / std::max(127.0 / 8, double(std::max(1, wf->loudest))) * 127.0;
+    p.setPen(QColor(120, 220, 170, 200));
+    const int x0 = int(std::max(r.left(), double(kHeaderW))), x1 = int(std::min(r.right(), double(width())));
+    const auto n = static_cast<std::int64_t>(wf->buckets());
+    for (int x = x0; x < x1; ++x) {
+        // Source range under this pixel column -> max envelope over its buckets.
+        const double a = c.srcIn + (x - r.left()) / pxPerSec_ * c.speed, b = a + c.speed / pxPerSec_;
+        std::int64_t i0 = std::int64_t(a * wf->bucketsPerSecond), i1 = std::int64_t(b * wf->bucketsPerSecond) + 1;
+        i0 = std::clamp<std::int64_t>(i0, 0, n - 1);
+        i1 = std::clamp<std::int64_t>(i1, i0 + 1, n);
+        int lo = 0, hi = 0;
+        for (std::int64_t k = i0; k < i1; ++k) {
+            lo = std::min<int>(lo, wf->peaks[std::size_t(k) * 2]);
+            hi = std::max<int>(hi, wf->peaks[std::size_t(k) * 2 + 1]);
+        }
+        p.drawLine(QPointF(x + 0.5, mid - hi / 127.0 * half), QPointF(x + 0.5, mid - lo / 127.0 * half));
     }
 }

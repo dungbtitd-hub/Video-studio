@@ -37,6 +37,7 @@ struct ThumbnailStrip {
 struct Waveform {
     int bucketsPerSecond = 100;
     std::vector<std::int8_t> peaks;  // min0, max0, min1, max1, ...
+    int loudest = 0;                 // max |peak|, 0..127: lets a UI scale quiet audio up
     [[nodiscard]] std::size_t buckets() const { return peaks.size() / 2; }
 };
 

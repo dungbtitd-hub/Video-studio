@@ -275,6 +275,8 @@ void MediaLibrary::requestWaveform(const MediaAsset& a, const std::string& path,
                              else writeWave(file, *w);
                          }
                      }
+                     if (w)
+                         for (std::int8_t v : w->peaks) w->loudest = std::max(w->loudest, std::abs(int(v)));
                      {
                          std::lock_guard lk(st->mu);
                          st->inflight.erase(key);

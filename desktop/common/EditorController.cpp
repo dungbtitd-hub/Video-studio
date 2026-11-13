@@ -44,6 +44,7 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
     std::string err;
     backend_ = modules_.best<IMediaBackend>("decode", &err);
     jobs_ = std::make_unique<JobScheduler>();
+    libJobs_ = std::make_unique<JobScheduler>(1);
     resetSession(Editor::newProject("Untitled", 1920, 1080, {30, 1}, ModuleRegistry::currentPlatform()), {});
     if (!backend_) setStatus(tr("No media module available: %1").arg(q(err)));
     // UI refresh only; never decodes. ~60 Hz while playing.
@@ -54,6 +55,8 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 
 EditorController::~EditorController() {
     exportCancel_.cancel();
+    library_.reset();
+    libJobs_.reset();
     audio_.reset();
     preview_.reset();
     jobs_.reset();
@@ -78,6 +81,14 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
         QMetaObject::invokeMethod(this, [this, img] { emit frameReady(img); }, Qt::QueuedConnection);
     });
     audio_ = std::make_unique<AudioOutput>(preview_.get(), editor_->project().sampleRate, editor_->project().audioChannels);
+    // Disk cache next to the project (or in temp until it is saved), keyed by file fingerprint.
+    library_.reset();
+    const QString cache = packageDir.isEmpty() ? QDir::tempPath() + "/vstudio-media-cache" : packageDir + "/cache/media";
+    library_ = std::make_unique<MediaLibrary>(backend_, *libJobs_, s(cache));
+    library_->setListener([this](const Id& id, MediaLibrary::Kind, bool) {
+        QMetaObject::invokeMethod(this, [this, id = q(id)] { emit mediaLibraryChanged(id); }, Qt::QueuedConnection);
+    });
+    assetsSignature_ = 0;
     selected_.clear();
     playhead_ = 0;
     published();
@@ -235,6 +246,7 @@ void EditorController::published() {
     snapshot_ = editor_->snapshot();
     preview_->setProject(snapshot_);
     assetsDirty_ = tracksDirty_ = true;
+    refreshLibrary();
     emit projectChanged();
 }
 
@@ -439,4 +451,66 @@ void EditorController::buildTracksModel() const {
         tm["clips"] = clips;
         tracks_.push_back(tm);
     }
+}
+
+// ---- media library ----
+
+std::string EditorController::resolve(const MediaAsset& a) const {
+    QString p = q(a.uri);
+    if (QFileInfo(p).isRelative() && !packageDir_.isEmpty()) p = q(mediaBaseDir(s(packageDir_))) + "/" + p;
+    return s(p);
+}
+
+void EditorController::refreshLibrary() {
+    if (!library_ || !snapshot_) return;
+    // Clip edits do not touch assets: skip the file checks unless ids or paths changed.
+    std::size_t sig = snapshot_->assets.size();
+    for (const auto& a : snapshot_->assets) sig = sig * 1000003u ^ std::hash<std::string>{}(a.id + "|" + a.uri);
+    if (sig == assetsSignature_) return;
+    assetsSignature_ = sig;
+    missing_.clear();
+    for (const auto& id : missingAssets(*snapshot_, mediaBaseDir(s(packageDir_)))) missing_.insert(q(id));
+    for (const auto& a : snapshot_->assets) {
+        if (missing_.contains(q(a.id))) continue;
+        const std::string path = resolve(a);
+        library_->requestThumbnails(a, path, 12, 54);
+        library_->requestWaveform(a, path, 100);
+    }
+}
+
+std::shared_ptr<const ThumbnailStrip> EditorController::thumbnails(const QString& assetId) const {
+    return library_ ? library_->thumbnails(s(assetId)) : nullptr;
+}
+
+std::shared_ptr<const Waveform> EditorController::waveform(const QString& assetId) const {
+    return library_ ? library_->waveform(s(assetId)) : nullptr;
+}
+
+void EditorController::relinkToFile(const QString& assetId, const QUrl& file) {
+    const std::string path = s(file.toLocalFile());
+    edit([&] {
+        editor_->relinkAsset(s(assetId), makeUri(path, s(packageDir_)), fingerprintFile(path));
+        library_->forget(s(assetId));
+    });
+    setStatus(missing_.contains(assetId) ? tr("File still not found") : tr("Media relinked"));
+}
+
+void EditorController::relinkFromFolder(const QString& assetId, const QUrl& folder) {
+    const MediaAsset* a = editor_->project().findAsset(s(assetId));
+    if (!a) return;
+    ++pendingJobs_;
+    emit jobsChanged();
+    setStatus(tr("Searching for %1…").arg(QFileInfo(q(a->uri)).fileName()));
+    // The search reads directories and hashes same-size files: never on the UI thread.
+    libJobs_->submit("relink search", JobPriority::Normal, [this, asset = *a, dir = s(folder.toLocalFile()), assetId](const CancelToken&) {
+        const auto found = findRelinkCandidates(asset, dir);
+        QMetaObject::invokeMethod(this, [this, found, assetId] {
+            --pendingJobs_;
+            emit jobsChanged();
+            if (found.empty()) return setStatus(tr("No matching file in that folder"));
+            relinkToFile(assetId, QUrl::fromLocalFile(q(found.front().path)));
+            if (!found.front().fingerprintMatch)
+                setStatus(tr("Relinked by file name (content differs from the original): %1").arg(q(found.front().path)));
+        }, Qt::QueuedConnection);
+    });
 }

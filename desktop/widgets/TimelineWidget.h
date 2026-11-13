@@ -4,6 +4,7 @@
 // Dragging/trimming is drawn locally and committed as one edit on release.
 #pragma once
 
+#include <QPainter>
 #include <QScrollBar>
 #include <QWidget>
 #include <vector>
@@ -36,6 +37,9 @@ private:
         double start, end;
         QString name;
         bool fx;
+        QString assetId;
+        double srcIn;  // source seconds at `start`
+        double speed;  // source seconds per timeline second
     };
     struct Track {
         QString id, name;
@@ -49,6 +53,9 @@ private:
     [[nodiscard]] double timeToX(double t) const { return kHeaderW + (t - scroll_) * pxPerSec_; }
     [[nodiscard]] int trackAt(int y) const;
     const Clip* clipAt(int track, double t) const;
+    // Media drawn inside a clip, only for its visible part.
+    void paintThumbnails(QPainter& p, const Clip& c, const QRectF& r) const;
+    void paintWaveform(QPainter& p, const Clip& c, const QRectF& r) const;
     void updateScrollBar();
 
     static constexpr int kHeaderW = 120, kRulerH = 24, kTrackH = 54;
