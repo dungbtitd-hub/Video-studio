@@ -1,6 +1,7 @@
 #include "vstudio/editor.hpp"
 
 #include "vstudio/color_space.hpp"
+#include "vstudio/cover.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
 
@@ -199,9 +200,9 @@ Clip& editableClip(Project& p, const Id& clipId) {
     return *t->findClip(clipId);
 }
 
-void putKey(Clip& c, const std::string& prop, Keyframe k, Time tol) {
-    if (!c.keyframes.is_object()) c.keyframes = Json::object();
-    Json& arr = c.keyframes[prop];
+void putKeyIn(Json& keys, const std::string& prop, Keyframe k, Time tol) {
+    if (!keys.is_object()) keys = Json::object();
+    Json& arr = keys[prop];
     if (!arr.is_array()) arr = Json::array();
     Json out = Json::array();
     bool placed = false;
@@ -216,6 +217,23 @@ void putKey(Clip& c, const std::string& prop, Keyframe k, Time tol) {
     }
     if (!placed) out.push_back(keyframeJson(k));
     arr = std::move(out);
+}
+
+void putKey(Clip& c, const std::string& prop, Keyframe k, Time tol) { putKeyIn(c.keyframes, prop, k, tol); }
+
+Json& coverOf(Clip& c, const Id& effectId) {
+    if (c.effects.is_array())
+        for (auto& e : c.effects)
+            if (e.is_object() && e.value("effect_id", std::string{}) == effectId && e.value("type", std::string{}) == kCoverEffect)
+                return e;
+    throw EditError("cover not found");
+}
+
+double clampCover(const std::string& prop, double v) {
+    if (prop == "w" || prop == "h") return std::clamp(v, 0.005, 3.0);
+    if (prop == "x" || prop == "y") return std::clamp(v, -1.0, 2.0);
+    if (prop == "amount") return std::clamp(v, 0.0, 1.0);
+    return v;  // rotation
 }
 
 }  // namespace
@@ -314,6 +332,129 @@ void Editor::setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std
         }
         const Time tol = keyTolerance(p);
         for (const auto& [prop, v] : keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+    });
+}
+
+Id Editor::addCover(const Id& clipId, const Json& params) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    if (tr->type != TrackType::Video) throw EditError("covers need a picture");
+    Json p = defaultCover(params.value("style", std::string("blur")), params.value("shape", std::string("rect")));
+    if (params.is_object())
+        for (auto it = params.begin(); it != params.end(); ++it) p[it.key()] = it.value();
+    if (!findCoverStyle(p.value("style", std::string{}))) throw EditError("unknown cover style");
+    if (!isCoverShape(p.value("shape", std::string{}))) throw EditError("unknown cover shape");
+    const Id id = newId();
+    run("Add cover", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Clip& clip = editableClip(pr, clipId);
+        if (!clip.effects.is_array()) clip.effects = Json::array();
+        clip.effects.push_back(Json{{"effect_id", id}, {"type", kCoverEffect}, {"enabled", true}, {"params", p}});
+    });
+    return id;
+}
+
+const Json* Editor::coverParams(const Id& clipId, const Id& effectId) const {
+    const Clip* c = project_.findClip(clipId);
+    if (!c || !c->effects.is_array()) return nullptr;
+    for (const auto& e : c->effects)
+        if (e.is_object() && e.value("effect_id", std::string{}) == effectId && e.value("type", std::string{}) == kCoverEffect)
+            return &e["params"];
+    return nullptr;
+}
+
+void Editor::updateCover(const Id& clipId, const Id& effectId, const Json& patch) {
+    if (!coverParams(clipId, effectId)) throw EditError("cover not found");
+    if (patch.contains("style") && !findCoverStyle(patch.value("style", std::string{}))) throw EditError("unknown cover style");
+    if (patch.contains("shape") && !isCoverShape(patch.value("shape", std::string{}))) throw EditError("unknown cover shape");
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Edit cover", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Json& params = coverOf(editableClip(pr, clipId), effectId)["params"];
+        for (auto it = patch.begin(); it != patch.end(); ++it) {
+            if (it.value().is_null()) params.erase(it.key());
+            else params[it.key()] = it.value();
+        }
+    });
+}
+
+void Editor::removeCover(const Id& clipId, const Id& effectId) {
+    if (!coverParams(clipId, effectId)) throw EditError("cover not found");
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Remove cover", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Clip& clip = editableClip(pr, clipId);
+        Json kept = Json::array();
+        for (const auto& e : clip.effects)
+            if (!(e.is_object() && e.value("effect_id", std::string{}) == effectId)) kept.push_back(e);
+        clip.effects = std::move(kept);
+    });
+}
+
+void Editor::setCoverAt(const Id& clipId, const Id& effectId, Time sourceTime, const std::map<std::string, double>& values) {
+    const Json* params = coverParams(clipId, effectId);
+    if (!params) throw EditError("cover not found");
+    for (const auto& [prop, v] : values) {
+        (void)v;
+        if (std::find(coverAnimatable().begin(), coverAnimatable().end(), prop) == coverAnimatable().end())
+            throw EditError("not a cover property: " + prop);
+    }
+    const bool follows = params->contains("anim") && (*params)["anim"].is_object() && !(*params)["anim"].empty();
+    const Track* tr = project_.trackOfClip(clipId);
+    run(follows ? "Move cover (key)" : "Move cover", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Json& p = coverOf(editableClip(pr, clipId), effectId)["params"];
+        const Time tol = keyTolerance(pr);
+        for (const auto& [prop, v] : values) {
+            if (follows && p["anim"].contains(prop)) putKeyIn(p["anim"], prop, Keyframe{sourceTime, clampCover(prop, v), Ease::Smooth}, tol);
+            else p[prop] = clampCover(prop, v);
+        }
+    });
+}
+
+void Editor::keyCover(const Id& clipId, const Id& effectId, Time sourceTime) {
+    const Json* params = coverParams(clipId, effectId);
+    if (!params) throw EditError("cover not found");
+    const Json now = coverParamsAt(*params, sourceTime);
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Follow motion", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Json& p = coverOf(editableClip(pr, clipId), effectId)["params"];
+        const Time tol = keyTolerance(pr);
+        for (const char* prop : {"x", "y", "w", "h"})
+            putKeyIn(p["anim"], prop, Keyframe{sourceTime, now.value(prop, 0.0), Ease::Smooth}, tol);
+    });
+}
+
+void Editor::clearCoverKeys(const Id& clipId, const Id& effectId, Time sourceTime) {
+    const Json* params = coverParams(clipId, effectId);
+    if (!params) throw EditError("cover not found");
+    const Json now = coverParamsAt(*params, sourceTime);
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Stop following", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Json& p = coverOf(editableClip(pr, clipId), effectId)["params"];
+        for (const auto& prop : coverAnimatable())
+            if (now.contains(prop)) p[prop] = now[prop];
+        p.erase("anim");
+    });
+}
+
+void Editor::setCoverTrack(const Id& clipId, const Id& effectId,
+                           const std::vector<std::pair<Time, std::array<double, 4>>>& boxes) {
+    if (!coverParams(clipId, effectId)) throw EditError("cover not found");
+    if (boxes.empty()) return;
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Track cover", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Json& p = coverOf(editableClip(pr, clipId), effectId)["params"];
+        if (!p["anim"].is_object()) p["anim"] = Json::object();
+        const Time a = boxes.front().first, b = boxes.back().first, tol = keyTolerance(pr);
+        const char* props[] = {"x", "y", "w", "h"};
+        for (int k = 0; k < 4; ++k) {
+            Json kept = Json::array();
+            if (p["anim"][props[k]].is_array())
+                for (const auto& j : p["anim"][props[k]]) {
+                    const Time t = Time::fromTicks(j.value("t", std::int64_t{0}));
+                    if (t < a - tol || t > b + tol) kept.push_back(j);
+                }
+            p["anim"][props[k]] = kept;
+            for (const auto& [t, box] : boxes)
+                putKeyIn(p["anim"], props[k], Keyframe{t, clampCover(props[k], box[static_cast<std::size_t>(k)]), Ease::Linear}, tol);
+        }
     });
 }
 

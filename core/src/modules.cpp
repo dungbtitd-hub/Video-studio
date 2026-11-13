@@ -2,6 +2,7 @@
 
 #include "vstudio/color_space.hpp"
 #include "vstudio/compositor.hpp"
+#include "vstudio/cover.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/pixel.hpp"
 
@@ -192,6 +193,17 @@ public:
     }
 };
 
+// Covers part of the picture (blur, mosaic, bars, patterns); keyframed regions follow
+// the subject. Region and keys are in source time/coordinates.
+class CoverEffect final : public IVideoEffect {
+public:
+    void apply(VideoFrame& f, const Json& params, Time localTime) const override {
+        const Time src = Time::fromTicks(params.value("source_time", localTime.ticks()));
+        applyCover(f, coverParamsAt(params, src), localTime);
+    }
+    [[nodiscard]] bool supportsDeep() const override { return true; }
+};
+
 }  // namespace
 
 void registerBuiltinModules(ModuleRegistry& r) {
@@ -206,6 +218,8 @@ void registerBuiltinModules(ModuleRegistry& r) {
                         [] { return std::make_shared<ColorSpaceEffect>(); });
     r.add<IVideoEffect>({.id = kLutEffect, .displayName = "3D LUT", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<LutEffect>(); });
+    r.add<IVideoEffect>({.id = kCoverEffect, .displayName = "Cover region", .capabilities = {"effect.cover"}},
+                        [] { return std::make_shared<CoverEffect>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<Grayscale>(); });
 }
@@ -226,6 +240,8 @@ void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Ti
         try {
             Json params = fx.value("params", Json::object());
             if (!resourceBase.empty() && params.is_object()) params["base"] = resourceBase;
+            // Source time, for effects with their own keyframes (covers following a subject).
+            if (params.is_object()) params["source_time"] = (clip.sourceIn + localTime).ticks();
             effect->apply(frame, params, localTime);
         } catch (const std::exception& ex) {
             if (warnings) warnings->push_back("effect " + type + " failed: " + ex.what());
