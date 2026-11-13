@@ -472,8 +472,6 @@ public:
         finished_ = true;
         @autoreleasepool {
             if (!pump(true, error)) return false;
-            [vin_ markAsFinished];
-            [ain_ markAsFinished];
             dispatch_semaphore_t done = dispatch_semaphore_create(0);
             [writer_ finishWritingWithCompletionHandler:^{
               dispatch_semaphore_signal(done);
@@ -515,6 +513,20 @@ private:
                 if (!ok) return fail(error, "audio encode failed: " + str(writer_.error));
                 progressed = true;
             }
+            if (flush) {
+                // A track with nothing left must say so, or the writer keeps
+                // holding the other track back waiting to interleave.
+                if (aq_.empty() && ain_ && !aFinished_) {
+                    [ain_ markAsFinished];
+                    aFinished_ = true;
+                    progressed = true;
+                }
+                if (vq_.empty() && !vFinished_) {
+                    [vin_ markAsFinished];
+                    vFinished_ = true;
+                    progressed = true;
+                }
+            }
             if (writer_.status == AVAssetWriterStatusFailed) return fail(error, "encoder failed: " + str(writer_.error));
             const bool done = flush ? (vq_.empty() && aq_.empty()) : (vq_.size() < kMaxQueued && aq_.size() < kMaxQueued);
             if (done) return true;
@@ -542,7 +554,7 @@ private:
     std::deque<std::pair<CVPixelBufferRef, CMTime>> vq_;
     std::deque<CMSampleBufferRef> aq_;
     std::int64_t videoIndex_ = 0, audioFrames_ = 0;
-    bool finished_ = false;
+    bool finished_ = false, vFinished_ = false, aFinished_ = false;
 };
 
 class Backend final : public IMediaBackend {
