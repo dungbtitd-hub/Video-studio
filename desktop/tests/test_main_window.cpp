@@ -23,6 +23,7 @@
 #include "EditorController.h"
 #include "CoverPanel.h"
 #include "GradePanel.h"
+#include "ScopesPanel.h"
 #include "GradeWidgets.h"
 #include "LooksPanel.h"
 #include "MainWindow.h"
@@ -224,6 +225,18 @@ private slots:
         QVERIFY(ctrl_->clipGrade(clip).empty());
         QCOMPARE(panel->slider("saturation")->value(), 100);  // panel follows the project
         (void)undoDepth;
+    }
+
+    void scopesFollowPreview() {
+        ScopesPanel* sc = win_->scopes();
+        QVERIFY(sc->isVisible());
+        QSignalSpy spy(sc, &ScopesPanel::scopeUpdated);
+        for (int k = 0; k < 4; ++k) {
+            sc->kind()->setCurrentIndex(k);
+            ctrl_->refreshPreview();
+            QVERIFY(spy.wait(5000));
+            QVERIFY(!sc->scope().isNull());
+        }
     }
 
     void logInputAndLut() {

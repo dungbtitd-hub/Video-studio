@@ -103,6 +103,9 @@ VS_API int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, i
 /* Eyedropper: average colour (0..1 RGB) of a 5x5 spot of the newest preview frame at x, y (0..1 of
  * the frame). Returns 0, or -1 when no frame has been shown yet. */
 VS_API int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3);
+/* Scope of the newest preview frame into rgba_out (width*height*4): kind 0 waveform, 1 RGB parade,
+ * 2 vectorscope, 3 histogram. A couple of milliseconds; returns -1 before the first frame. */
+VS_API int vs_preview_scope(vs_session* s, int kind, int width, int height, uint8_t* rgba_out);
 /* ---- keyframes inside one clip (keyframes.hpp); all undoable, times are TIMELINE ticks ----
  * group: 0 = picture (scale, x, y, opacity), 1 = audio (volume); the two are independent.
  * vs_add_keyframe captures the clip's current values at t. vs_remove_keyframe: 1 removed, 0 none there.

@@ -341,6 +341,7 @@ void main() {
       [0.5, 0.7]
     ], 11);
     expect(c[5], closeTo(0.7, 1e-3));
+    expect(vs.previewScope(9, 64, 32), isNull); // bad kind
     final g = vs.gradePreview({'saturation': 0.0}, Uint8List.fromList([200, 40, 10, 255]), 1, 1)!;
     expect(g[0], g[1]);
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));

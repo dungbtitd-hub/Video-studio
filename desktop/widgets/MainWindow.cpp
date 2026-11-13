@@ -32,6 +32,7 @@
 #include "TextPanel.h"
 #include "StickerPanel.h"
 #include "GradePanel.h"
+#include "ScopesPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -234,6 +235,12 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     gradeDock->setWidget(grade_);
     addDockWidget(Qt::RightDockWidgetArea, gradeDock);
     tabifyDockWidget(looksDock, gradeDock);
+    // Scopes sit under the media library so they show beside the grading panel.
+    auto* scopesDock = new QDockWidget("Scope", this);
+    scopesDock->setObjectName("scopes");
+    scopes_ = new ScopesPanel(editor_, scopesDock);
+    scopesDock->setWidget(scopes_);
+    addDockWidget(Qt::LeftDockWidgetArea, scopesDock);
     // Eyedropper: the qualifier asks the preview for one click.
     connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
     connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);

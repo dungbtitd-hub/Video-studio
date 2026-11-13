@@ -661,6 +661,15 @@ class VStudio {
         return (rgb[0], rgb[1], rgb[2]);
       });
 
+  /// Scope of the newest preview frame as RGBA ([kind]: 0 waveform, 1 RGB parade, 2 vectorscope,
+  /// 3 histogram); null before the first frame.
+  Uint8List? previewScope(int kind, int width, int height) => using((a) {
+        final n = width * height * 4;
+        final buf = a<Uint8>(n);
+        if (_b.previewScope(_s, kind, width, height, buf) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(n));
+      });
+
   /// A copy of [rgba] with grade [params] applied (thumbnails).
   Uint8List? gradePreview(Map<String, dynamic> params, Uint8List rgba, int width, int height) => using((a) {
         final buf = a<Uint8>(rgba.length);

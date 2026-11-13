@@ -10,6 +10,7 @@ class EditorController;
 class PreviewWidget;
 class TimelineWidget;
 class GradePanel;
+class ScopesPanel;
 class LooksPanel;
 class CoverPanel;
 class TransitionsPanel;
@@ -29,6 +30,7 @@ public:
     [[nodiscard]] TimelineWidget* timeline() const { return timeline_; }
     [[nodiscard]] LooksPanel* looks() const { return looks_; }
     [[nodiscard]] GradePanel* grade() const { return grade_; }
+    [[nodiscard]] ScopesPanel* scopes() const { return scopes_; }
     [[nodiscard]] CoverPanel* coverPanel() const { return covers_; }
     [[nodiscard]] TransitionsPanel* transitionsPanel() const { return transitions_; }
     [[nodiscard]] TextPanel* textPanel() const { return text_; }
@@ -62,6 +64,7 @@ private:
     TimelineWidget* timeline_;
     LooksPanel* looks_;
     GradePanel* grade_;
+    ScopesPanel* scopes_;
     CoverPanel* covers_;
     TransitionsPanel* transitions_;
     TextPanel* text_;

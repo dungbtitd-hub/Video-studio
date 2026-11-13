@@ -65,6 +65,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   bool _gradeMode = false; // "Chỉnh màu" panel under the preview
   bool _picking = false; // eyedropper: next tap on the preview picks a colour
   final _gradeKey = GlobalKey<GradePanelState>();
+  Timer? _scopeTimer; // refreshes the scope overlay while grading
+  ui.Image? _scope;
+  int _scopeKind = 0; // 0 waveform, 1 parade, 2 vectorscope, 3 histogram
   String? _activeCover;
   bool _tracking = false;
   double _trackProgress = 0;
@@ -194,6 +197,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void dispose() {
     _saveNow();
     _saveTimer?.cancel();
+    _stopScopes();
     _lifecycle.dispose();
     _ticker.dispose();
     _media.dispose();
@@ -786,6 +790,33 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     ]);
   }
 
+  static const _scopeW = 192, _scopeH = 108;
+
+  /// Scope of what the preview shows, a few times a second while grading (a couple of ms each).
+  void _startScopes() {
+    _scopeTimer?.cancel();
+    _scopeTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final vs = _vs;
+      if (vs == null || !_gradeMode) return _stopScopes();
+      final px = vs.previewScope(_scopeKind, _scopeW, _scopeH);
+      if (px == null) return;
+      ui.decodeImageFromPixels(px, _scopeW, _scopeH, ui.PixelFormat.rgba8888, (img) {
+        if (!mounted || !_gradeMode) return img.dispose();
+        setState(() {
+          _scope?.dispose();
+          _scope = img;
+        });
+      });
+    });
+  }
+
+  void _stopScopes() {
+    _scopeTimer?.cancel();
+    _scopeTimer = null;
+    _scope?.dispose();
+    _scope = null;
+  }
+
   Widget _gradePanel(VStudio vs, ClipView clip) => GradePanel(
         key: _gradeKey,
         vs: vs,
@@ -822,6 +853,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         }),
         onDone: () {
           vs.setEffectPreview('', '', null);
+          _stopScopes();
           setState(() {
             _gradeMode = false;
             _picking = false;
@@ -1150,17 +1182,34 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       body: Column(
         children: [
           Expanded(
-            child: Container(
-              color: Colors.black,
-              alignment: Alignment.center,
-              child: _textureId != null && (_project?.duration ?? 0) > 0
-                  ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
-                  : _frame == null
-                      ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
-                      : AspectRatio(
-                          aspectRatio: _frame!.width / _frame!.height,
-                          child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
-            ),
+            child: Stack(children: [
+              Positioned.fill(
+                child: Container(
+                  color: Colors.black,
+                  alignment: Alignment.center,
+                  child: _textureId != null && (_project?.duration ?? 0) > 0
+                      ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
+                      : _frame == null
+                          ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
+                          : AspectRatio(
+                              aspectRatio: _frame!.width / _frame!.height,
+                              child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
+                ),
+              ),
+              if (_gradeMode && _scope != null)
+                Positioned(
+                  left: 8,
+                  top: 8,
+                  child: GestureDetector(
+                    // Tap: next scope (waveform, parade, vectorscope, histogram).
+                    onTap: () => setState(() => _scopeKind = (_scopeKind + 1) % 4),
+                    child: Opacity(
+                      opacity: 0.9,
+                      child: RawImage(image: _scope, width: _scopeW.toDouble(), height: _scopeH.toDouble()),
+                    ),
+                  ),
+                ),
+            ]),
           ),
           Container(
             color: VsColors.panel,
@@ -1264,6 +1313,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 onTap: _selectedMediaClip == null
                     ? null
                     : () => setState(() {
+                          _startScopes();
                           _gradeMode = true;
                           _coverMode = false;
                           _status = 'Kéo để xem ngay; nhấc tay là lưu (hoàn tác được)';

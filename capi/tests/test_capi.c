@@ -113,6 +113,9 @@ int main(void) {
         EXPECT(vs_set_clip_grade(s, "[]", "[1]") != 0);
         EXPECT(vs_clip_grade_json(s, "nope") == NULL);
         EXPECT(vs_set_effect_preview(s, "", "", "") == 0);
+        uint8_t scope[64 * 32 * 4];
+        EXPECT(vs_preview_scope(s, 0, 64, 32, scope) != 0); /* no frame yet */
+        EXPECT(vs_preview_scope(s, 9, 64, 32, scope) != 0);
     }
     /* Keyframes: unknown clips and bad input are refused with a message. */
     EXPECT(vs_add_keyframe(s, "nope", 0, 0) != 0);

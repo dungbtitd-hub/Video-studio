@@ -14,6 +14,7 @@ qt_add_executable(main_window_tests
   ../widgets/MainWindow.cpp ../widgets/MainWindow.h
   ../widgets/LooksPanel.cpp ../widgets/LooksPanel.h
   ../widgets/GradePanel.cpp ../widgets/GradePanel.h
+  ../widgets/ScopesPanel.cpp ../widgets/ScopesPanel.h
   ../widgets/GradeWidgets.cpp ../widgets/GradeWidgets.h
   ../widgets/CoverPanel.cpp ../widgets/CoverPanel.h
   ../widgets/TransitionsPanel.cpp ../widgets/TransitionsPanel.h

@@ -15,6 +15,7 @@
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/grade.hpp"
+#include "vstudio/scopes.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/transitions.hpp"
@@ -554,6 +555,19 @@ int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3) {
             ++n;
         }
     for (int c = 0; c < 3; ++c) rgb3[c] = sum[c] / n;
+    return 0;
+}
+
+int vs_preview_scope(vs_session* s, int kind, int width, int height, uint8_t* rgba_out) {
+    if (!s || !rgba_out || kind < 0 || kind > 3 || width < 32 || height < 32 || width > 2048 || height > 2048) return -1;
+    std::shared_ptr<const VideoFrame> f;
+    {
+        std::lock_guard lk(s->frameMu);
+        f = s->latest;
+    }
+    if (!f || f->empty()) return -1;
+    const ScopeImage img = renderScope(*f, static_cast<ScopeKind>(kind), width, height);
+    std::copy(img.rgba.begin(), img.rgba.end(), rgba_out);
     return 0;
 }
 
