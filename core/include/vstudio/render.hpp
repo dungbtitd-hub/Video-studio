@@ -1,6 +1,6 @@
 // Video Studio Core - minimal render graph (P0): timeline evaluation,
-// CPU compositor, audio mixer and the export pipeline. GPU backends replace
-// the compositor later; this CPU path stays as the reference/fallback.
+// layer compositing (through an ICompositor module, see compositor.hpp),
+// audio mixer and the export pipeline.
 #pragma once
 
 #include <atomic>
@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "vstudio/compositor.hpp"
 #include "vstudio/frame_cache.hpp"
 #include "vstudio/media.hpp"
 #include "vstudio/model.hpp"
@@ -26,20 +27,6 @@ struct VideoLayer {
 
 // Video layers visible at `t`, bottom to top (enabled video tracks only).
 std::vector<VideoLayer> evaluateVideo(const Project& p, Time t);
-
-// Clip transform as stored in Clip::transform (all optional):
-// { "scale": 1.0, "x": 0.0, "y": 0.0, "opacity": 1.0 }
-// x/y are offsets in canvas pixels from centred; scale multiplies "fit".
-struct Transform {
-    double scale = 1.0;
-    double x = 0.0;
-    double y = 0.0;
-    double opacity = 1.0;
-    static Transform fromJson(const Json& j);
-};
-
-// Draws `src` onto `dst` (straight-alpha RGBA) fitted to dst, then transformed.
-void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr);
 
 // Owns one decoder per (asset, purpose) so preview, audio and export read sequentially.
 class MediaPool {
@@ -73,7 +60,8 @@ public:
              ModuleRegistry* modules = nullptr)
         : project_(p), pool_(pool), cache_(cache), preview_(preview), modules_(modules) {}
     // Composites the frame at timeline time `t`, at `width` x `height`
-    // (defaults to the project canvas). Background is opaque black.
+    // (defaults to the project canvas). Background is opaque black. Uses the
+    // best "compositor" module in `modules` (GPU when available), else the CPU one.
     VideoFrame renderVideo(Time t, int width = 0, int height = 0, const std::string& purpose = "preview");
     // Mixes `frames` audio frames starting at timeline sample `startSample`
     // at the project sample rate/channels.
@@ -82,12 +70,14 @@ public:
 
 private:
     std::shared_ptr<const VideoFrame> sourceFrame(const VideoLayer& layer, int outW, int outH, const std::string& purpose);
+    ICompositor& compositor();
 
     const Project& project_;
     MediaPool& pool_;
     FrameCache* cache_;
     bool preview_;
     ModuleRegistry* modules_;
+    std::shared_ptr<ICompositor> compositor_;
     std::vector<std::string> warnings_;
     void warn(std::string w);
 };

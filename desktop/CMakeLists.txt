@@ -15,5 +15,8 @@ target_link_libraries(vstudio_desktop_common PUBLIC Qt6::Core Qt6::Gui Qt6::Mult
 if(VSTUDIO_WITH_FFMPEG)
   target_link_libraries(vstudio_desktop_common PUBLIC vstudio::ffmpeg)
 endif()
+if(TARGET vstudio_apple)
+  target_link_libraries(vstudio_desktop_common PUBLIC vstudio::apple)  # Metal compositor
+endif()
 
 add_subdirectory(widgets)

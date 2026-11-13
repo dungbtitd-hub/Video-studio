@@ -206,11 +206,38 @@ void Renderer::warn(std::string w) {
     warnings_.push_back(std::move(w));
 }
 
+namespace {
+
+class CpuCompositor final : public ICompositor {
+public:
+    std::string name() const override { return "builtin.cpu_compositor"; }
+    bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string*) override {
+        std::fill(out.rgba.begin(), out.rgba.end(), std::uint8_t{0});
+        for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
+        for (const auto& l : layers)
+            if (l.frame) compositeOver(out, *l.frame, l.transform);
+        return true;
+    }
+};
+
+}  // namespace
+
+std::shared_ptr<ICompositor> createCpuCompositor() { return std::make_shared<CpuCompositor>(); }
+
+ICompositor& Renderer::compositor() {
+    if (!compositor_ && modules_) compositor_ = modules_->best<ICompositor>("composite");
+    if (!compositor_) {
+        static const std::shared_ptr<ICompositor> cpu = createCpuCompositor();
+        compositor_ = cpu;
+    }
+    return *compositor_;
+}
+
 VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::string& purpose) {
     VideoFrame out;
     out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height);
-    for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
     out.pts = t;
+    std::vector<CompositeLayer> layers;
     for (const auto& layer : evaluateVideo(project_, t)) {
         auto frame = sourceFrame(layer, out.width, out.height, purpose);
         if (!frame) continue;
@@ -227,7 +254,14 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
         const double k = static_cast<double>(out.width) / project_.canvas.width;
         tr.x *= k;
         tr.y *= k;
-        compositeOver(out, *frame, tr);
+        layers.push_back({std::move(frame), tr});
+    }
+    std::string err;
+    if (!compositor().composite(out, layers, &err)) {
+        // GPU lost or failed: this renderer continues on the CPU reference.
+        warn("compositor " + compositor_->name() + " failed, using CPU" + (err.empty() ? "" : ": " + err));
+        compositor_ = createCpuCompositor();
+        compositor_->composite(out, layers, nullptr);
     }
     return out;
 }

@@ -22,6 +22,7 @@
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
 #include "vstudio/apple/avfoundation_module.hpp"
+#include "vstudio/apple/metal_compositor.hpp"
 #endif
 
 using namespace vstudio;
@@ -62,6 +63,7 @@ struct vs_session {
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
         apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS
+        apple::registerMetalCompositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
     }
 
