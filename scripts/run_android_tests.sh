@@ -12,7 +12,7 @@ timeout 600 adb shell "cd $D && TMPDIR=$D/tmp ./vstudio_core_tests; echo exit=\$
 # Google's software codecs: the emulator's default H.264 decoder is a host-side shim.
 # One process per test with its own timeout, so a hang names the test and the rest still run.
 : > android.txt
-for t in "registers" "android: probe" "frame-accurate" "audio reads" "P0 flow" "proxy"; do
+for t in "registers" "android: probe" "frame-accurate" "audio reads" "P0 flow" "proxy" "gles"; do
   echo "--- $t" | tee -a android.txt
   timeout 240 adb shell "cd $D && TMPDIR=$D/tmp VSTUDIO_ANDROID_SOFTWARE_CODECS=1 ./vstudio_android_tests '$t'; echo exit=\$?" \
     | tee -a android.txt || echo "TIMEOUT: $t" | tee -a android.txt
@@ -32,6 +32,6 @@ wait $watch || true
 cat stacks.txt
 adb logcat -d -v time | grep -E "vstudio|CCodec|Codec2|MediaCodec|MPEG4Writer|MediaMuxer|AndroidRuntime|DEBUG" | tail -n 200
 grep -q "exit=0" core.txt || rc=1
-test "$(grep -c "exit=0" android.txt)" -eq 6 || rc=1
+test "$(grep -c "exit=0" android.txt)" -eq 7 || rc=1
 grep -q "exit=0" single.txt || rc=1
 exit $rc

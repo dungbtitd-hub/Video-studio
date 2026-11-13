@@ -17,6 +17,9 @@
 #if defined(VSTUDIO_HAS_METAL)
 #include "vstudio/apple/metal_compositor.hpp"
 #endif
+#if defined(VSTUDIO_HAS_D3D11)
+#include "vstudio/windows/d3d11_compositor.hpp"
+#endif
 
 using namespace vstudio;
 
@@ -34,6 +37,9 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 #endif
 #if defined(VSTUDIO_HAS_METAL)
     apple::registerMetalCompositor(modules_);  // GPU compositing; CPU stays the fallback
+#endif
+#if defined(VSTUDIO_HAS_D3D11)
+    windows::registerD3D11Compositor(modules_);
 #endif
     std::string err;
     backend_ = modules_.best<IMediaBackend>("decode", &err);

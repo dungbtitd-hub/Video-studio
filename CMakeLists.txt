@@ -65,6 +65,9 @@ endif()
 if(APPLE)
   add_subdirectory(adapters/apple)
 endif()
+if(WIN32)
+  add_subdirectory(adapters/windows)
+endif()
 
 add_subdirectory(capi)
 

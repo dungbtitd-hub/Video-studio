@@ -18,11 +18,15 @@
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
+#include "vstudio/android/gles_compositor.hpp"
 #include "vstudio/android/mediacodec_module.hpp"
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
 #include "vstudio/apple/avfoundation_module.hpp"
 #include "vstudio/apple/metal_compositor.hpp"
+#endif
+#if defined(VSTUDIO_HAS_D3D11)
+#include "vstudio/windows/d3d11_compositor.hpp"
 #endif
 
 using namespace vstudio;
@@ -60,10 +64,14 @@ struct vs_session {
 #endif
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
         android::registerModule(modules);  // hardware codecs; preferred over FFmpeg on Android
+        android::registerGlesCompositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
         apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS
         apple::registerMetalCompositor(modules);  // GPU compositing; CPU stays the fallback
+#endif
+#if defined(VSTUDIO_HAS_D3D11)
+        windows::registerD3D11Compositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
     }
 

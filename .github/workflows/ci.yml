@@ -93,6 +93,11 @@ jobs:
         run: cmake --build build --config Release
       - name: Tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: D3D11 compositor vs CPU (timing)
+        shell: bash
+        run: |
+          build/adapters/windows/Release/vstudio_windows_tests.exe d3d11
+          build/core/tests/Release/vstudio_core_tests.exe "cpu compositor"
 
   desktop-bench:
     # Real Windows/macOS machines (no GPU on hosted runners), to compare the
