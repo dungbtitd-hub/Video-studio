@@ -82,6 +82,16 @@ void insertClip(Project& p, const Id& trackId, Clip clip) {
     t.sortClips();
 }
 
+void rippleDelete(Project& p, const Id& clipId) {
+    Track* t = nullptr;
+    const Clip c = requireClip(p, clipId, &t);
+    const Time end = c.timelineOut(), len = c.duration();
+    std::erase_if(t->clips, [&](const Clip& x) { return x.id == clipId; });
+    // Every later clip moves by the same amount into the gap: order kept, no overlap possible.
+    for (Clip& x : t->clips)
+        if (x.timelineIn >= end) x.timelineIn = x.timelineIn - len;
+}
+
 void removeClip(Project& p, const Id& clipId) {
     Track* t = nullptr;
     requireClip(p, clipId, &t);
@@ -184,6 +194,31 @@ SnapResult snapTime(const Project& p, Time t, Time tolerance, const Id& excludeC
         }
     }
     return r;
+}
+
+std::optional<Time> adjacentEditPoint(const Project& p, Time t, bool forward) {
+    std::optional<Time> best;
+    auto consider = [&](Time e) {
+        if (forward ? e <= t : e >= t) return;
+        if (!best || (forward ? e < *best : e > *best)) best = e;
+    };
+    for (const Track& tr : p.tracks) {
+        const auto& cl = tr.clips;  // sorted by start, non-overlapping: ends are sorted too
+        if (cl.empty()) continue;
+        // First clip whose end is after t: its start or end is the next edge; the one before
+        // it holds the previous edge.
+        auto it = std::upper_bound(cl.begin(), cl.end(), t, [](Time v, const Clip& c) { return v < c.timelineOut(); });
+        if (it != cl.end()) {
+            consider(it->timelineIn);
+            consider(it->timelineOut());
+        }
+        if (it != cl.begin()) {
+            const Clip& prev = *std::prev(it);
+            consider(prev.timelineIn);
+            consider(prev.timelineOut());
+        }
+    }
+    return best;
 }
 
 SnapResult snapClipMove(const Project& p, const Id& clipId, Time proposedStart, Time tolerance,

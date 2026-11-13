@@ -33,6 +33,8 @@ public:
     // Appends the whole asset (or [sourceIn, sourceOut)) at the end of the track.
     Id appendClip(const Id& trackId, const Id& assetId, std::optional<Time> sourceIn = {}, std::optional<Time> sourceOut = {});
     void removeClip(const Id& clipId);
+    // Removes the clip and closes the gap on its track (one undo step).
+    void rippleDelete(const Id& clipId);
     // ---- tracks ----
     // Removes a track and its clips (refused while locked). Undoable.
     void removeTrack(const Id& trackId);

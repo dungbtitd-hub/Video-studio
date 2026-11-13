@@ -27,7 +27,14 @@ TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWid
         update();
     });
     connect(editor_, &EditorController::projectChanged, this, &TimelineWidget::rebuild);
-    connect(editor_, &EditorController::playheadChanged, this, qOverload<>(&QWidget::update));
+    connect(editor_, &EditorController::playheadChanged, this, [this] {
+        // While playing, page the view so the playhead stays on screen.
+        if (editor_->playing() && drag_ == Drag::None) {
+            const double x = timeToX(editor_->playhead());
+            if (x > width() - 24 || x < kHeaderW) setScrollSeconds(std::max(0.0, editor_->playhead() - 1.0));
+        }
+        update();
+    });
     connect(editor_, &EditorController::selectionChanged, this, qOverload<>(&QWidget::update));
     connect(editor_, &EditorController::mediaLibraryChanged, this, qOverload<>(&QWidget::update));
     rebuild();
@@ -386,7 +393,7 @@ void TimelineWidget::headerMenu(int track, const QPoint& globalPos) {
         m.addAction(tr("Xóa track"), this, [this, t] { editor_->removeTrack(t.id); });
     }
     m.addSeparator();
-    QAction* snap = m.addAction(tr("Hít cạnh (N)"), this, [this] { snapping_ = !snapping_; update(); });
+    QAction* snap = m.addAction(tr("Hít cạnh (N)"), this, [this] { setSnapping(!snapping_); });
     snap->setCheckable(true);
     snap->setChecked(snapping_);
     m.exec(globalPos);
@@ -399,8 +406,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent* e) {
 
 void TimelineWidget::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_N && e->modifiers() == Qt::NoModifier) {
-        snapping_ = !snapping_;
-        update();
+        setSnapping(!snapping_);
         return;
     }
     QWidget::keyPressEvent(e);
@@ -408,14 +414,41 @@ void TimelineWidget::keyPressEvent(QKeyEvent* e) {
 
 void TimelineWidget::wheelEvent(QWheelEvent* e) {
     if (e->modifiers() & Qt::ControlModifier) {
-        const double anchor = xToTime(e->position().x());
-        pxPerSec_ = std::clamp(pxPerSec_ * (e->angleDelta().y() > 0 ? 1.15 : 0.87), 5.0, 400.0);
-        updateScrollBar();
-        setScrollSeconds(std::max(0.0, anchor - (e->position().x() - kHeaderW) / pxPerSec_));
-        update();
+        zoomBy(e->angleDelta().y() > 0 ? 1.15 : 1 / 1.15, e->position().x());
     } else {
-        hbar_->setValue(hbar_->value() - e->angleDelta().y() * 2);
+        // Vertical wheel or a horizontal trackpad swipe both scroll time.
+        const int d = e->angleDelta().x() != 0 ? e->angleDelta().x() : e->angleDelta().y();
+        hbar_->setValue(hbar_->value() - d * 2);
     }
+}
+
+void TimelineWidget::zoomBy(double factor, double anchorX) {
+    if (anchorX < 0) {
+        const double px = timeToX(editor_->playhead());
+        anchorX = px >= kHeaderW && px <= width() ? px : kHeaderW;
+    }
+    const double anchor = xToTime(anchorX);
+    pxPerSec_ = std::clamp(pxPerSec_ * factor, kMinPxPerSec, kMaxPxPerSec);
+    updateScrollBar();
+    setScrollSeconds(std::max(0.0, anchor - (anchorX - kHeaderW) / pxPerSec_));
+    update();
+    emit zoomChanged(pxPerSec_);
+}
+
+void TimelineWidget::zoomToFit() {
+    const double visible = std::max(50, width() - kHeaderW - 24);
+    pxPerSec_ = std::clamp(visible / std::max(1.0, duration_), kMinPxPerSec, kMaxPxPerSec);
+    updateScrollBar();
+    setScrollSeconds(0);
+    update();
+    emit zoomChanged(pxPerSec_);
+}
+
+void TimelineWidget::setSnapping(bool on) {
+    if (snapping_ == on) return;
+    snapping_ = on;
+    update();
+    emit snappingChanged(on);
 }
 
 void TimelineWidget::paintThumbnails(QPainter& p, const Clip& c, const QRectF& r) const {
