@@ -378,3 +378,44 @@ TEST("preview: latest request wins and audio ring feeds the device") {
     CHECK(pe.playhead() > sec(1));
     pe.pause();
 }
+
+// ------------------------------------------------------------------ compositor
+
+#include "compositor_conformance.hpp"
+
+static vtest::CompositorSuite cpuCompositorSuite("cpu compositor", [] { return createCpuCompositor(); });
+
+namespace {
+// Stands in for a GPU module whose device is lost: always fails.
+class LostGpu final : public ICompositor {
+public:
+    std::string name() const override { return "test.lost_gpu"; }
+    bool composite(VideoFrame&, const std::vector<CompositeLayer>&, std::string* e) override {
+        ++calls;
+        if (e) *e = "device lost";
+        return false;
+    }
+    int calls = 0;
+};
+}  // namespace
+
+TEST("render: uses the best compositor module and falls back to CPU if it fails") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(2), sec(6));
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    CHECK(mods.has("builtin.cpu_compositor"));
+    auto gpu = std::make_shared<LostGpu>();
+    mods.add<ICompositor>({.id = "test.lost_gpu", .capabilities = {"composite"}, .priority = 100},
+                          [gpu] { return gpu; });
+    Renderer r(f.ed.project(), pool, nullptr, false, &mods);
+    VideoFrame fr = r.renderVideo(sec(1), 128, 72);
+    const std::size_t centre = (36 * 128 + 64) * 4;
+    CHECK_EQ(int(fr.rgba[centre]), 90);  // same picture as the CPU path
+    CHECK_EQ(int(fr.rgba[3]), 255);
+    (void)r.renderVideo(sec(2), 128, 72);
+    CHECK_EQ(gpu->calls, 1);  // not retried on every frame by this renderer
+    CHECK_EQ(r.warnings().size(), 1u);
+}

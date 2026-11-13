@@ -1,5 +1,7 @@
 #include "vstudio/modules.hpp"
 
+#include "vstudio/compositor.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -153,6 +155,9 @@ public:
 }  // namespace
 
 void registerBuiltinModules(ModuleRegistry& r) {
+    // CPU reference compositor: always available; GPU compositors register with a higher priority.
+    r.add<ICompositor>({.id = "builtin.cpu_compositor", .displayName = "CPU compositor", .capabilities = {"composite"}},
+                       [] { return createCpuCompositor(); });
     r.add<IVideoEffect>({.id = "builtin.color_adjust", .displayName = "Color adjust", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<ColorAdjust>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},

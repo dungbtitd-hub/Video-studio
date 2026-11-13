@@ -64,6 +64,10 @@ jobs:
         run: cmake --build build
       - name: Tests
         run: ctest --test-dir build --output-on-failure
+      - name: Metal compositor vs CPU (timing)
+        run: |
+          build/adapters/apple/vstudio_apple_tests metal
+          build/core/tests/vstudio_core_tests "cpu compositor"
 
   core-windows:
     runs-on: windows-2022

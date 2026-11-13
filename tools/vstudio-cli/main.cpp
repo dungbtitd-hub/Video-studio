@@ -14,6 +14,9 @@
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
+#if defined(VSTUDIO_HAS_METAL)
+#include "vstudio/apple/metal_compositor.hpp"
+#endif
 
 using namespace vstudio;
 
@@ -59,6 +62,9 @@ int main(int argc, char** argv) {
     ModuleRegistry mods;
     registerBuiltinModules(mods);
     ffmpeg::registerModule(mods);
+#if defined(VSTUDIO_HAS_METAL)
+    apple::registerMetalCompositor(mods);
+#endif
     std::string err;
     auto backend = mods.best<IMediaBackend>("decode", &err);
     if (!backend) {

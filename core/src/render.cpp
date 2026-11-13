@@ -61,14 +61,25 @@ inline void blendPixel(std::uint8_t* d, const std::uint8_t* c, unsigned a) {
 
 }  // namespace
 
+LayerRect layerRect(int srcW, int srcH, int dstW, int dstH, const Transform& tr) {
+    // Fit (contain) then scale, centred, then offset.
+    const double fit = std::min(static_cast<double>(dstW) / srcW, static_cast<double>(dstH) / srcH);
+    const double s = fit * tr.scale;
+    auto snap = [](double v) { return std::round(v * 256.0) / 256.0; };
+    LayerRect r;
+    r.width = snap(srcW * s);
+    r.height = snap(srcH * s);
+    r.left = snap((dstW - r.width) / 2.0 + tr.x);
+    r.top = snap((dstH - r.height) / 2.0 + tr.y);
+    r.unscaled = r.width == srcW && r.height == srcH && r.left == std::floor(r.left) && r.top == std::floor(r.top);
+    return r;
+}
+
 void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) {
     if (src.empty() || dst.empty() || tr.opacity <= 0.0 || tr.scale <= 0.0) return;
     // Fit (contain) then scale, centred, then offset.
-    const double fit = std::min(static_cast<double>(dst.width) / src.width, static_cast<double>(dst.height) / src.height);
-    const double s = fit * tr.scale;
-    const double w = src.width * s, h = src.height * s;
-    const double left = (dst.width - w) / 2.0 + tr.x;
-    const double top = (dst.height - h) / 2.0 + tr.y;
+    const LayerRect r = layerRect(src.width, src.height, dst.width, dst.height, tr);
+    const double w = r.width, h = r.height, left = r.left, top = r.top;
     const unsigned opacity = static_cast<unsigned>(std::lround(std::clamp(tr.opacity, 0.0, 1.0) * 255.0));
     const int sw = src.width, sh = src.height;
     const std::uint8_t* sp = src.rgba.data();
@@ -76,7 +87,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     // Fast path: the decoder already produced the exact output size (preview
     // decodes to the preview box), so no resampling is needed - copy/blend rows.
     const int ileft = static_cast<int>(std::lround(left)), itop = static_cast<int>(std::lround(top));
-    if (std::abs(s - 1.0) < 1e-9 && std::abs(left - ileft) < 1e-6 && std::abs(top - itop) < 1e-6) {
+    if (r.unscaled) {
         const int x0 = std::max(0, ileft), x1 = std::min(dst.width, ileft + sw);
         const int y0 = std::max(0, itop), y1 = std::min(dst.height, itop + sh);
         if (x1 <= x0) return;
@@ -102,7 +113,7 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     const int x1 = std::min(dst.width, static_cast<int>(std::ceil(left + w)));
     const int y1 = std::min(dst.height, static_cast<int>(std::ceil(top + h)));
     if (x1 <= x0 || y1 <= y0) return;
-    const double inv = 1.0 / s;
+    const double invX = src.width / w, invY = src.height / h;
     struct Col {
         int i0, i1;
         unsigned f;  // 0..256
@@ -110,17 +121,18 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr) 
     };
     std::vector<Col> cols(static_cast<std::size_t>(x1 - x0));
     for (int x = x0; x < x1; ++x) {
-        const double sx = (x + 0.5 - left) * inv - 0.5;
+        const double sx = (x + 0.5 - left) * invX - 0.5;
         Col& c = cols[static_cast<std::size_t>(x - x0)];
-        c.inside = sx >= -0.5 && sx <= sw - 0.5;
+        // Half-open coverage by pixel centre: [left, left + w). Shared with the GPU compositors.
+        c.inside = x + 0.5 >= left && x + 0.5 < left + w;
         const int ix = std::clamp(static_cast<int>(std::floor(sx)), 0, sw - 1);
         c.i0 = ix * 4;
         c.i1 = std::min(ix + 1, sw - 1) * 4;
         c.f = static_cast<unsigned>(std::lround(std::clamp(sx - ix, 0.0, 1.0) * 256));
     }
     for (int y = y0; y < y1; ++y) {
-        const double sy = (y + 0.5 - top) * inv - 0.5;
-        if (sy < -0.5 || sy > sh - 0.5) continue;
+        if (y + 0.5 < top || y + 0.5 >= top + h) continue;
+        const double sy = (y + 0.5 - top) * invY - 0.5;
         const int iy = std::clamp(static_cast<int>(std::floor(sy)), 0, sh - 1);
         const int iy1 = std::min(iy + 1, sh - 1);
         const unsigned fy = static_cast<unsigned>(std::lround(std::clamp(sy - iy, 0.0, 1.0) * 256));
@@ -206,11 +218,38 @@ void Renderer::warn(std::string w) {
     warnings_.push_back(std::move(w));
 }
 
+namespace {
+
+class CpuCompositor final : public ICompositor {
+public:
+    std::string name() const override { return "builtin.cpu_compositor"; }
+    bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string*) override {
+        std::fill(out.rgba.begin(), out.rgba.end(), std::uint8_t{0});
+        for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
+        for (const auto& l : layers)
+            if (l.frame) compositeOver(out, *l.frame, l.transform);
+        return true;
+    }
+};
+
+}  // namespace
+
+std::shared_ptr<ICompositor> createCpuCompositor() { return std::make_shared<CpuCompositor>(); }
+
+ICompositor& Renderer::compositor() {
+    if (!compositor_ && modules_) compositor_ = modules_->best<ICompositor>("composite");
+    if (!compositor_) {
+        static const std::shared_ptr<ICompositor> cpu = createCpuCompositor();
+        compositor_ = cpu;
+    }
+    return *compositor_;
+}
+
 VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::string& purpose) {
     VideoFrame out;
     out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height);
-    for (std::size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;  // opaque black
     out.pts = t;
+    std::vector<CompositeLayer> layers;
     for (const auto& layer : evaluateVideo(project_, t)) {
         auto frame = sourceFrame(layer, out.width, out.height, purpose);
         if (!frame) continue;
@@ -227,7 +266,14 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
         const double k = static_cast<double>(out.width) / project_.canvas.width;
         tr.x *= k;
         tr.y *= k;
-        compositeOver(out, *frame, tr);
+        layers.push_back({std::move(frame), tr});
+    }
+    std::string err;
+    if (!compositor().composite(out, layers, &err)) {
+        // GPU lost or failed: this renderer continues on the CPU reference.
+        warn("compositor " + compositor_->name() + " failed, using CPU" + (err.empty() ? "" : ": " + err));
+        compositor_ = createCpuCompositor();
+        compositor_->composite(out, layers, nullptr);
     }
     return out;
 }

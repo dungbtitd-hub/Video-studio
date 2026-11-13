@@ -14,6 +14,9 @@
 #if defined(VSTUDIO_HAS_FFMPEG)
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
+#if defined(VSTUDIO_HAS_METAL)
+#include "vstudio/apple/metal_compositor.hpp"
+#endif
 
 using namespace vstudio;
 
@@ -28,6 +31,9 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
     registerBuiltinModules(modules_);
 #if defined(VSTUDIO_HAS_FFMPEG)
     ffmpeg::registerModule(modules_);
+#endif
+#if defined(VSTUDIO_HAS_METAL)
+    apple::registerMetalCompositor(modules_);  // GPU compositing; CPU stays the fallback
 #endif
     std::string err;
     backend_ = modules_.best<IMediaBackend>("decode", &err);
