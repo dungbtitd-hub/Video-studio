@@ -5,9 +5,11 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'core/project_model.dart';
 import 'core/native_preview.dart';
+import 'core/project_store.dart';
 import 'core/vstudio.dart';
 import 'ui/media_cache.dart';
 import 'ui/theme.dart';
@@ -19,8 +21,8 @@ class VideoStudioApp extends StatelessWidget {
   const VideoStudioApp({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      MaterialApp(title: 'Video Studio', theme: buildTheme(), home: const EditorPage(), debugShowCheckedModeBanner: false);
+  Widget build(BuildContext context) => MaterialApp(
+      title: 'Video Studio', theme: buildTheme(), home: const EditorPage(), debugShowCheckedModeBanner: false);
 }
 
 class EditorPage extends StatefulWidget {
@@ -44,30 +46,114 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   String? _status;
   double? _exportProgress;
   late final Ticker _ticker;
-  final MediaCache _media = MediaCache();
-  Timer? _autosave;
+  MediaCache _media = MediaCache();
+  ProjectStore? _store;
+  String? _packagePath; // the open project's .vstudio folder
+  Timer? _saveTimer;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
-    try {
-      _vs = VStudio.create('Dự án mới', width: 1080, height: 1920);
-      _vs!.setPreviewSize(720, 1280);
-      _refresh();
-      debugPrint('vstudio: core ${_vs!.version} ready'); // CI smoke test looks for this line
-      _attachNativePreview();
-    } catch (e) {
-      _error = 'Không nạp được Video Studio Core: $e';
-      debugPrint('vstudio: core failed: $e');
-    }
     // Per-frame UI tick: polls the core for a new preview frame / playhead.
     // Nothing here decodes; it only copies a ready frame.
     _ticker = createTicker(_onTick)..start();
-    _autosave = Timer.periodic(const Duration(seconds: 10), (_) {
-      try {
-        _vs?.autosave();
-      } catch (_) {}
+    // Leaving the app (home button, call, task switch) saves right away: the OS may kill it later.
+    _lifecycle = AppLifecycleListener(onInactive: _saveNow, onPause: _saveNow, onDetach: _saveNow);
+    _openInitial();
+  }
+
+  /// Reopens the last project, or starts a new one saved under the app's documents.
+  Future<void> _openInitial() async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final store = ProjectStore(Directory('${docs.path}/VideoStudio'));
+      await store.ensure();
+      _store = store;
+      final last = await store.lastProject();
+      VStudio vs;
+      String path;
+      if (last != null) {
+        vs = VStudio.open(last);
+        path = last;
+      } else {
+        (vs, path) = await _createProject(store, 'Dự án mới');
+      }
+      if (!mounted) return vs.dispose();
+      await _attach(vs, path);
+      debugPrint('vstudio: core ${vs.version} ready'); // CI smoke test looks for this line
+    } catch (e) {
+      setState(() => _error = 'Không nạp được Video Studio Core: $e');
+      debugPrint('vstudio: core failed: $e');
+    }
+  }
+
+  Future<(VStudio, String)> _createProject(ProjectStore store, String name) async {
+    final path = await store.newProjectPath(name);
+    final vs = VStudio.create(name, width: 1080, height: 1920);
+    vs.save(path); // a package from the start: media paths are stored relative to it
+    return (vs, path);
+  }
+
+  Future<void> _attach(VStudio vs, String path) async {
+    vs.setPreviewSize(720, 1280);
+    setState(() {
+      _vs = vs;
+      _packagePath = path;
+      _revision = -1;
+      _playhead = 0;
+      _selected = null;
+      _refresh();
     });
+    await _store?.setLastProject(path);
+    await _attachNativePreview();
+    vs.seek(0);
+  }
+
+  /// Saves (if needed), releases the current session, then opens [path] or a new project.
+  Future<void> _switchProject({String? path, String? newName}) async {
+    final store = _store, old = _vs;
+    if (store == null || old == null || path == _packagePath) return;
+    _saveNow();
+    _saveTimer?.cancel();
+    old.pause();
+    // The native surface renders from the old session: detach it before destroying the session.
+    if (_textureId != null) {
+      await NativePreview.dispose();
+      _textureId = null;
+    }
+    setState(() {
+      _vs = null;
+      _project = null;
+      _frame?.dispose();
+      _frame = null;
+    });
+    old.dispose();
+    _media.dispose();
+    _media = MediaCache();
+    try {
+      final (vs, p) = path != null ? (VStudio.open(path), path) : await _createProject(store, newName ?? 'Dự án mới');
+      await _attach(vs, p);
+    } catch (e) {
+      setState(() => _error = 'Không mở được dự án: $e');
+    }
+  }
+
+  // Edits only touch metadata, so a full save is small and atomic (temp file + rename).
+  // Coalesced: one save 1.5 s after the last edit, and at once when the app goes to background.
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 1500), _saveNow);
+  }
+
+  void _saveNow() {
+    final vs = _vs;
+    if (vs == null || _packagePath == null || !vs.dirty) return;
+    try {
+      vs.save(_packagePath!);
+    } on VStudioException catch (e) {
+      if (mounted) setState(() => _status = 'Lưu lỗi: ${e.message}');
+    }
   }
 
   Future<void> _attachNativePreview() async {
@@ -86,8 +172,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _saveNow();
+    _saveTimer?.cancel();
+    _lifecycle.dispose();
     _ticker.dispose();
-    _autosave?.cancel();
     _media.dispose();
     final vs = _vs;
     // The surface must be detached before the session it renders from is destroyed.
@@ -160,24 +248,111 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     try {
       f(vs);
       setState(_refresh);
+      _scheduleSave();
     } on VStudioException catch (e) {
       setState(() => _status = e.message);
     }
   }
 
+  static const _mediaExtensions = [
+    'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp', //
+    'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', //
+    'jpg', 'jpeg', 'png', 'webp', 'heic',
+  ];
+
   Future<void> _import() async {
-    final files = await FilePicker.pickFiles(type: FileType.media);
-    if (files.isEmpty) return;
+    // Photos = the system photo library; Files = Files app / document providers (Drive, USB, ...).
+    final source = await showModalBottomSheet<FileType>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Thư viện ảnh và video'),
+              onTap: () => Navigator.pop(context, FileType.media)),
+          ListTile(
+              leading: const Icon(Icons.folder_open),
+              title: const Text('Tệp'),
+              onTap: () => Navigator.pop(context, FileType.custom)),
+        ]),
+      ),
+    );
+    if (source == null) return;
+    final files = await FilePicker.pickFiles(
+        type: source, allowedExtensions: source == FileType.custom ? _mediaExtensions : null);
+    final paths = files.map((f) => f.path).whereType<String>().toList();
+    if (paths.isEmpty || _store == null) return;
+    // Pickers hand out temporary copies: keep our own under the app's media folder.
+    final kept = <String>[];
+    for (var i = 0; i < paths.length; i++) {
+      if (mounted) setState(() => _status = 'Đang chép ${i + 1}/${paths.length}…');
+      try {
+        kept.add(await _store!.adoptMedia(paths[i]));
+      } catch (e) {
+        if (mounted) setState(() => _status = 'Không chép được file: $e');
+      }
+    }
+    if (!mounted || kept.isEmpty) return;
     _edit((vs) {
-      var track = _project?.tracks.where((t) => t.type == 'video').firstOrNull?.id;
-      track ??= vs.addTrack(audio: false, name: 'Video 1');
-      for (final f in files) {
-        if (f.path == null) continue;
-        final asset = vs.importMedia(f.path!);
+      for (final path in kept) {
+        final asset = vs.importMedia(path);
+        // The core's probe decides: an asset with no picture goes to an audio track.
+        final audioOnly = vs.project().assets.firstWhere((a) => a.id == asset).type == 'audio';
+        final type = audioOnly ? 'audio' : 'video';
+        var track = (vs.project().tracks.where((t) => t.type == type && !t.locked).firstOrNull)?.id;
+        track ??= vs.addTrack(audio: audioOnly, name: audioOnly ? 'Audio 1' : 'Video 1');
         _selected = vs.appendClip(track, asset);
       }
+      _status = 'Đã nhập ${kept.length} file';
     });
     _vs?.seek(_playhead);
+  }
+
+  Future<void> _projectsMenu() async {
+    final store = _store;
+    if (store == null) return;
+    _saveNow();
+    final projects = await store.list();
+    if (!mounted) return;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.7),
+          child: ListView(shrinkWrap: true, children: [
+            ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text('Dự án mới'),
+                onTap: () => Navigator.pop(context, '')),
+            const Divider(height: 1),
+            for (final p in projects)
+              ListTile(
+                leading: Icon(p.path == _packagePath ? Icons.check : Icons.movie_outlined),
+                title: Text(p.name),
+                subtitle: Text(_ago(p.modified), style: const TextStyle(fontSize: 11)),
+                onTap: () => Navigator.pop(context, p.path),
+              ),
+          ]),
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice.isEmpty) {
+      await _switchProject(newName: 'Dự án ${projects.length + 1}');
+    } else {
+      await _switchProject(path: choice);
+    }
+  }
+
+  static String _ago(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return 'vừa xong';
+    if (d.inHours < 1) return '${d.inMinutes} phút trước';
+    if (d.inDays < 1) return '${d.inHours} giờ trước';
+    return '${t.day}/${t.month}/${t.year}';
   }
 
   Future<void> _export() async {
@@ -303,10 +478,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (_error != null) {
       return Scaffold(body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!))));
     }
-    final project = _project!;
+    final project = _project;
+    if (project == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return Scaffold(
       appBar: AppBar(
         title: Text(project.name, style: const TextStyle(fontSize: 16)),
+        leading: IconButton(icon: const Icon(Icons.folder_outlined), tooltip: 'Dự án', onPressed: _projectsMenu),
         actions: [
           IconButton(icon: const Icon(Icons.undo), onPressed: () => _edit((vs) => vs.undo())),
           IconButton(icon: const Icon(Icons.redo), onPressed: () => _edit((vs) => vs.redo())),
@@ -369,6 +546,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                   _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
               onTrackMenu: _trackMenu,
               snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
+              onTrim: (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
+              snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
               media: _media,
             ),
           ),
@@ -403,6 +582,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                   ? null
                   : () => _edit((vs) {
                         vs.removeClip(_selected!);
+                        _selected = null;
+                      })),
+          _Tool(
+              icon: Icons.format_indent_decrease,
+              label: 'Xóa dồn',
+              onTap: _selected == null
+                  ? null
+                  : () => _edit((vs) {
+                        vs.rippleDelete(_selected!);
                         _selected = null;
                       })),
         ]),

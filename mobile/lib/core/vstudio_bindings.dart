@@ -31,29 +31,29 @@ class VStudioBindings {
       : version = lib.lookupFunction<CStr Function(), CStr Function()>('vs_version'),
         ticksPerSecond = lib.lookupFunction<Int64 Function(), int Function()>('vs_ticks_per_second'),
         free = lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('vs_free'),
-        modulesJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
-            'vs_modules_json'),
-        sessionCreate = lib.lookupFunction<
-            Pointer<VsSession> Function(CStr, Int32, Int32, Int32, Int32),
+        modulesJson =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>('vs_modules_json'),
+        sessionCreate = lib.lookupFunction<Pointer<VsSession> Function(CStr, Int32, Int32, Int32, Int32),
             Pointer<VsSession> Function(CStr, int, int, int, int)>('vs_session_create'),
-        sessionOpen = lib.lookupFunction<Pointer<VsSession> Function(CStr), Pointer<VsSession> Function(CStr)>(
-            'vs_session_open'),
-        sessionDestroy = lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>(
-            'vs_session_destroy'),
-        lastError = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
-            'vs_last_error'),
+        sessionOpen =
+            lib.lookupFunction<Pointer<VsSession> Function(CStr), Pointer<VsSession> Function(CStr)>('vs_session_open'),
+        sessionDestroy = lib
+            .lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_session_destroy'),
+        lastError =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>('vs_last_error'),
         save = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
             'vs_save'),
-        autosave = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
-            'vs_autosave'),
-        projectJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
-            'vs_project_json'),
+        autosave =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_autosave'),
+        projectJson =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>('vs_project_json'),
         projectRevision = lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
             'vs_project_revision'),
-        duration = lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
-            'vs_duration'),
-        importMedia = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr),
-            CStr Function(Pointer<VsSession>, CStr)>('vs_import_media'),
+        duration =
+            lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_duration'),
+        importMedia =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_import_media'),
         addTrack = lib.lookupFunction<CStr Function(Pointer<VsSession>, Int32, CStr),
             CStr Function(Pointer<VsSession>, int, CStr)>('vs_add_track'),
         appendClip = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr),
@@ -64,8 +64,9 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, int)>('vs_trim_clip'),
         splitAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Int64), int Function(Pointer<VsSession>, int)>(
             'vs_split_at'),
-        removeTrack = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
-            'vs_remove_track'),
+        removeTrack =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
+                'vs_remove_track'),
         renameTrack = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
             int Function(Pointer<VsSession>, CStr, CStr)>('vs_rename_track'),
         setTrackFlags = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32),
@@ -74,21 +75,30 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int)>('vs_move_track'),
         snapClipMove = lib.lookupFunction<Int64 Function(Pointer<VsSession>, CStr, Int64, Int64, Int64, Pointer<Int32>),
             int Function(Pointer<VsSession>, CStr, int, int, int, Pointer<Int32>)>('vs_snap_clip_move'),
-        removeClip = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
-            'vs_remove_clip'),
+        rippleDelete =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
+                'vs_ripple_delete'),
+        isDirty =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_is_dirty'),
+        snapTime = lib.lookupFunction<Int64 Function(Pointer<VsSession>, Int64, Int64, CStr, Int64, Pointer<Int32>),
+            int Function(Pointer<VsSession>, int, int, CStr, int, Pointer<Int32>)>('vs_snap_time'),
+        removeClip =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
+                'vs_remove_clip'),
         undo = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_undo'),
         redo = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_redo'),
         previewSetSize = lib.lookupFunction<Void Function(Pointer<VsSession>, Int32, Int32),
             void Function(Pointer<VsSession>, int, int)>('vs_preview_set_size'),
-        previewSeek = lib.lookupFunction<Void Function(Pointer<VsSession>, Int64), void Function(Pointer<VsSession>, int)>(
-            'vs_preview_seek'),
+        previewSeek =
+            lib.lookupFunction<Void Function(Pointer<VsSession>, Int64), void Function(Pointer<VsSession>, int)>(
+                'vs_preview_seek'),
         play = lib.lookupFunction<Void Function(Pointer<VsSession>, Int64), void Function(Pointer<VsSession>, int)>(
             'vs_play'),
         pause = lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_pause'),
-        isPlaying = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
-            'vs_is_playing'),
-        playhead = lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
-            'vs_playhead'),
+        isPlaying =
+            lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_is_playing'),
+        playhead =
+            lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_playhead'),
         previewTakeFrame = lib.lookupFunction<
             Int32 Function(Pointer<VsSession>, Pointer<Uint8>, Int64, Pointer<Int64>, Pointer<Int32>, Pointer<Int32>,
                 Pointer<Int64>),
@@ -98,16 +108,17 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, int, int, int, int)>('vs_export_start'),
         exportStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
             int Function(Pointer<VsSession>, Pointer<Double>)>('vs_export_status'),
-        exportCancel = lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>(
-            'vs_export_cancel'),
+        exportCancel = lib
+            .lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_export_cancel'),
         requestThumbnails = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32),
             int Function(Pointer<VsSession>, CStr, int, int)>('vs_request_thumbnails'),
         requestWaveform = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32),
             int Function(Pointer<VsSession>, CStr, int)>('vs_request_waveform'),
-        librarySerial = lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
-            'vs_library_serial'),
+        librarySerial = lib
+            .lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_library_serial'),
         thumbnails = lib.lookupFunction<
-            Int32 Function(Pointer<VsSession>, CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>, Pointer<Int32>),
+            Int32 Function(
+                Pointer<VsSession>, CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>, Pointer<Int32>),
             int Function(Pointer<VsSession>, CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>,
                 Pointer<Int32>)>('vs_thumbnails'),
         waveform = lib.lookupFunction<Int64 Function(Pointer<VsSession>, CStr, Pointer<Int8>, Int64, Pointer<Int32>),
@@ -142,6 +153,9 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int) moveTrack;
   final int Function(Pointer<VsSession>, CStr, int, int, int, Pointer<Int32>) snapClipMove;
   final int Function(Pointer<VsSession>, CStr) removeClip;
+  final int Function(Pointer<VsSession>, CStr) rippleDelete;
+  final int Function(Pointer<VsSession>) isDirty;
+  final int Function(Pointer<VsSession>, int, int, CStr, int, Pointer<Int32>) snapTime;
   final int Function(Pointer<VsSession>) undo;
   final int Function(Pointer<VsSession>) redo;
   final void Function(Pointer<VsSession>, int, int) previewSetSize;
@@ -150,8 +164,9 @@ class VStudioBindings {
   final void Function(Pointer<VsSession>) pause;
   final int Function(Pointer<VsSession>) isPlaying;
   final int Function(Pointer<VsSession>) playhead;
-  final int Function(Pointer<VsSession>, Pointer<Uint8>, int, Pointer<Int64>, Pointer<Int32>, Pointer<Int32>,
-      Pointer<Int64>) previewTakeFrame;
+  final int Function(
+          Pointer<VsSession>, Pointer<Uint8>, int, Pointer<Int64>, Pointer<Int32>, Pointer<Int32>, Pointer<Int64>)
+      previewTakeFrame;
   final int Function(Pointer<VsSession>, CStr, int, int, int, int, int) exportStart;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;

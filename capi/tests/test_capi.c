@@ -62,6 +62,7 @@ int main(void) {
     EXPECT(bad == NULL);
     EXPECT(strlen(vs_last_error(s)) > 0);
     EXPECT(vs_remove_clip(s, "nope") != 0);
+    EXPECT(vs_ripple_delete(s, "nope") != 0);
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

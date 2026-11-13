@@ -68,6 +68,38 @@ void main() {
     expect(f!.width, 320);
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
 
+  test('ripple delete, save and reopen with media next to the project', () async {
+    final tmp = Directory.systemTemp.createTempSync('vs_ffi');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    // Same layout as ProjectStore: media/ next to the packages.
+    final root = '${tmp.path}/a';
+    final mediaCopy = File('$root/media/clip.mp4')..createSync(recursive: true);
+    File(media!).copySync(mediaCopy.path);
+    final pkg = '$root/Film.vstudio';
+    final vs = VStudio.create('Film', width: 640, height: 360);
+    vs.save(pkg);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final asset = vs.importMedia(mediaCopy.path);
+    vs.appendClip(track, asset);
+    vs.appendClip(track, asset);
+    final clips = vs.project().tracks.single.clips;
+    final len = clips.first.duration;
+    vs.rippleDelete(clips.first.id);
+    expect(vs.project().tracks.single.clips.single.start, closeTo(0, 1e-9)); // second clip pulled to 0
+    expect(vs.undo(), isTrue);
+    expect(vs.project().tracks.single.clips[1].start, closeTo(len, 1e-9));
+    expect(vs.dirty, isTrue);
+    vs.save(pkg);
+    expect(vs.dirty, isFalse);
+    vs.dispose();
+    // Moving the whole folder (like an iOS container move) keeps the media found.
+    Directory(root).renameSync('${tmp.path}/b');
+    final again = VStudio.open('${tmp.path}/b/Film.vstudio');
+    addTearDown(again.dispose);
+    expect(again.project().tracks.single.clips.length, 2);
+    expect(again.missingAssets(), isEmpty);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
   test('thumbnails, waveform and relink of a real file', () async {
     final vs = VStudio.create('ffi-lib', width: 640, height: 360);
     addTearDown(vs.dispose);

@@ -26,7 +26,10 @@ void main() {
       Offset(seconds * px, TimelineView.rulerH + row * TimelineView.trackH + TimelineView.trackH / 2);
 
   Future<List<String>> pump(WidgetTester tester,
-      {bool lockV1 = false, double? Function(String, double, double)? snap}) async {
+      {bool lockV1 = false,
+      double? Function(String, double, double)? snap,
+      String? selected,
+      double? Function(double, double, String)? snapTime}) async {
     final log = <String>[];
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
@@ -36,7 +39,7 @@ void main() {
           child: TimelineView(
             project: ProjectView.fromJson(_project(lockV1: lockV1)),
             playhead: 0,
-            selectedClip: null,
+            selectedClip: selected,
             onSeek: (_) {},
             onSelect: (_) {},
             onMove: (clip, track, start) => log.add('move $clip $track ${start.toStringAsFixed(2)}'),
@@ -44,6 +47,9 @@ void main() {
                 log.add('flags ${t.id} $enabled $locked $muted'),
             onTrackMenu: (t) => log.add('menu ${t?.id}'),
             snapMove: snap,
+            onTrim: (clip, {required start, required at}) =>
+                log.add('trim $clip ${start ? 'in' : 'out'} ${at.toStringAsFixed(2)}'),
+            snapTime: snapTime,
           ),
         ),
       ),
@@ -70,7 +76,13 @@ void main() {
     await tester.tap(find.byIcon(Icons.volume_off)); // A1 is muted -> unmute
     await tester.longPress(find.text('A1'));
     await tester.tap(find.text(' Track'));
-    expect(log, ['flags v2 true true false', 'flags v1 false false false', 'flags a1 true false false', 'menu a1', 'menu null']);
+    expect(log, [
+      'flags v2 true true false',
+      'flags v1 false false false',
+      'flags a1 true false false',
+      'menu a1',
+      'menu null'
+    ]);
   });
 
   testWidgets('drag moves onto another video track, not onto audio', (tester) async {
@@ -91,5 +103,38 @@ void main() {
     await longDrag(tester, at(tester, 1, 1), at(tester, 3, 1)); // c1 on locked V1
     await longDrag(tester, at(tester, 5, 0), at(tester, 9, 1)); // c2 dropped on locked V1 stays on V2
     expect(log, ['move c2 v2 8.00']);
+  });
+
+  Future<void> pan(WidgetTester tester, Offset from, Offset to) async {
+    final g = await tester.startGesture(from);
+    await g.moveTo(Offset.lerp(from, to, 0.3)!);
+    await tester.pump();
+    await g.moveTo(to);
+    await tester.pump();
+    await g.up();
+    await tester.pump();
+  }
+
+  testWidgets('trim handles of the selected clip', (tester) async {
+    // c2 on V2 spans [4,6).
+    final log = await pump(tester, selected: 'c2');
+    await pan(tester, at(tester, 6, 0), at(tester, 7.5, 0)); // out point +1.5 s
+    await pan(tester, at(tester, 4, 0), at(tester, 3, 0)); // in point -1 s
+    await pan(tester, at(tester, 5, 0), at(tester, 2, 0)); // middle: scrolls, no trim
+    expect(log, ['trim c2 out 7.50', 'trim c2 in 3.00']);
+  });
+
+  testWidgets('trim snaps and never inverts the clip', (tester) async {
+    final log = await pump(tester, selected: 'c2', snapTime: (t, tol, clip) => (t - 2).abs() <= tol ? 2.0 : null);
+    await pan(tester, at(tester, 4, 0), at(tester, 2.2, 0)); // in point -> 2.2, snaps to 2
+    await pan(tester, at(tester, 6, 0), at(tester, 1, 0)); // out point dragged before the in point
+    expect(log[0], 'trim c2 in 2.00');
+    expect(double.parse(log[1].split(' ').last), greaterThan(4.0));
+  });
+
+  testWidgets('no trim handles on a locked track', (tester) async {
+    final log = await pump(tester, selected: 'c1', lockV1: true);
+    await pan(tester, at(tester, 2, 1), at(tester, 4, 1));
+    expect(log.where((l) => l.startsWith('trim')), isEmpty);
   });
 }
