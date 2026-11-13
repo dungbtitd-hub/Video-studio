@@ -18,6 +18,7 @@ import 'ui/cover_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
+import 'ui/subtitle_sheet.dart';
 import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
@@ -601,10 +602,70 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     );
   }
 
+  /// "Phụ đề": lines, look, place and AI translation of subtitle tracks.
+  Future<void> _subtitles() async {
+    final vs = _vs;
+    if (vs == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => SubtitleSheet(
+        vs: vs,
+        project: () {
+          _refresh();
+          return _project!;
+        },
+        playhead: () => _playhead,
+        selected: () => _selected,
+        onEdited: () {
+          setState(_refresh);
+          _scheduleSave();
+          _vs?.seek(_playhead);
+        },
+        onSelect: (id, at) {
+          setState(() => _selected = id);
+          _seek(at);
+        },
+      ),
+    );
+  }
+
+  /// A subtitle line dragged on the preview moves the whole track (or the line, when it has its own
+  /// place); pulling a corner changes the text size. Rects are 0..1 of the frame.
+  void _commitSubtitle(ClipView clip, Rect from, Rect to) {
+    final track = _project?.tracks.where((t) => t.clips.any((c) => c.id == clip.id)).firstOrNull;
+    if (track == null || from.width <= 0) return;
+    final k = to.width / from.width;
+    if ((k - 1).abs() > 0.01) {
+      final style = track.subtitle?['style'];
+      final size = (((style is Map ? style['size'] : null) ?? 56) as num).toDouble() * k;
+      _edit((vs) => vs.setSubtitleSettings(track.id, {
+            'style': {'size': size.clamp(12, 400).roundToDouble()}
+          }));
+    } else {
+      final pos = {
+        'anchor': 'custom',
+        'h': 'center',
+        'x': to.center.dx.clamp(0.0, 1.0),
+        'y': to.center.dy.clamp(0.0, 1.0),
+      };
+      _edit((vs) => clip.content?['position'] is Map
+          ? vs.updateClipContent(clip.id, {'position': pos})
+          : vs.setSubtitleSettings(track.id, {'position': pos}));
+    }
+    _vs?.seek(_playhead);
+  }
+
   /// The object's box was dragged / pinched on the preview: one edit (a key when it is animated).
   void _commitObject(Rect from, Rect to) {
     final vs = _vs, clip = _selectedObject, project = _project;
     if (vs == null || clip == null || project == null) return;
+    if (clip.kind == 'subtitle') {
+      _commitSubtitle(clip, from, to);
+      return;
+    }
     final st = vs.clipStateAt(clip.id, _playhead);
     if (!st.inside) return;
     final t = objectTransform(
@@ -631,7 +692,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
         rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
         onChanged: _commitObject,
-        onDoubleTap: clip.kind == 'text' ? _text : _stickers,
+        onDoubleTap: clip.kind == 'text'
+            ? _text
+            : clip.kind == 'subtitle'
+                ? _subtitles
+                : _stickers,
       ),
     ]);
   }
@@ -1192,6 +1257,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
             _Tool(icon: Icons.title, label: 'Chữ', onTap: _vs == null ? null : _text),
             _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
+            _Tool(icon: Icons.closed_caption_outlined, label: 'Phụ đề', onTap: _vs == null ? null : _subtitles),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
