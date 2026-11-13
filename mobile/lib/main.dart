@@ -50,8 +50,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       _vs = VStudio.create('Dự án mới', width: 1080, height: 1920);
       _vs!.setPreviewSize(720, 1280);
       _refresh();
+      debugPrint('vstudio: core ${_vs!.version} ready'); // CI smoke test looks for this line
     } catch (e) {
       _error = 'Không nạp được Video Studio Core: $e';
+      debugPrint('vstudio: core failed: $e');
     }
     // Per-frame UI tick: polls the core for a new preview frame / playhead.
     // Nothing here decodes; it only copies a ready frame.

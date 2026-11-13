@@ -14,27 +14,22 @@ C API (`capi/include/vstudio/vstudio_c.h`) with `dart:ffi`.
 | `lib/main.dart` | editor screen: preview, transport, timeline, tools |
 | `native/CMakeLists.txt` | builds `libvstudio.so` for Android via Gradle |
 
-## First-time setup
+## Build and run
 
-The platform folders are generated, not committed:
+The Android and iOS projects are committed (`android/`, `ios/`).
 
-```bash
-cd mobile
-flutter create --platforms=android,ios --org com.videostudio .
-flutter pub get
-```
+* **Android**: `flutter run` or `flutter build apk`. Gradle builds the core, the C API and the MediaCodec
+  module from `native/CMakeLists.txt` into `libvstudio.so` (minSdk 26, arm64-v8a + x86_64).
+* **iOS**: first build the core once from the repository root with `scripts/build_ios_core.sh` (writes
+  `build-ios/`), then `flutter run` / `flutter build ios`. `ios/Flutter/VStudioCore.xcconfig` force-loads the
+  static core into the Runner app; `DynamicLibrary.process()` finds the symbols.
 
-Then:
-
-* **Android** – add to `android/app/build.gradle` inside `android { }`:
-  `externalNativeBuild { cmake { path "../../native/CMakeLists.txt" } }`
-* **iOS** – build the core as a static framework with `scripts/build_ios_core.sh` and add it to the Runner
-  target; `DynamicLibrary.process()` finds the symbols.
+CI builds both apps. On Android it also installs the APK on the emulator and checks that the core loads
+(`scripts/smoke_android_app.sh`).
 
 ## Status (P0)
 
 * Done: FFI bindings, editor screen, timeline gestures, preview polling, export trigger, autosave.
-* Pending in P0: MediaCodec module (Android) and the Apple AVFoundation/VideoToolbox module shared with
-  macOS. Until they land, importing media on a phone reports "no media module available".
+* Done: MediaCodec module (Android) and the Apple AVFoundation module shared with macOS, linked into the apps.
 * Preview frames are copied once per frame through FFI. The plan's target is a native texture with no copy;
   that replaces `takeFrame()` once the platform modules exist.
