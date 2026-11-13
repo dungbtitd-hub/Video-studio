@@ -41,6 +41,8 @@ void setTrackFlags(Project& p, const Id& trackId, bool enabled, bool locked, boo
 // Whether an asset may be placed on a track of this type.
 bool compatible(const MediaAsset& a, TrackType t);
 
+// Removes a clip and pulls the later clips of its track left by its length, closing the gap.
+void rippleDelete(Project& p, const Id& clipId);
 }  // namespace edit
 
 // ---- snapping (read-only helpers for UIs while dragging) ----
@@ -59,4 +61,7 @@ SnapResult snapTime(const Project& p, Time t, Time tolerance, const Id& excludeC
 // Returns the clip start to use.
 SnapResult snapClipMove(const Project& p, const Id& clipId, Time proposedStart, Time tolerance,
                         std::optional<Time> playhead = {});
+// Nearest clip start/end on any track strictly after (forward) or before `t`; nullopt if none.
+// For "next/previous edit" navigation. Binary search per track.
+std::optional<Time> adjacentEditPoint(const Project& p, Time t, bool forward);
 }  // namespace vstudio

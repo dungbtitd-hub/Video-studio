@@ -58,6 +58,9 @@ public:
     Q_INVOKABLE void addToTimeline(const QString& assetId);
     Q_INVOKABLE void splitAtPlayhead();
     Q_INVOKABLE void deleteSelected();
+    Q_INVOKABLE void rippleDeleteSelected();  // delete and close the gap on its track
+    Q_INVOKABLE void seekBy(double seconds);
+    Q_INVOKABLE void jumpEditPoint(bool forward);  // previous/next clip edge on any track
     Q_INVOKABLE void moveClip(const QString& clipId, const QString& trackId, double seconds);
     Q_INVOKABLE void trimClip(const QString& clipId, bool start, double seconds);
     // ---- tracks (each one undo step) ----

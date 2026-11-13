@@ -135,6 +135,12 @@ void Editor::removeClip(const Id& clipId) {
     run("Delete clip", EditCommand::Scope::Tracks, {t->id}, [clipId](Project& p) { edit::removeClip(p, clipId); });
 }
 
+void Editor::rippleDelete(const Id& clipId) {
+    const Track* t = project_.trackOfClip(clipId);
+    if (!t) throw EditError("clip not found");
+    run("Ripple delete", EditCommand::Scope::Tracks, {t->id}, [clipId](Project& p) { edit::rippleDelete(p, clipId); });
+}
+
 void Editor::moveClip(const Id& clipId, const Id& toTrackId, Time timelineIn) {
     const Track* t = project_.trackOfClip(clipId);
     if (!t) throw EditError("clip not found");

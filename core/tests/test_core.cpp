@@ -610,6 +610,31 @@ TEST("snap: clip edges, playhead and zero within tolerance") {
     (void)c;
 }
 
+TEST("ripple delete closes the gap; edit points for navigation") {
+    Fixture f;
+    const Id a = f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(2));   // 0..2
+    const Id b = f.ed.insertClip(f.v1, f.asset, sec(2), sec(0), sec(3));   // 2..5
+    const Id c = f.ed.insertClip(f.v1, f.asset, sec(6), sec(0), sec(1));   // 6..7
+    const Id d = f.ed.insertClip(f.a1, f.asset, sec(4), sec(0), sec(4));   // 4..8 other track: untouched
+    const Project& p = f.ed.project();
+    CHECK_EQ(*adjacentEditPoint(p, sec(0), true), sec(2));
+    CHECK_EQ(*adjacentEditPoint(p, sec(3), true), sec(4));
+    CHECK_EQ(*adjacentEditPoint(p, sec(5.5), false), sec(5));
+    CHECK_EQ(*adjacentEditPoint(p, sec(6), false), sec(5));
+    CHECK(!adjacentEditPoint(p, sec(8), true));
+    CHECK(!adjacentEditPoint(p, sec(0), false));
+    f.ed.rippleDelete(b);
+    CHECK(!p.findClip(b));
+    CHECK_EQ(p.findClip(c)->timelineIn, sec(3));  // 6 - 3
+    CHECK_EQ(p.findClip(a)->timelineIn, sec(0));
+    CHECK_EQ(p.findClip(d)->timelineIn, sec(4));
+    CHECK(f.ed.undo());
+    CHECK_EQ(p.findClip(c)->timelineIn, sec(6));
+    CHECK(p.findClip(b));
+    f.ed.setTrackFlags(f.v1, true, true, false);
+    CHECK_THROWS(f.ed.rippleDelete(a));
+}
+
 TEST("snap: thousands of clips stay fast") {
     Fixture f;
     for (int i = 0; i < 3000; ++i) f.ed.insertClip(f.v1, f.asset, sec(i * 2.0), sec(0), sec(1));

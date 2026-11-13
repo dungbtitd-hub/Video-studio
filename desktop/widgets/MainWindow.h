@@ -12,14 +12,29 @@ class TimelineWidget;
 class QListWidget;
 class QLabel;
 class QToolButton;
+class QCloseEvent;
+class QToolBar;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(EditorController* editor, QWidget* parent = nullptr);
     [[nodiscard]] TimelineWidget* timeline() const { return timeline_; }
+    // Every shortcut in the menus, as shown in Trợ giúp > Phím tắt (menu, action, keys).
+    [[nodiscard]] QList<QStringList> shortcutTable() const;
+    // Layout persistence: QSettings group "workspace" (geometry + dock state).
+    void saveLayout() const;
+    void resetLayout();
+
+protected:
+    void closeEvent(QCloseEvent* e) override;
 
 private:
+    void buildMenus();
+    void importMedia();
+    void exportVideo();
+    void showShortcuts();
+    bool confirmDiscard();  // false = user cancelled
     void refreshAssets();
     void refreshState();
     QIcon assetIcon(const QString& id);  // cached until a new thumbnail strip arrives
@@ -35,5 +50,8 @@ private:
     QToolButton* exportBtn_;
     QAction* undo_;
     QAction* redo_;
+    QAction* snapAct_ = nullptr;
+    QToolBar* tlBar_ = nullptr;  // timeline tools: snapping, zoom
+    QByteArray defaultState_;  // dock layout as built, for "reset layout"
     QHash<QString, QIcon> icons_;  // key: asset id + missing flag
 };

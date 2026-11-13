@@ -274,6 +274,21 @@ void EditorController::deleteSelected() {
     if (edit([&] { editor_->removeClip(s(selected_)); })) setSelectedClip({});
 }
 
+void EditorController::rippleDeleteSelected() {
+    if (selected_.isEmpty()) return;
+    if (edit([&] { editor_->rippleDelete(s(selected_)); })) setSelectedClip({});
+}
+
+void EditorController::seekBy(double seconds) { seek(std::max(0.0, playhead_ + seconds)); }
+
+void EditorController::jumpEditPoint(bool forward) {
+    // Half a frame of slack so a playhead parked on an edge moves on to the next one.
+    const Time half = Time::fromTicks(Time::fromFrame(1, editor_->project().fps).ticks() / 2);
+    const Time from = fromSecs(playhead_) + (forward ? half : -half);
+    if (const auto t = adjacentEditPoint(editor_->project(), from, forward)) seek(secs(*t));
+    else seek(forward ? duration() : 0.0);
+}
+
 void EditorController::moveClip(const QString& clipId, const QString& trackId, double seconds) {
     edit([&] { editor_->moveClip(s(clipId), s(trackId), fromSecs(std::max(0.0, seconds)).snapToFrame(editor_->project().fps)); });
 }

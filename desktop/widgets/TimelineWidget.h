@@ -19,9 +19,17 @@ public:
     void setScrollSeconds(double s);
     [[nodiscard]] double scrollSeconds() const { return scroll_; }
     [[nodiscard]] double pxPerSec() const { return pxPerSec_; }
+    // Zoom keeping the time under `anchorX` (widget x) still; -1 = the playhead (or the left edge).
+    void zoomBy(double factor, double anchorX = -1);
+    void zoomToFit();  // whole project in view
+    [[nodiscard]] bool snapping() const { return snapping_; }
+    void setSnapping(bool on);
+    static constexpr double kMinPxPerSec = 5, kMaxPxPerSec = 400;
 
 signals:
     void painted();  // for benchmarks
+    void snappingChanged(bool on);
+    void zoomChanged(double pxPerSec);
 
 protected:
     void paintEvent(QPaintEvent*) override;

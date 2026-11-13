@@ -31,6 +31,7 @@ inline QString styleSheet() {
                                  border-radius: 6px; padding: 5px 10px; }
       QToolButton:hover, QPushButton:hover { background: #252a33; }
       QToolButton:disabled, QPushButton:disabled { color: #6e7685; }
+      QToolButton:checked { background: rgba(242,169,59,0.18); border-color: #f2a93b; color: #f2c27a; }
       QToolButton#primary, QPushButton#primary { background: #f2a93b; color: #1b1206; border-color: #f2a93b; }
       QListWidget { background: #171a20; border: none; }
       QListWidget::item { background: #1d2128; border: 1px solid #232830; border-radius: 6px; margin: 3px; padding: 8px; }
