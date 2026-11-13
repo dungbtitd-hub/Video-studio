@@ -135,6 +135,21 @@ VS_API int vs_track_cover_start(vs_session* s, const char* clip_id, const char* 
                                 int64_t timeline_to);
 VS_API int vs_track_status(vs_session* s, double* progress);
 VS_API void vs_track_cancel(vs_session* s);
+/* ---- transitions between clips (transitions.hpp); undoable ----
+ * vs_transitions_json: [{"id","name","category"}].
+ * vs_set_transition: edge 0 = the clip's start (the cut from the clip touching it on the left, or a fade in
+ * from nothing), 1 = its end (the cut to the next touching clip, or a fade out to nothing). type "" removes.
+ * duration in ticks (<= 0: the default 0.5 s), clamped to 0.1..5 s and, when played, to the clips' lengths.
+ * vs_set_transition_everywhere: on every cut between touching clips; returns how many, or -1.
+ * vs_cut_points_json: {"<track id>": [{"at", "from", "to", "type", "duration"}]} for every video track:
+ * every place a transition can go (from/to null at free ends; type null when none; duration as played).
+ * vs_transition_preview: blends a and b (RGBA, width x height) into out at progress 0..1 (thumbnails). */
+VS_API char* vs_transitions_json(void);
+VS_API int vs_set_transition(vs_session* s, const char* clip_id, int edge, const char* type, int64_t duration);
+VS_API int vs_set_transition_everywhere(vs_session* s, const char* type, int64_t duration);
+VS_API char* vs_cut_points_json(vs_session* s);
+VS_API int vs_transition_preview(const char* type, const uint8_t* a, const uint8_t* b, uint8_t* out, int width,
+                                 int height, double progress);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

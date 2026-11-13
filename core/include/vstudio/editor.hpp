@@ -19,6 +19,7 @@
 #include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
 #include "vstudio/timeline.hpp"
+#include "vstudio/transitions.hpp"
 
 namespace vstudio {
 
@@ -87,6 +88,15 @@ public:
     // with these (linear in between, so the cover moves exactly like the subject).
     void setCoverTrack(const Id& clipId, const Id& effectId, const std::vector<std::pair<Time, std::array<double, 4>>>& boxes);
     [[nodiscard]] const Json* coverParams(const Id& clipId, const Id& effectId) const;
+
+    // ---- transitions (transitions.hpp); each call is one undo step ----
+    // Sets (`type` non-empty) or removes (empty) the transition at the clip's start or end.
+    // The end of a clip that touches the next one is that cut, stored on the next clip.
+    void setTransition(const Id& clipId, TransitionEdge edge, const std::string& type,
+                       Time duration = defaultTransitionDuration());
+    // The same transition on every cut between touching clips of every unlocked video
+    // track ("Áp dụng cho tất cả"); empty `type` removes them. Returns the number of cuts.
+    int setTransitionEverywhere(const std::string& type, Time duration = defaultTransitionDuration());
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null

@@ -154,6 +154,8 @@ Json clipJ(const Clip& c, const Id& trackId) {
            {"source_in", timeJ(c.sourceIn)}, {"source_out", timeJ(c.sourceOut)}, {"speed", ratJ(c.speed)},
            {"volume", c.volume}, {"transform", c.transform}, {"effects", c.effects}};
     if (c.keyframes.is_object() && !c.keyframes.empty()) j["keyframes"] = c.keyframes;
+    if (c.transitionIn.is_object()) j["transition_in"] = c.transitionIn;
+    if (c.transitionOut.is_object()) j["transition_out"] = c.transitionOut;
     mergeExtra(j, c.extra);
     return j;
 }
@@ -171,8 +173,10 @@ Clip clipFrom(const Json& j) {
     c.transform = j.value("transform", Json::object());
     c.effects = j.value("effects", Json::array());
     c.keyframes = j.value("keyframes", Json::object());
+    if (auto it = j.find("transition_in"); it != j.end() && it->is_object()) c.transitionIn = *it;
+    if (auto it = j.find("transition_out"); it != j.end() && it->is_object()) c.transitionOut = *it;
     c.extra = collectExtra(j, {"clip_id", "asset_id", "track_id", "timeline_in", "source_in", "source_out", "speed",
-                               "volume", "transform", "effects", "keyframes"});
+                               "volume", "transform", "effects", "keyframes", "transition_in", "transition_out"});
     return c;
 }
 

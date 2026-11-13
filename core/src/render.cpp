@@ -9,6 +9,7 @@
 #include "detail/paths.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/pixel.hpp"
+#include "vstudio/transitions.hpp"
 
 namespace vstudio {
 
@@ -318,34 +319,79 @@ ICompositor& Renderer::compositor() {
     return *compositor_;
 }
 
+std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const VideoFrame& out,
+                                                  const std::string& purpose) {
+    // Deep sources (10-bit, Log) stay deep through grading even in an 8-bit preview,
+    // so strong corrections do not band; plain clips skip the cost.
+    const bool graded = layer.clip->effects.is_array() && !layer.clip->effects.empty();
+    auto frame = sourceFrame(layer, out.width, out.height, purpose, deep_ || graded);
+    if (!frame) return std::nullopt;
+    if (modules_ && graded) {
+        // Effects work on a copy: cached source frames stay untouched.
+        auto fx = std::make_shared<VideoFrame>(*frame);
+        std::vector<std::string> w;
+        applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
+        for (auto& m : w) warn(std::move(m));
+        frame = std::move(fx);
+    }
+    if (frame->deep() && !out.deep())  // 8-bit output: dither down once, after grading
+        frame = std::make_shared<const VideoFrame>(convertedFrame(*frame, PixelFormat::RGBA8));
+    Transform tr = animatedTransform(*layer.clip, layer.sourceTime);  // keyframes (zoom, pan, opacity)
+    // Scale offsets from canvas pixels to output pixels (preview may be smaller).
+    const double k = static_cast<double>(out.width) / project_.canvas.width;
+    tr.x *= k;
+    tr.y *= k;
+    return CompositeLayer{std::move(frame), tr};
+}
+
+std::optional<CompositeLayer> Renderer::transitionLayer(const ActiveTransition& tr, std::size_t trackIndex, Time t,
+                                                        const VideoFrame& out, const std::string& purpose) {
+    // Each side is drawn on its own transparent canvas, then the two are blended.
+    auto side = [&](const Clip* c, const std::string& why) {
+        VideoFrame f;
+        f.allocate(out.width, out.height, out.format);
+        if (out.deep()) std::fill(f.half.begin(), f.half.end(), std::uint16_t{0});
+        else std::fill(f.rgba.begin(), f.rgba.end(), std::uint8_t{0});
+        const MediaAsset* a = c ? project_.findAsset(c->assetId) : nullptr;
+        if (!a) return f;
+        // Past its out point the outgoing clip plays on into its source (its last frame
+        // held when there is none); the incoming one starts early the same way.
+        Time src = c->toSource(t);
+        const Rational fps = a->fps.num > 0 ? a->fps : project_.fps;
+        const Time last = a->duration > Time::zero() ? a->duration - Time::fromFrame(1, fps) : c->sourceOut - Time::fromFrame(1, fps);
+        src = std::clamp(src, Time::zero(), std::max(Time::zero(), last));
+        if (auto l = clipLayer({c, a, src, trackIndex}, out, why); l && l->frame) {
+            if (out.deep()) compositeOverDeep(f, *l->frame, l->transform);
+            else compositeOver(f, *l->frame, l->transform);
+        }
+        return f;
+    };
+    // The incoming clip reads through its own decoder: both sides decode at once without seeking back and forth.
+    const VideoFrame a = side(tr.from, purpose), b = side(tr.to, purpose + "#in");
+    auto blended = std::make_shared<VideoFrame>();
+    blended->allocate(out.width, out.height, out.format);
+    blended->pts = t;
+    applyTransition(tr.type, a, b, tr.progress, *blended, t);
+    return CompositeLayer{std::move(blended), Transform{}};
+}
+
 VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::string& purpose) {
     VideoFrame out;
     out.allocate(width > 0 ? width : project_.canvas.width, height > 0 ? height : project_.canvas.height,
                  deep_ ? PixelFormat::RGBA16F : PixelFormat::RGBA8);
     out.pts = t;
     std::vector<CompositeLayer> layers;
-    for (const auto& layer : evaluateVideo(project_, t)) {
-        // Deep sources (10-bit, Log) stay deep through grading even in an 8-bit preview,
-        // so strong corrections do not band; plain clips skip the cost.
-        const bool graded = layer.clip->effects.is_array() && !layer.clip->effects.empty();
-        auto frame = sourceFrame(layer, out.width, out.height, purpose, deep_ || graded);
-        if (!frame) continue;
-        if (modules_ && graded) {
-            // Effects work on a copy: cached source frames stay untouched.
-            auto fx = std::make_shared<VideoFrame>(*frame);
-            std::vector<std::string> w;
-            applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
-            for (auto& m : w) warn(std::move(m));
-            frame = std::move(fx);
+    for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
+        const Track& track = project_.tracks[i];
+        if (track.type != TrackType::Video || !track.enabled) continue;
+        if (auto tr = transitionAt(track, t)) {
+            if (auto l = transitionLayer(*tr, i, t, out, purpose)) layers.push_back(std::move(*l));
+            continue;
         }
-        if (frame->deep() && !out.deep())  // 8-bit output: dither down once, after grading
-            frame = std::make_shared<const VideoFrame>(convertedFrame(*frame, PixelFormat::RGBA8));
-        Transform tr = animatedTransform(*layer.clip, layer.sourceTime);  // keyframes (zoom, pan, opacity)
-        // Scale offsets from canvas pixels to output pixels (preview may be smaller).
-        const double k = static_cast<double>(out.width) / project_.canvas.width;
-        tr.x *= k;
-        tr.y *= k;
-        layers.push_back({std::move(frame), tr});
+        const Clip* c = track.clipAt(t);
+        const MediaAsset* a = c ? project_.findAsset(c->assetId) : nullptr;
+        if (!a) continue;
+        if (auto l = clipLayer({c, a, c->toSource(t), i}, out, purpose)) layers.push_back(std::move(*l));
     }
     std::string err;
     if (out.deep() && !compositor().supportsDeep()) {
@@ -391,11 +437,18 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
             if (inFrames == 0) continue;
             // Volume keyframes: gain evaluated every 32 samples and ramped in between,
             // so fades are smooth (no zipper noise) and cheap.
-            const bool animated = c.keyframes.is_object() && c.keyframes.contains(kf::kVolume);
-            const KeyframeCurve volumeCurve = animated ? KeyframeCurve(c.keyframes[kf::kVolume]) : KeyframeCurve();
+            const bool keyed = c.keyframes.is_object() && c.keyframes.contains(kf::kVolume);
+            const KeyframeCurve volumeCurve = keyed ? KeyframeCurve(c.keyframes[kf::kVolume]) : KeyframeCurve();
+            // Transitions fade the sound with the picture (out before a cut, in after it).
+            const std::size_t ci = static_cast<std::size_t>(&c - tr.clips.data());
+            const bool fading = c.transitionIn.is_object() || c.transitionOut.is_object() ||
+                                (ci + 1 < tr.clips.size() && tr.clips[ci + 1].transitionIn.is_object());
+            const bool animated = keyed || fading;
             auto gainAt = [&](std::int64_t i) {
-                const double v = animated ? volumeCurve.at(c.toSource(Time::fromSample(s0 + i, sr))) : 1.0;
-                return static_cast<float>(c.volume * tr.volume * v);
+                const Time at = Time::fromSample(s0 + i, sr);
+                const double v = keyed ? volumeCurve.at(c.toSource(at)) : 1.0;
+                const double f = fading ? transitionGain(tr, c, at) : 1.0;
+                return static_cast<float>(c.volume * tr.volume * v * f);
             };
             constexpr std::int64_t kStep = 32;
             float g0 = gainAt(0), g1 = animated ? gainAt(std::min(kStep, n)) : g0;

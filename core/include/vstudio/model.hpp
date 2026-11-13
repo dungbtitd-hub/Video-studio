@@ -61,6 +61,12 @@ struct Clip {
     Json transform = Json::object();
     Json effects = Json::array();
     Json keyframes = Json::object();  // animated properties, see keyframes.hpp
+    // Transitions (transitions.hpp): {"type": "fade", "duration": <ticks>} or null.
+    // `transitionIn` plays at the clip's start: the cut from the clip just before it on
+    // the track, or a fade in from nothing. `transitionOut` plays at its end only when
+    // no clip follows right after it (a fade out to nothing).
+    Json transitionIn;
+    Json transitionOut;
     Json extra = Json::object();
 
     [[nodiscard]] Time sourceDuration() const { return sourceOut - sourceIn; }
