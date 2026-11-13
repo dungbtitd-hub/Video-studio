@@ -182,3 +182,33 @@ class ProjectView {
     );
   }
 }
+
+/// A place on a video track where a transition can go: a cut between two touching
+/// clips ([from] and [to] set), or the free start ([to] only) / end ([from] only) of a clip.
+class CutPoint {
+  const CutPoint({required this.trackId, required this.at, this.from, this.to, this.type, this.duration = 0});
+  factory CutPoint.fromJson(String trackId, Map<String, dynamic> j) => CutPoint(
+      trackId: trackId,
+      at: ticksToSeconds((j['at'] as num).toInt()),
+      from: j['from'] as String?,
+      to: j['to'] as String?,
+      type: j['type'] as String?,
+      duration: ticksToSeconds((j['duration'] as num? ?? 0).toInt()));
+  final String trackId;
+  final double at; // seconds on the timeline
+  final String? from, to;
+  final String? type; // null: no transition here
+  final double duration; // seconds, as played
+  bool get joined => from != null && to != null;
+
+  /// The clip that stores it and its edge (0 = start, 1 = end).
+  String get clipId => to ?? from!;
+  int get edge => to != null ? 0 : 1;
+
+  /// Where it plays on the timeline (start, end) in seconds.
+  (double, double) get window => joined
+      ? (at - duration / 2, at + duration / 2)
+      : edge == 0
+          ? (at, at + duration)
+          : (at - duration, at);
+}

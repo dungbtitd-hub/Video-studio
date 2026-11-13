@@ -10,6 +10,8 @@ import 'package:video_studio/core/transfer.dart';
 import 'package:video_studio/core/vstudio.dart';
 import 'package:video_studio/ui/cover_panel.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
+import 'package:video_studio/ui/transition_sheet.dart';
+import 'package:video_studio/core/project_model.dart';
 
 void main() {
   final lib = Platform.environment['VSTUDIO_LIB'];
@@ -421,5 +423,85 @@ void main() {
     await tester.pump();
     expect(events.skip(1), ['patch style=frosted', 'patch shape=ellipse', 'track', 'follow true', 'done']);
     expect(tester.takeException(), isNull); // no overflow at phone width
+  }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
+
+  test('transitions: places on the track, set at a cut, everywhere, previews, undo', () {
+    final vs = VStudio.create('Transitions', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    expect(vs.transitions().length, greaterThanOrEqualTo(30));
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final asset = vs.importMedia(media!);
+    vs.appendClip(track, asset);
+    vs.appendClip(track, asset);
+    final clips = vs.project().tracks.single.clips;
+    var cuts = vs.cutPoints()[track]!;
+    expect(cuts.map((c) => (c.from, c.to)), [(null, clips[0].id), (clips[0].id, clips[1].id), (clips[1].id, null)]);
+    expect(cuts.every((c) => c.type == null), isTrue);
+    // The end of the first clip touches the second: that is the cut, stored on the second clip's start.
+    vs.setTransition(clips[0].id, 1, 'dip_black', seconds: 0.8);
+    cuts = vs.cutPoints()[track]!;
+    expect(cuts[1].type, 'dip_black');
+    expect(cuts[1].duration, closeTo(0.8, 1e-6));
+    expect(cuts[1].clipId, clips[1].id);
+    vs.setTransition(clips[1].id, 1, 'fade', seconds: 9); // free end: at most half the clip
+    expect(vs.cutPoints()[track]![2].duration, closeTo(clips[1].duration / 2, 1e-3));
+    expect(vs.setTransitionEverywhere('push_left'), 1);
+    expect(vs.cutPoints()[track]![1].type, 'push_left');
+    expect(vs.undo(), isTrue);
+    expect(vs.cutPoints()[track]![1].type, 'dip_black');
+    expect(() => vs.setTransition(clips[0].id, 0, 'nope'), throwsA(isA<VStudioException>()));
+    vs.setTransition(clips[1].id, 0, null);
+    expect(vs.cutPoints()[track]![1].type, isNull);
+    // Thumbnails: the start is the first picture, the end the second.
+    final a = Uint8List(8 * 8 * 4)..fillRange(0, 256, 255);
+    final b = Uint8List(8 * 8 * 4);
+    for (var i = 3; i < b.length; i += 4) {
+      b[i] = 255;
+    }
+    expect(vs.transitionPreview('wipe_left', a, b, 8, 8, 0)![0], 255);
+    expect(vs.transitionPreview('wipe_left', a, b, 8, 8, 1)![0], 0);
+    expect(vs.transitionPreview('nope', a, b, 8, 8, 0.5), isNull);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  testWidgets('transition sheet: thumbnails, tap applies and plays, length, apply to all, no overflow', (tester) async {
+    final vs = VStudio.create('ffi-transitions', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final events = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 360,
+            child: TransitionSheet(
+              vs: vs,
+              cut: const CutPoint(trackId: 't', at: 2, from: 'a', to: 'b'),
+              onApply: (type, s) => events.add('apply $type ${s.toStringAsFixed(1)}'),
+              onApplyAll: (type, s) => events.add('all $type'),
+              onRemove: () => events.add('remove'),
+              onDuration: (s) => events.add('length ${s.toStringAsFixed(1)}'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300))); // image decodes
+    await tester.pump();
+    expect(find.byType(RawImage), findsWidgets);
+    expect(tester.widget<OutlinedButton>(find.byKey(const Key('transition-all'))).onPressed, isNull);
+    await tester.tap(find.byKey(const Key('transition-dip_black')));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(find.byKey(const Key('transition-playing')), findsOneWidget);
+    await tester.drag(find.byKey(const Key('transition-duration')), const Offset(60, 0));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('transition-all')));
+    await tester.tap(find.byKey(const Key('transition-remove')));
+    await tester.pump();
+    expect(events.first, 'apply dip_black 0.5');
+    expect(events[1], startsWith('length '));
+    expect(events.sublist(2), ['all dip_black', 'remove']);
+    expect(tester.takeException(), isNull); // no overflow at phone width
+    await tester.pumpWidget(const SizedBox()); // stops the preview timer
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
 }
