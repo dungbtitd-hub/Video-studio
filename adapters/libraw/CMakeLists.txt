@@ -34,7 +34,7 @@ add_library(vstudio_libraw STATIC src/libraw_module.cpp)
 add_library(vstudio::libraw ALIAS vstudio_libraw)
 target_include_directories(vstudio_libraw PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(vstudio_libraw PUBLIC vstudio::core PRIVATE vstudio_libraw_deps)
-target_compile_definitions(vstudio_libraw PUBLIC VSTUDIO_HAS_LIBRAW=1)
+target_compile_definitions(vstudio_libraw PUBLIC VSTUDIO_HAS_LIBRAW=1 PRIVATE NOMINMAX)  # libraw.h pulls in windows.h
 
 if(VSTUDIO_BUILD_TESTS)
   add_executable(vstudio_libraw_tests tests/test_libraw.cpp ${PROJECT_SOURCE_DIR}/core/tests/main.cpp)
