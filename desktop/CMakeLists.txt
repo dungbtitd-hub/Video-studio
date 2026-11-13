@@ -18,5 +18,8 @@ endif()
 if(TARGET vstudio_apple)
   target_link_libraries(vstudio_desktop_common PUBLIC vstudio::apple)  # Metal compositor
 endif()
+if(TARGET vstudio_windows)
+  target_link_libraries(vstudio_desktop_common PUBLIC vstudio::windows)  # D3D11 compositor
+endif()
 
 add_subdirectory(widgets)

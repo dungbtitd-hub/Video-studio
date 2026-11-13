@@ -17,6 +17,9 @@
 #if defined(VSTUDIO_HAS_METAL)
 #include "vstudio/apple/metal_compositor.hpp"
 #endif
+#if defined(VSTUDIO_HAS_D3D11)
+#include "vstudio/windows/d3d11_compositor.hpp"
+#endif
 
 using namespace vstudio;
 
@@ -64,6 +67,9 @@ int main(int argc, char** argv) {
     ffmpeg::registerModule(mods);
 #if defined(VSTUDIO_HAS_METAL)
     apple::registerMetalCompositor(mods);
+#endif
+#if defined(VSTUDIO_HAS_D3D11)
+    windows::registerD3D11Compositor(mods);
 #endif
     std::string err;
     auto backend = mods.best<IMediaBackend>("decode", &err);

@@ -10,7 +10,7 @@ cross-platform GPU abstraction library in the core.
 |---|---|---|
 | all | `builtin.cpu_compositor` (reference, fallback) | done |
 | macOS, iOS | `apple.metal_compositor` (Metal) | done in this step |
-| Windows | D3D11 compositor | next |
+| Windows | `windows.d3d11_compositor` (Direct3D 11) | done |
 | Android | GLES 3 / Vulkan compositor | after Windows |
 | Linux (dev/CI only) | CPU | no GPU module planned |
 
@@ -37,6 +37,12 @@ One render pass per frame: clear to opaque black, one textured quad per layer
 then a blit to a shared buffer that becomes the output frame. Source textures are kept
 per frame identity, so a still image or paused playhead is uploaded once; textures of
 frames that are gone are reused for new frames of the same size.
+
+## Direct3D 11 compositor
+
+Same design and shader logic as Metal (HLSL, compiled at start-up by `d3dcompiler_47.dll`, which is
+loaded at run time). The module only uses a hardware device; tests also accept WARP so the suite runs
+on GPU-less CI runners.
 
 Next steps: keep the output on the GPU for preview (present the texture directly instead of
 reading it back), and import decoder output as textures (CVPixelBuffer to MTLTexture) so
