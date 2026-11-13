@@ -840,8 +840,24 @@ HttpRequest buildHttpRequest(const Json& config, const TranslateRequest& req) {
     return r;
 }
 
+namespace {
+bool parseReply(const Json& config, const TranslateRequest& req, const std::string& body, std::vector<std::string>& out,
+                std::string* error);
+}
+
 bool parseHttpResponse(const Json& config, const TranslateRequest& req, const std::string& body,
                        std::vector<std::string>& out, std::string* error) {
+    try {
+        return parseReply(config, req, body, out, error);
+    } catch (const std::exception& e) {  // a reply of an unexpected shape
+        if (error) *error = std::string("Câu trả lời không đúng dạng: ") + e.what();
+        return false;
+    }
+}
+
+namespace {
+bool parseReply(const Json& config, const TranslateRequest& req, const std::string& body, std::vector<std::string>& out,
+                std::string* error) {
     const std::string provider = config.value("provider", std::string("openai"));
     const Json j = Json::parse(body, nullptr, false);
     if (j.is_discarded()) {
@@ -898,6 +914,7 @@ bool parseHttpResponse(const Json& config, const TranslateRequest& req, const st
     }
     return readItems(inner, req, out, error);
 }
+}  // namespace
 
 // ================================================================= TranslationJob
 

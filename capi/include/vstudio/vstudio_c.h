@@ -180,6 +180,52 @@ VS_API int vs_generated_rect(vs_session* s, const char* clip_id, int64_t timelin
 VS_API int vs_sticker_icon(const char* sticker_id, double seconds, uint8_t* out, int width, int height);
 VS_API int vs_content_preview(const char* content_json, double local, double length, uint8_t* out, int width,
                               int height);
+/* ---- subtitles (subtitles.hpp) ----
+ * A subtitle track is a video track with a "subtitle" object (style, position, max_width, lang) in
+ * vs_project_json; each line is a clip with content {"kind": "subtitle", "text"} (optional "style" /
+ * "position" overrides for that line). Move/trim/split/remove lines like any clip; edit a line's text
+ * with vs_update_clip_content. vs_content_preview draws a style sample ({"kind":"subtitle", ...style}).
+ * vs_subtitle_styles_json: [{"id","name","style"}]; vs_subtitle_positions_json: [{"id","name","position"}];
+ * vs_subtitle_languages_json: [{"code","name","english"}]; vs_translation_providers_json: connector presets
+ * [{"id","name","provider","url","model","needs_key","hint"}].
+ * vs_add_subtitle_track: settings_json NULL or a patch; returns the track id.
+ * vs_add_subtitle: a line at `at` (moved past a line there, cut short before the next) on track_id or
+ * (NULL/"") the topmost subtitle track, created when needed. Returns the clip id.
+ * vs_import_subtitles: file_text is the content of an .srt/.vtt/.ass file; returns the new track id.
+ * vs_export_subtitles: format "srt" or "vtt"; returns the file text.
+ * vs_set_subtitle_settings: JSON merge patch into the track's subtitle object.
+ * vs_shift_subtitles: moves every line by delta ticks. All edits are one undo step each. */
+VS_API char* vs_subtitle_styles_json(void);
+VS_API char* vs_subtitle_positions_json(void);
+VS_API char* vs_subtitle_languages_json(void);
+VS_API char* vs_translation_providers_json(void);
+VS_API char* vs_add_subtitle_track(vs_session* s, const char* name, const char* settings_json);
+VS_API char* vs_add_subtitle(vs_session* s, const char* track_id, int64_t at, const char* text, int64_t duration);
+VS_API char* vs_import_subtitles(vs_session* s, const char* file_text, const char* name, const char* lang,
+                                 int64_t offset);
+VS_API char* vs_export_subtitles(vs_session* s, const char* track_id, const char* format);
+VS_API int vs_set_subtitle_settings(vs_session* s, const char* track_id, const char* patch_json);
+VS_API int vs_shift_subtitles(vs_session* s, const char* track_id, int64_t delta);
+/* AI translation. The core never opens a network connection: the app sends each request and hands
+ * the reply back, so any AI service (or an in-house server speaking the open protocol in
+ * docs/subtitles.md) can be used.
+ * vs_translation_begin: config_json {"provider","url","api_key","model","headers"}; from may be "" (detect);
+ * batch_size lines per request (0 = 40). NULL on error (vs_last_error).
+ * vs_translation_request_json(t, i): {"method","url","headers":[[name, value]...],"body"}; NULL + error text in
+ * vs_translation_error when the config is unusable.
+ * vs_translation_accept(t, i, reply_body): 0 ok, -1 the reply was unusable (retry; reason in vs_translation_error).
+ * vs_translation_apply: mode 0 replace the texts, 1 new track (source hidden), 2 bilingual (both shown,
+ * stacked). Returns the track written. Lines whose batch failed keep their source text. */
+typedef struct vs_translation vs_translation;
+VS_API vs_translation* vs_translation_begin(vs_session* s, const char* track_id, const char* config_json,
+                                            const char* from, const char* to, const char* notes, int batch_size);
+VS_API int vs_translation_count(vs_translation* t);
+VS_API int vs_translation_done(vs_translation* t);
+VS_API char* vs_translation_request_json(vs_translation* t, int index);
+VS_API int vs_translation_accept(vs_translation* t, int index, const char* reply_body);
+VS_API const char* vs_translation_error(vs_translation* t);
+VS_API char* vs_translation_apply(vs_session* s, vs_translation* t, int mode);
+VS_API void vs_translation_free(vs_translation* t);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);
