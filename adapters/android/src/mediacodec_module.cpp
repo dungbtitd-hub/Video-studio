@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -185,6 +187,14 @@ public:
             setErr(error, "no decoder for " + mime);
             return false;
         }
+        name_.clear();
+        if (__builtin_available(android 28, *)) {
+            char* n = nullptr;
+            if (AMediaCodec_getName(codec_.get(), &n) == AMEDIA_OK && n) {
+                name_ = n;
+                AMediaCodec_releaseName(codec_.get(), n);
+            }
+        }
         if (video) AMediaFormat_setInt32(fmt_.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, kColorFlexible);
         if (AMediaCodec_configure(codec_.get(), fmt_.get(), nullptr, nullptr, 0) != AMEDIA_OK ||
             AMediaCodec_start(codec_.get()) != AMEDIA_OK) {
@@ -230,6 +240,7 @@ public:
         return outFmt_.get();
     }
     AMediaFormat* inputFormat() { return fmt_.get(); }
+    [[nodiscard]] const std::string& codecName() const { return name_; }
 
 private:
     void feed() {
@@ -251,6 +262,7 @@ private:
     }
 
     Fd fd_;
+    std::string name_;
     ExtractorPtr ex_;
     CodecPtr codec_;
     FormatPtr fmt_, outFmt_;
@@ -258,36 +270,46 @@ private:
     bool inputEos_ = false, outputEos_ = false;
 };
 
-// YUV 4:2:0 (I420 or NV12, with stride/slice-height) -> RGBA, box-downscaled to w x h.
-void yuvToRgba(const uint8_t* src, int srcW, int srcH, int stride, int sliceH, bool nv12, VideoFrame& out, int w, int h) {
+// YUV 4:2:0 (I420 or NV12, with stride/slice-height) -> RGBA, point-sampled down to w x h.
+// (cropX, cropY, srcW, srcH) is the visible rectangle inside the coded buffer.
+void yuvToRgba(const uint8_t* src, int cropX, int cropY, int srcW, int srcH, int stride, int sliceH, bool nv12,
+               VideoFrame& out, int w, int h) {
     out.allocate(w, h);
     const uint8_t* yPlane = src;
     const uint8_t* uvPlane = src + static_cast<size_t>(stride) * sliceH;
     const uint8_t* vPlane = uvPlane + static_cast<size_t>(stride / 2) * (sliceH / 2);
+    std::vector<int> cols(static_cast<size_t>(w));
+    for (int x = 0; x < w; ++x) cols[static_cast<size_t>(x)] = cropX + std::min(srcW - 1, static_cast<int>((2LL * x + 1) * srcW / (2LL * w)));
     for (int y = 0; y < h; ++y) {
-        const int sy = std::min(srcH - 1, static_cast<int>((y + 0.5) * srcH / h));
+        const int sy = cropY + std::min(srcH - 1, static_cast<int>((2LL * y + 1) * srcH / (2LL * h)));
+        const uint8_t* yRow = yPlane + static_cast<size_t>(sy) * stride;
+        const uint8_t* uvRow = nv12 ? uvPlane + static_cast<size_t>(sy / 2) * stride
+                                    : uvPlane + static_cast<size_t>(sy / 2) * (stride / 2);
+        const uint8_t* vRow = vPlane + static_cast<size_t>(sy / 2) * (stride / 2);
         uint8_t* d = out.rgba.data() + static_cast<size_t>(y) * w * 4;
-        for (int x = 0; x < w; ++x) {
-            const int sx = std::min(srcW - 1, static_cast<int>((x + 0.5) * srcW / w));
-            const int Y = yPlane[static_cast<size_t>(sy) * stride + sx];
-            int U, V;
-            if (nv12) {
-                const uint8_t* uv = uvPlane + static_cast<size_t>(sy / 2) * stride + (sx & ~1);
-                U = uv[0];
-                V = uv[1];
-            } else {
-                U = uvPlane[static_cast<size_t>(sy / 2) * (stride / 2) + sx / 2];
-                V = vPlane[static_cast<size_t>(sy / 2) * (stride / 2) + sx / 2];
-            }
+        for (int x = 0; x < w; ++x, d += 4) {
+            const int sx = cols[static_cast<size_t>(x)];
+            const int Y = yRow[sx];
+            const int U = nv12 ? uvRow[sx & ~1] : uvRow[sx / 2];
+            const int V = nv12 ? uvRow[(sx & ~1) + 1] : vRow[sx / 2];
             // BT.601 limited range
             const int c = Y - 16, dd = U - 128, e = V - 128;
             d[0] = static_cast<uint8_t>(std::clamp((298 * c + 409 * e + 128) >> 8, 0, 255));
             d[1] = static_cast<uint8_t>(std::clamp((298 * c - 100 * dd - 208 * e + 128) >> 8, 0, 255));
             d[2] = static_cast<uint8_t>(std::clamp((298 * c + 516 * dd + 128) >> 8, 0, 255));
             d[3] = 255;
-            d += 4;
         }
     }
+}
+
+// Which 4:2:0 layout a decoder writes into its ByteBuffer. Explicit I420/NV12
+// formats are clear. "Flexible" (and vendor formats) do not say: Google's
+// software decoders write planar I420, hardware decoders write NV12.
+bool isSemiPlanar(int32_t color, const std::string& codecName) {
+    if (color == kColorI420) return false;
+    if (color == kColorNV12) return true;
+    const bool software = codecName.rfind("c2.android.", 0) == 0 || codecName.rfind("OMX.google.", 0) == 0;
+    return !software;
 }
 
 class Decoder final : public IMediaDecoder {
@@ -374,19 +396,22 @@ public:
 private:
     void convert(const uint8_t* data, VideoFrame& out) {
         AMediaFormat* f = video_.outputFormat();
-        const int w = getI32(f, AMEDIAFORMAT_KEY_WIDTH, probe_.width);
-        const int h = getI32(f, AMEDIAFORMAT_KEY_HEIGHT, probe_.height);
-        const int stride = std::max(w, getI32(f, AMEDIAFORMAT_KEY_STRIDE, w));
-        const int slice = std::max(h, getI32(f, "slice-height", h));
+        const int codedW = getI32(f, AMEDIAFORMAT_KEY_WIDTH, probe_.width);
+        const int codedH = getI32(f, AMEDIAFORMAT_KEY_HEIGHT, probe_.height);
+        const int stride = std::max(codedW, getI32(f, AMEDIAFORMAT_KEY_STRIDE, codedW));
+        const int slice = std::max(codedH, getI32(f, "slice-height", codedH));
         const int color = getI32(f, AMEDIAFORMAT_KEY_COLOR_FORMAT, kColorNV12);
+        // Decoders pad to macroblocks (180 -> 192); the crop keys give the visible picture.
+        const int left = getI32(f, "crop-left", 0), top = getI32(f, "crop-top", 0);
+        const int w = std::clamp(getI32(f, "crop-right", codedW - 1) - left + 1, 2, codedW - left);
+        const int h = std::clamp(getI32(f, "crop-bottom", codedH - 1) - top + 1, 2, codedH - top);
         int ow = w, oh = h;
         if (maxW_ > 0 && maxH_ > 0 && (w > maxW_ || h > maxH_)) {
             const double k = std::min(static_cast<double>(maxW_) / w, static_cast<double>(maxH_) / h);
             ow = std::max(2, static_cast<int>(w * k) & ~1);
             oh = std::max(2, static_cast<int>(h * k) & ~1);
         }
-        // Flexible output is NV12 on almost all devices; I420 is the other common layout.
-        yuvToRgba(data, w, h, stride, slice, color != kColorI420, out, ow, oh);
+        yuvToRgba(data, left, top, w, h, stride, slice, isSemiPlanar(color, video_.codecName()), out, ow, oh);
     }
 
     // 16-bit PCM from the decoder -> float, remixed to `ch`, linearly resampled to `sr`.

@@ -162,6 +162,35 @@ jobs:
             build-android/vstudio/capi/libvstudio.so | grep ' T vs_' | tee symbols.txt
           test $(wc -l < symbols.txt) -ge 30
 
+  android-emulator:
+    # Runs the core tests and the MediaCodec module's conformance suite on a
+    # real Android system (emulator, Google's software codecs).
+    name: Android MediaCodec tests (emulator, x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build tests for Android x86_64
+        run: |
+          cmake -S . -B build-android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release \
+            -DVSTUDIO_WITH_FFMPEG=OFF -DVSTUDIO_BUILD_CLI=OFF -DVSTUDIO_BUILD_BENCH=OFF
+          cmake --build build-android --target vstudio_core_tests vstudio_android_tests
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: ./scripts/run_android_tests.sh build-android
+
   core-ios:
     name: Core + C API (iOS arm64)
     runs-on: macos-latest

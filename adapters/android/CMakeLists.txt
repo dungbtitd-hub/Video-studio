@@ -4,3 +4,10 @@ add_library(vstudio::android ALIAS vstudio_android)
 target_include_directories(vstudio_android PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_link_libraries(vstudio_android PUBLIC vstudio::core PRIVATE mediandk log)
 target_compile_definitions(vstudio_android PUBLIC VSTUDIO_HAS_ANDROID_MEDIA=1)
+
+if(VSTUDIO_BUILD_TESTS)
+  # Needs a device or emulator: CI pushes it with adb and runs it from /data/local/tmp.
+  add_executable(vstudio_android_tests tests/test_mediacodec.cpp ${PROJECT_SOURCE_DIR}/core/tests/main.cpp)
+  target_include_directories(vstudio_android_tests PRIVATE ${PROJECT_SOURCE_DIR}/core/tests)
+  target_link_libraries(vstudio_android_tests PRIVATE vstudio::android)
+endif()
