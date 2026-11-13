@@ -444,7 +444,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     return null;
   }
 
-  /// The selected text or sticker clip.
+  /// The selected text, sticker or overlay clip.
   ClipView? get _selectedObject {
     final c = _selectedVideoClip;
     return c != null && c.generated ? c : null;
@@ -535,14 +535,17 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   /// Length of a new text or sticker clip.
   static const _objectSeconds = 3.0;
 
-  /// Adds a text/sticker at the playhead and selects it; returns its content.
-  Map<String, dynamic>? _addObject(Map<String, dynamic> content) {
+  /// Length of a new overlay effect.
+  static const _overlaySeconds = 5.0;
+
+  /// Adds a text/sticker/overlay at the playhead and selects it; returns its content.
+  Map<String, dynamic>? _addObject(Map<String, dynamic> content, {double seconds = _objectSeconds}) {
     final vs = _vs;
     if (vs == null) return null;
     final dur = _project?.duration ?? 0;
-    final at = _playhead >= dur - 0.05 && dur > 0 ? math.max(0.0, dur - _objectSeconds) : _playhead;
+    final at = _playhead >= dur - 0.05 && dur > 0 ? math.max(0.0, dur - seconds) : _playhead;
     _edit((vs) {
-      _selected = vs.addGeneratedClip(content, at, _objectSeconds);
+      _selected = vs.addGeneratedClip(content, at, seconds);
       _coverMode = false;
       _activeCover = null;
     });
@@ -601,10 +604,47 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     );
   }
 
+  /// "Lớp phủ": overlay effects; picking one lays it over the whole frame from the playhead.
+  Future<void> _overlays() async {
+    final vs = _vs;
+    if (vs == null) return;
+    final selected = _selectedObject?.kind == 'overlay' ? _selectedObject : null;
+    var target = selected?.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => OverlaySheet(
+        vs: vs,
+        content: selected?.content,
+        onPick: (id) {
+          final c = _addObject(vs.defaultOverlay(id), seconds: _overlaySeconds);
+          target = _selectedObject?.id;
+          return c;
+        },
+        onPatch: (p) {
+          if (target != null) _patchObject(target!, p);
+        },
+        onFullFrame: () {
+          final id = target;
+          if (id == null) return;
+          _edit((vs) => vs.setOverlayRegion(id, _playhead, 0, 0, 1, 1));
+          vs.seek(_playhead);
+        },
+      ),
+    );
+  }
+
   /// The object's box was dragged / pinched on the preview: one edit (a key when it is animated).
   void _commitObject(Rect from, Rect to) {
     final vs = _vs, clip = _selectedObject, project = _project;
     if (vs == null || clip == null || project == null) return;
+    if (clip.kind == 'overlay') {
+      _edit((vs) => vs.setOverlayRegion(clip.id, _playhead, to.left, to.top, to.width, to.height));
+      vs.seek(_playhead);
+      return;
+    }
     final st = vs.clipStateAt(clip.id, _playhead);
     if (!st.inside) return;
     final t = objectTransform(
@@ -631,7 +671,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
         rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
         onChanged: _commitObject,
-        onDoubleTap: clip.kind == 'text' ? _text : _stickers,
+        onDoubleTap: switch (clip.kind) { 'text' => _text, 'overlay' => _overlays, _ => _stickers },
+        freeShape: clip.kind == 'overlay',
       ),
     ]);
   }
@@ -1192,6 +1233,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
             _Tool(icon: Icons.title, label: 'Chữ', onTap: _vs == null ? null : _text),
             _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
+            _Tool(icon: Icons.ac_unit, label: 'Lớp phủ', onTap: _vs == null ? null : _overlays),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),

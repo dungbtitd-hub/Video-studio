@@ -49,6 +49,9 @@ class ClipView {
 /// Sticker id -> Vietnamese name, filled from the core's catalog (for clip labels).
 final Map<String, String> stickerNames = {};
 
+/// Overlay effect names by id (filled from the core's catalog), for clip labels.
+final Map<String, String> overlayNames = {};
+
 /// The label drawn on a text or sticker clip.
 String generatedLabel(Map<String, dynamic> content) {
   switch (content['kind']) {
@@ -58,6 +61,9 @@ String generatedLabel(Map<String, dynamic> content) {
     case 'sticker':
       final id = (content['sticker'] ?? '') as String;
       return '★  ${stickerNames[id] ?? 'Sticker'}';
+    case 'overlay':
+      final id = (content['overlay'] ?? '') as String;
+      return '✦  ${overlayNames[id] ?? 'Lớp phủ'}';
   }
   return (content['kind'] ?? '?') as String;
 }

@@ -1,6 +1,6 @@
 # Text and stickers
 
-Text and stickers are clips without media. The core draws them itself, as vectors, at the output size, so they stay
+Text and stickers are clips without media (overlay effects work the same way: see [overlays.md](overlays.md)). The core draws them itself, as vectors, at the output size, so they stay
 sharp at any zoom and look the same in the preview and the export, on all four OSes. Every one comes in and goes out
 with an eased animation: nothing pops on or off the picture.
 

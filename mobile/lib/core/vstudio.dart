@@ -143,6 +143,13 @@ class StickerInfo {
   final String id, name, category;
 }
 
+/// An overlay effect (snow, rain, confetti, light leaks...): [tintable] ones take a colour.
+class OverlayInfo {
+  const OverlayInfo(this.id, this.name, this.category, {this.tintable = false});
+  final String id, name, category;
+  final bool tintable;
+}
+
 /// Catalogs for the text and sticker tools (fixed for the app's lifetime).
 class TextCatalog {
   TextCatalog(this.fonts, this.animations, this.loops, this.presets, this.stickers);
@@ -535,8 +542,42 @@ class VStudio {
     for (final st in c.stickers) {
       stickerNames[st.id] = st.name;
     }
+    overlayCatalog();
     return _catalog = c;
   }
+
+  static List<OverlayInfo>? _overlays;
+
+  /// Overlay effects in display order (read once, then cached).
+  List<OverlayInfo> overlayCatalog() {
+    final cached = _overlays;
+    if (cached != null) return cached;
+    final list = [
+      for (final e in (jsonDecode(_take(_b.overlaysJson())) as List).cast<Map<String, dynamic>>())
+        OverlayInfo(e['id'] as String, e['name'] as String, e['category'] as String, tintable: e['tintable'] == true)
+    ];
+    for (final o in list) {
+      overlayNames[o.id] = o.name;
+    }
+    return _overlays = list;
+  }
+
+  /// Content for a new overlay covering the whole frame (sized to the canvas when added).
+  Map<String, dynamic> defaultOverlay(String overlayId) =>
+      jsonDecode(using((a) => _take(_b.defaultOverlayJson(overlayId.toNativeUtf8(allocator: a)))))
+          as Map<String, dynamic>;
+
+  /// Overlay [id] at [seconds] over a dark backdrop, an opaque [width] x [height] RGBA thumbnail.
+  Uint8List? overlayIcon(String id, int width, int height, {double seconds = 2}) => using((a) {
+        final n = width * height * 4;
+        final buf = a<Uint8>(n);
+        if (_b.overlayIcon(id.toNativeUtf8(allocator: a), seconds, buf, width, height) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(n));
+      });
+
+  /// The region an overlay covers, as seen at [t] (0..1 of the frame). One undo step.
+  void setOverlayRegion(String clipId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.setOverlayRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
 
   /// Adds a TrueType/OpenType font (e.g. a company font); false when the bytes are not a usable font.
   bool registerFont(String id, String name, Uint8List bytes) => using((a) {

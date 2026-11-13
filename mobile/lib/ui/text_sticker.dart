@@ -645,15 +645,216 @@ class _StickerSheetState extends State<StickerSheet> {
       );
 }
 
+// ---------------------------------------------------------------- overlays
+
+/// The overlay tool: pick an effect (laid over the whole frame from the playhead), then tune it.
+/// The region it covers is dragged on the preview; how long, on the timeline.
+class OverlaySheet extends StatefulWidget {
+  const OverlaySheet(
+      {super.key,
+      required this.vs,
+      required this.content,
+      required this.onPick,
+      required this.onPatch,
+      required this.onFullFrame});
+  final VStudio vs;
+  final Map<String, dynamic>? content; // the selected overlay, if any
+  final Map<String, dynamic>? Function(String overlayId) onPick; // returns the new overlay's content
+  final ValueChanged<Map<String, dynamic>> onPatch;
+  final VoidCallback onFullFrame;
+
+  @override
+  State<OverlaySheet> createState() => _OverlaySheetState();
+}
+
+class _OverlaySheetState extends State<OverlaySheet> {
+  static const iconW = 160, iconH = 90; // px rendered (shown at half)
+  late final List<OverlayInfo> _all = widget.vs.overlayCatalog();
+  late final List<String> _categories =
+      [for (final o in _all) o.category].fold<List<String>>([], (l, c) => l.contains(c) ? l : (l..add(c)));
+  late String _category = _categories.first;
+  late Map<String, dynamic>? _c = widget.content;
+  final Map<String, double> _dragging = {};
+
+  static const _tints = ['#ffffff', '#ffd166', '#ff8fab', '#8ecae6', '#b8f2a1', '#c8b6ff'];
+
+  void _patch(Map<String, dynamic> p) {
+    final c = _c;
+    if (c == null) return;
+    setState(() => _c = mergePatch(c, p));
+    widget.onPatch(p);
+  }
+
+  Widget _library() {
+    final list = _all.where((o) => o.category == _category).toList();
+    return Column(children: [
+      SizedBox(
+        height: 44,
+        child: ListView(scrollDirection: Axis.horizontal, children: [
+          for (final c in _categories)
+            Padding(
+              padding: const EdgeInsets.only(right: 6, top: 6),
+              child: ChoiceChip(
+                key: Key('overlay-cat-$c'),
+                label: Text(c, style: const TextStyle(fontSize: 12)),
+                visualDensity: VisualDensity.compact,
+                selected: c == _category,
+                onSelected: (_) => setState(() => _category = c),
+              ),
+            ),
+        ]),
+      ),
+      Expanded(
+        child: GridView.builder(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 112, mainAxisSpacing: 6, crossAxisSpacing: 6, childAspectRatio: 1.2),
+          itemCount: list.length,
+          itemBuilder: (context, i) {
+            final o = list[i];
+            final on = _c?['overlay'] == o.id;
+            return GestureDetector(
+              key: Key('overlay-${o.id}'),
+              onTap: () {
+                final c = widget.onPick(o.id);
+                if (c != null) setState(() => _c = c);
+              },
+              child: Column(children: [
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: on ? VsColors.accent : Colors.transparent, width: 2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: CoreImage(
+                          cacheKey: 'overlay|${o.id}',
+                          w: iconW,
+                          h: iconH,
+                          render: () => widget.vs.overlayIcon(o.id, iconW, iconH)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(o.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: VsColors.fg2)),
+              ]),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Widget _slider(String key, String label, double min, double max, double value, ValueChanged<double> commit) {
+    final v = (_dragging[key] ?? value).clamp(min, max).toDouble();
+    return Row(children: [
+      SizedBox(width: 76, child: Text(label, style: const TextStyle(fontSize: 12, color: VsColors.fg2))),
+      Expanded(
+        child: Slider(
+          key: Key('overlay-$key'),
+          min: min,
+          max: max,
+          value: v,
+          onChanged: (x) => setState(() => _dragging[key] = x),
+          onChangeEnd: (x) {
+            _dragging.remove(key);
+            commit(double.parse(x.toStringAsFixed(2)));
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Widget _settings() {
+    final c = _c;
+    if (c == null) {
+      return const Center(child: Text('Chọn một lớp phủ để chỉnh', style: TextStyle(color: VsColors.fg3)));
+    }
+    double num_(String k, double d) => ((c[k] ?? d) as num).toDouble();
+    final inFx = c['in'] is Map ? c['in'] as Map : const {};
+    final fade = (inFx['type'] ?? '') == '' ? 0.0 : ((inFx['duration'] ?? 0.8) as num).toDouble();
+    final info = _all.where((o) => o.id == c['overlay']).firstOrNull;
+    return SingleChildScrollView(
+      child: Column(children: [
+        _slider('density', 'Mật độ', 0.1, 3, num_('density', 1), (v) => _patch({'density': v})),
+        _slider('speed', 'Tốc độ', 0, 3, num_('speed', 1), (v) => _patch({'speed': v})),
+        _slider('size', 'Cỡ hạt', 0.3, 3, num_('size', 1), (v) => _patch({'size': v})),
+        _slider('opacity', 'Độ đậm', 0.05, 1, num_('opacity', 1), (v) => _patch({'opacity': v})),
+        _slider('feather', 'Viền mờ', 0, 0.4, num_('feather', 0.12), (v) => _patch({'feather': v})),
+        _slider('fade', 'Hiện/ẩn dần', 0, 3, fade, (v) {
+          final fx = {'type': v > 0 ? 'fade' : '', 'duration': v};
+          _patch({'in': fx, 'out': fx});
+        }),
+        if (info?.tintable ?? false)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Wrap(spacing: 8, children: [
+              ChoiceChip(
+                key: const Key('overlay-color-none'),
+                label: const Text('Màu gốc'),
+                selected: c['color'] == null,
+                onSelected: (_) => _patch({'color': null}),
+              ),
+              for (final hex in _tints)
+                GestureDetector(
+                  key: Key('overlay-color-$hex'),
+                  onTap: () => _patch({'color': hex}),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: Color(int.parse('ff${hex.substring(1)}', radix: 16)),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: c['color'] == hex ? VsColors.accent : Colors.black26, width: 2),
+                    ),
+                  ),
+                ),
+            ]),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const Key('overlay-full'),
+            onPressed: widget.onFullFrame,
+            icon: const Icon(Icons.fullscreen, size: 18),
+            label: const Text('Phủ toàn khung'),
+          ),
+        ),
+        const Text('Kéo khung trên màn xem để chỉ phủ một phần; kéo clip trên timeline để đổi thời gian.',
+            style: TextStyle(fontSize: 11, color: VsColors.fg3)),
+      ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => _SheetFrame(
+        tabs: const ['Lớp phủ', 'Chỉnh'],
+        initial: widget.content == null ? 0 : 1,
+        children: [_library(), _settings()],
+      );
+}
+
 // ---------------------------------------------------------------- on the preview
 
 /// Box around the selected text or sticker: drag to move, pinch or pull the
 /// corner to resize, double-tap to edit. [onChanged] gets (before, after) in canvas 0..1.
 class ObjectOverlay extends StatefulWidget {
   const ObjectOverlay(
-      {super.key, required this.canvasSize, required this.rect, required this.onChanged, this.onDoubleTap});
+      {super.key,
+      required this.canvasSize,
+      required this.rect,
+      required this.onChanged,
+      this.onDoubleTap,
+      this.freeShape = false});
   final Size canvasSize;
   final Rect rect;
+
+  /// The corner resizes freely (an overlay's region) instead of scaling with the shape kept.
+  final bool freeShape;
   final void Function(Rect from, Rect to) onChanged;
   final VoidCallback? onDoubleTap;
 
@@ -694,6 +895,13 @@ class _ObjectOverlayState extends State<ObjectOverlay> {
             final delta = d.localFocalPoint - _from;
             double k;
             Offset centre;
+            if (_corner && widget.freeShape) {
+              // The top-left stays, the bottom-right corner follows the finger.
+              final br = _start.bottomRight + delta;
+              if (br.dx - _start.left < 16 || br.dy - _start.top < 16) return;
+              setState(() => _live = toNorm(Rect.fromPoints(_start.topLeft, br)));
+              return;
+            }
             if (_corner) {
               // Scales about the centre, keeping the shape: the corner follows the finger.
               final half0 = _start.bottomRight - _start.center;
