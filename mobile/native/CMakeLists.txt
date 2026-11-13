@@ -10,3 +10,9 @@ set(VSTUDIO_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(VSTUDIO_WITH_FFMPEG OFF CACHE BOOL "" FORCE)
 set(VSTUDIO_BUILD_CAPI_SHARED ON CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../.. ${CMAKE_BINARY_DIR}/vstudio)
+
+# Native preview surface (Flutter texture) for the Android app: JNI glue, kept out of the C API.
+if(ANDROID)
+  add_library(vstudio_jni SHARED android/preview_surface.cpp)
+  target_link_libraries(vstudio_jni PRIVATE vstudio_capi android log)
+endif()

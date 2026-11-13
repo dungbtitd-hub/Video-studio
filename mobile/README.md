@@ -31,5 +31,4 @@ CI builds both apps. On Android it also installs the APK on the emulator and che
 
 * Done: FFI bindings, editor screen, timeline gestures, preview polling, export trigger, autosave.
 * Done: MediaCodec module (Android) and the Apple AVFoundation module shared with macOS, linked into the apps.
-* Preview frames are copied once per frame through FFI. The plan's target is a native texture with no copy;
-  that replaces `takeFrame()` once the platform modules exist.
+* Preview goes through a native texture (Android Surface, iOS CVPixelBuffer) fed by the core's video thread

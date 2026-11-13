@@ -11,3 +11,5 @@ OTHER_LDFLAGS[sdk=iphonesimulator*] = $(inherited) -force_load $(VSTUDIO_CORE_DI
 STRIP_STYLE = non-global
 // Nothing in the app references vs_* at link time, so dead-code stripping would drop them.
 DEAD_CODE_STRIPPING = NO
+// The C API header, for the native preview in AppDelegate.swift (bridging header).
+HEADER_SEARCH_PATHS = $(inherited) $(PROJECT_DIR)/../../capi/include

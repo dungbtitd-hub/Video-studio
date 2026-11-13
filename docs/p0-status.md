@@ -13,13 +13,13 @@
 | Preview nền + đồng bộ A/V | Xong | luồng video, luồng audio, đồng hồ theo mẫu âm thanh |
 | Cache khung hình + proxy | Xong | xem `docs/benchmarks/` |
 | Export MP4 H.264/AAC | Xong (FFmpeg) | chạy nền, có tiến độ và hủy |
-| Desktop Qt shell | Xong (Widgets là bản chính) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
-| Chọn công nghệ desktop | Đã chốt Qt Widgets (13/11/2026) | số đo Linux/Windows/macOS trong `docs/benchmarks/qml-vs-widgets.md`; bản QML giữ đến hết P0 để tham chiếu |
+| Desktop Qt shell | Xong (Qt Widgets) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
+| Chọn công nghệ desktop | Đã chốt Qt Widgets (13/11/2026) | số đo Linux/Windows/macOS trong `docs/benchmarks/qml-vs-widgets.md`; bản QML đã bỏ khi đóng P0 |
 | Module FFmpeg (Windows) | Xong (CI Windows) | FFmpeg bản LGPL qua vcpkg (`vcpkg.json`); H.264 bằng Media Foundation của Windows, dự phòng OpenH264; qua bộ test chung trên CI Windows |
 | Module Apple (macOS/iOS) | Xong (CI macOS) | AVFoundation/VideoToolbox, dùng chung macOS và iOS; qua bộ test chung trên CI macOS; chưa thử trên iPhone thật |
 | Module MediaCodec (Android) | Xong (emulator) | qua bộ test chung trên emulator Android 11 trong CI; chưa thử trên điện thoại thật |
 | Flutter shell + FFI | Xong (Android emulator, build iOS) | APK cài và chạy trên emulator Android 11 trong CI, core nạp được; app iOS build được (chưa ký); chưa thử trên điện thoại thật |
-| Preview mobile qua native texture | Chưa | hiện copy khung RGBA qua FFI |
+| Preview mobile qua native texture | Xong (Android emulator, build iOS) | core ghi khung thẳng vào texture của Flutter (Android Surface, iOS CVPixelBuffer) qua `vs_preview_set_sink`, không qua Dart; CI kiểm tra khung đầu tiên trên emulator; iOS mới build, chưa chạy thử |
 | CI 4 hệ điều hành | Xong (cấu hình) | Linux, macOS, Windows, Android, iOS, Flutter |
 | Benchmark trên máy/thiết bị thật | Chưa | mới có số đo trên máy ảo Linux |
 
@@ -32,8 +32,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 
 ./build/tools/vstudio-cli/vstudio-cli demo out.mp4 clip1.mp4 clip2.mp4   # luồng P0 không giao diện
-./build/bin/VideoStudioWidgets clip1.mp4 clip2.mp4                       # ứng dụng desktop (bản chính)
-./build/bin/VideoStudio clip1.mp4 clip2.mp4                              # bản QML, chỉ để tham chiếu đến hết P0
-./build/bin/VideoStudioWidgets --bench-timeline 3000                     # đo độ mượt timeline (cả bản QML)
+./build/bin/VideoStudio clip1.mp4 clip2.mp4                              # ứng dụng desktop (Qt Widgets)
+./build/bin/VideoStudio --bench-timeline 3000                            # đo độ mượt timeline
 ./build/bench/vstudio_bench                                              # benchmark
 ```

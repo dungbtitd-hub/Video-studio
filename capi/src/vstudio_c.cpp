@@ -40,6 +40,10 @@ struct vs_session {
     std::mutex frameMu;
     std::shared_ptr<const VideoFrame> latest;
     std::int64_t latestSerial = 0;
+    // Native preview sink; sinkMu is held while it runs so removing it is a hard barrier.
+    std::mutex sinkMu;
+    vs_frame_sink sink = nullptr;
+    void* sinkUser = nullptr;
     int previewW = 960, previewH = 540;
 
     std::atomic<int> exportStatus{VS_EXPORT_IDLE};
@@ -74,6 +78,10 @@ struct vs_session {
             cfg.height = previewH;
             preview = std::make_unique<PreviewEngine>(backend, mediaBaseDir(packageDir), cfg, &modules);
             preview->setFrameCallback([this](std::shared_ptr<const VideoFrame> f) {
+                {
+                    std::lock_guard lk(sinkMu);
+                    if (sink && f) sink(sinkUser, f->rgba.data(), f->width, f->height, f->width * 4, f->pts.ticks());
+                }
                 std::lock_guard lk(frameMu);
                 latest = std::move(f);
                 ++latestSerial;
@@ -349,6 +357,20 @@ int vs_preview_take_frame(vs_session* s, uint8_t* dst, int64_t cap, int64_t* ser
     if (serial) *serial = ser;
     if (pts) *pts = f->pts.ticks();
     return 1;
+}
+
+void vs_preview_set_sink(vs_session* s, vs_frame_sink sink, void* user) {
+    if (!s) return;
+    std::lock_guard lk(s->sinkMu);
+    s->sink = sink;
+    s->sinkUser = user;
+    if (!sink) return;
+    std::shared_ptr<const VideoFrame> f;
+    {
+        std::lock_guard fl(s->frameMu);
+        f = s->latest;
+    }
+    if (f) sink(user, f->rgba.data(), f->width, f->height, f->width * 4, f->pts.ticks());
 }
 
 void vs_pull_audio(vs_session* s, float* out, int64_t frames) {

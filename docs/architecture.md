@@ -103,7 +103,7 @@ MyFilm.vstudio/
 | `core/` | Video Studio Core + test (`core/tests`) |
 | `adapters/ffmpeg/` | module FFmpeg + test tích hợp với file thật |
 | `capi/` | C API cho Flutter và plugin + test bằng C thuần |
-| `desktop/` | ứng dụng Qt 6: `common/` (EditorController, audio) dùng chung, `widgets/` ứng dụng desktop (đã chốt), `quick/` bản QML chỉ để tham chiếu đến hết P0 |
+| `desktop/` | ứng dụng Qt 6: `common/` (EditorController, audio) dùng chung, `widgets/` ứng dụng desktop Qt Widgets (`bin/VideoStudio`) |
 | `mobile/` | ứng dụng Flutter |
 | `tools/vstudio-cli/` | công cụ dòng lệnh chạy luồng P0 không cần giao diện |
 | `bench/` | benchmark P0 |
