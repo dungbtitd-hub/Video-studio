@@ -101,6 +101,23 @@ VS_API int vs_export_start(vs_session* s, const char* out_path, int width, int h
 VS_API int vs_export_status(vs_session* s, double* progress); /* VS_EXPORT_* */
 VS_API void vs_export_cancel(vs_session* s);
 
+/* ---- media library (background thumbnails / waveforms, relink) ----
+ * Requests return at once; results are computed on a background worker and
+ * cached on disk (keyed by file fingerprint). vs_library_serial() increases
+ * whenever a result arrives, so a UI can poll it cheaply once per frame. */
+VS_API int vs_request_thumbnails(vs_session* s, const char* asset_id, int count, int height);
+VS_API int vs_request_waveform(vs_session* s, const char* asset_id, int buckets_per_second);
+VS_API int64_t vs_library_serial(vs_session* s);
+/* 1 = copied (dst NULL: only sizes), 0 = not ready, -1 = dst too small (count*width*height*4 bytes). */
+VS_API int vs_thumbnails(vs_session* s, const char* asset_id, uint8_t* dst, int64_t dst_capacity, int* count,
+                         int* width, int* height);
+/* Returns the number of buckets (0 = not ready) and copies min/max pairs (2 bytes per bucket) up to dst_capacity. */
+VS_API int64_t vs_waveform(vs_session* s, const char* asset_id, int8_t* dst, int64_t dst_capacity,
+                           int* buckets_per_second);
+VS_API char* vs_missing_assets_json(vs_session* s);                     /* ["asset id", ...] */
+VS_API char* vs_relink_candidates_json(vs_session* s, const char* asset_id, const char* search_dir);
+VS_API int vs_relink_asset(vs_session* s, const char* asset_id, const char* path); /* undoable */
+
 #ifdef __cplusplus
 }
 #endif

@@ -86,6 +86,15 @@ int main(void) {
     sleep_ms(100);
     EXPECT(atomic_get(&st.calls) == after);
 
+    /* Media library: unknown assets fail cleanly; nothing is missing in an empty project. */
+    EXPECT(vs_request_thumbnails(s, "nope", 5, 90) != 0);
+    EXPECT(vs_thumbnails(s, "nope", NULL, 0, NULL, NULL, NULL) == 0);
+    EXPECT(vs_waveform(s, "nope", NULL, 0, NULL) == 0);
+    char* missing = vs_missing_assets_json(s);
+    EXPECT(missing && strcmp(missing, "[]") == 0);
+    vs_free(missing);
+    EXPECT(vs_relink_asset(s, "nope", "/tmp/x.mp4") != 0);
+
     vs_free(v);
     vs_session_destroy(s);
     puts("capi: all checks passed");

@@ -3,11 +3,13 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 
 #include "vstudio/editor.hpp"
+#include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/project_io.hpp"
@@ -41,6 +43,10 @@ struct vs_session {
     // Created lazily: a session that is only edited never starts threads.
     std::unique_ptr<PreviewEngine> preview;
     std::unique_ptr<JobScheduler> jobs;
+    // Thumbnails / waveforms: their own background worker, so they never wait behind an export.
+    std::unique_ptr<JobScheduler> libJobs;
+    std::unique_ptr<MediaLibrary> library;
+    std::atomic<std::int64_t> librarySerial{0};
 
     std::mutex frameMu;
     std::shared_ptr<const VideoFrame> latest;
@@ -99,6 +105,33 @@ struct vs_session {
             preview->setProject(editor->snapshot());
         }
         return *preview;
+    }
+
+    MediaLibrary& mediaLibrary() {
+        if (!library) {
+            media();
+            libJobs = std::make_unique<JobScheduler>(1);
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            const fs::path cache = packageDir.empty() ? fs::temp_directory_path(ec) / "vstudio-media-cache"
+                                                      : fs::path(packageDir) / "cache" / "media";
+            library = std::make_unique<MediaLibrary>(backend, *libJobs, cache.string());
+            library->setListener([this](const Id&, MediaLibrary::Kind, bool) { ++librarySerial; });
+        }
+        return *library;
+    }
+
+    const MediaAsset& asset(const char* id) const {
+        const MediaAsset* a = editor->project().findAsset(id ? id : "");
+        if (!a) throw std::runtime_error("asset not found");
+        return *a;
+    }
+
+    std::string resolve(const MediaAsset& a) const {
+        namespace fs = std::filesystem;
+        fs::path p(a.uri);
+        if (p.is_relative() && !packageDir.empty()) p = fs::path(mediaBaseDir(packageDir)) / p;
+        return p.string();
     }
 
     void edited() {
@@ -191,6 +224,8 @@ vs_session* vs_session_open(const char* package_dir) {
 void vs_session_destroy(vs_session* s) {
     if (!s) return;
     s->exportCancel.cancel();
+    s->library.reset();  // cancels thumbnail/waveform work
+    s->libJobs.reset();
     s->jobs.reset();     // joins export job
     s->preview.reset();  // joins preview threads
     delete s;
@@ -447,3 +482,74 @@ void vs_export_cancel(vs_session* s) {
 }
 
 }  // extern "C"
+
+/* ---- media library ---- */
+
+int vs_request_thumbnails(vs_session* s, const char* asset_id, int count, int height) {
+    return guard(s, [&] {
+        const MediaAsset& a = s->asset(asset_id);
+        s->mediaLibrary().requestThumbnails(a, s->resolve(a), count, height);
+    });
+}
+
+int vs_request_waveform(vs_session* s, const char* asset_id, int buckets_per_second) {
+    return guard(s, [&] {
+        const MediaAsset& a = s->asset(asset_id);
+        s->mediaLibrary().requestWaveform(a, s->resolve(a), buckets_per_second);
+    });
+}
+
+int64_t vs_library_serial(vs_session* s) { return s ? s->librarySerial.load() : 0; }
+
+int vs_thumbnails(vs_session* s, const char* asset_id, uint8_t* dst, int64_t dst_capacity, int* count, int* width,
+                  int* height) {
+    if (!s || !s->library) return 0;
+    auto t = s->library->thumbnails(asset_id ? asset_id : "");
+    if (!t) return 0;
+    if (count) *count = t->count();
+    if (width) *width = t->width;
+    if (height) *height = t->height;
+    if (!dst) return 1;  /* size query */
+    if (dst_capacity < static_cast<int64_t>(t->rgba.size())) return -1;
+    std::memcpy(dst, t->rgba.data(), t->rgba.size());
+    return 1;
+}
+
+int64_t vs_waveform(vs_session* s, const char* asset_id, int8_t* dst, int64_t dst_capacity, int* buckets_per_second) {
+    if (!s || !s->library) return 0;
+    auto w = s->library->waveform(asset_id ? asset_id : "");
+    if (!w) return 0;
+    if (buckets_per_second) *buckets_per_second = w->bucketsPerSecond;
+    const auto n = static_cast<int64_t>(w->buckets());
+    if (dst) std::memcpy(dst, w->peaks.data(), static_cast<std::size_t>(std::min<int64_t>(dst_capacity, n * 2)));
+    return n;
+}
+
+char* vs_missing_assets_json(vs_session* s) {
+    return guardStr(s, [&] {
+        Json out = Json::array();
+        for (const auto& id : missingAssets(s->editor->project(), mediaBaseDir(s->packageDir))) out.push_back(id);
+        return out.dump();
+    });
+}
+
+char* vs_relink_candidates_json(vs_session* s, const char* asset_id, const char* search_dir) {
+    return guardStr(s, [&] {
+        Json out = Json::array();
+        for (const auto& c : findRelinkCandidates(s->asset(asset_id), str(search_dir)))
+            out.push_back({{"path", c.path}, {"fingerprint_match", c.fingerprintMatch}});
+        return out.dump();
+    });
+}
+
+int vs_relink_asset(vs_session* s, const char* asset_id, const char* path) {
+    return guard(s, [&] {
+        const std::string p = str(path);
+        s->asset(asset_id);
+        s->editor->relinkAsset(asset_id, makeUri(p, s->packageDir), fingerprintFile(p));
+        if (s->library) s->library->forget(asset_id);
+        // Decoders opened on the old file are dropped with the preview engine's pool.
+        s->preview.reset();
+        s->edited();
+    });
+}

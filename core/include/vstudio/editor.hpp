@@ -25,6 +25,9 @@ public:
 
     // --- edits (throw EditError, project unchanged on failure) ---
     Id addAsset(MediaAsset asset);  // asset.id generated if empty
+    // Points an asset at another file (moved or renamed media). Undoable; clips are untouched.
+    // `fingerprint` is the new file's fingerprintFile() (kept as is when empty).
+    void relinkAsset(const Id& assetId, const std::string& uri, const std::string& fingerprint = {});
     Id addTrack(TrackType type, const std::string& name);
     Id insertClip(const Id& trackId, const Id& assetId, Time timelineIn, Time sourceIn, Time sourceOut);
     // Appends the whole asset (or [sourceIn, sourceOut)) at the end of the track.

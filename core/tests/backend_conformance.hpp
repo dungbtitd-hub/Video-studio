@@ -14,6 +14,7 @@
 #include <string>
 
 #include "vstudio/editor.hpp"
+#include "vstudio/media_library.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
@@ -100,6 +101,7 @@ public:
         add("audio reads are continuous and resampled", audio);
         add("import -> edit -> export MP4 (P0 flow)", exportFlow);
         add("proxy generation", proxy);
+        add("media library thumbnails and waveform", library);
     }
 
 private:
@@ -230,6 +232,40 @@ private:
         CHECK_EQ(pp->height, 90);
         CHECK(!pp->hasAudio);
         CHECK_NEAR(pp->duration.seconds(), 3.0, 0.15);
+    }
+
+    static void library(const BackendFactory& make, const std::string& clip) {
+        using namespace conformance;
+        auto b = make();
+        const auto src = makeSource(*b, clip);
+        std::string err;
+        auto probe = b->probe(src, &err);
+        const MediaAsset a = assetFromProbe("lib", src, *probe, "");
+        JobScheduler jobs(1);
+        MediaLibrary lib(std::shared_ptr<IMediaBackend>(std::move(b)), jobs);
+        lib.requestThumbnails(a, src, 3, 36);
+        lib.requestWaveform(a, src, 20);
+        jobs.waitIdle();
+        auto t = lib.thumbnails("lib");
+        CHECK(t != nullptr);
+        CHECK_EQ(t->count(), 3);
+        CHECK_EQ(t->height, 36);
+        CHECK_EQ(t->width, 64);
+        // Slice centres 0.5 s, 1.5 s, 2.5 s -> frames 15, 45, 75 -> red 60, 180, 300 % 256 = 44.
+        const int reds[] = {60, 180, 44};
+        for (int i = 0; i < 3; ++i) {
+            const std::uint8_t* px = t->frame(i) + (static_cast<std::size_t>(18) * 64 + 32) * 4;
+            CHECK_NEAR(int(px[0]), reds[i], 12);
+        }
+        auto w = lib.waveform("lib");
+        CHECK(w != nullptr);
+        CHECK_NEAR(double(w->buckets()), 60.0, 2.0);
+        // 440 Hz sine at 0.5 in both channels: each 50 ms bucket in the middle is symmetric. The mono
+        // downmix level depends on the backend (sum/2 = 0.5, or -3 dB pan law = 0.71), so allow both.
+        const int lo = w->peaks[60], hi = w->peaks[61];
+        CHECK(hi >= 50 && hi <= 100);
+        CHECK(lo <= -50 && lo >= -100);
+        CHECK(std::abs(lo + hi) <= 10);
     }
 };
 
