@@ -10,6 +10,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -169,6 +171,31 @@ std::optional<ProbeResult> probeFile(const std::string& path, std::string* error
 
 // ------------------------------------------------------------------ decoder
 
+// Google's software decoders, by MIME type. Used when VSTUDIO_ANDROID_SOFTWARE_CODECS
+// is set (tests, emulators) or when the default (hardware) decoder cannot be created.
+const char* softwareDecoder(const std::string& mime) {
+    if (mime == "video/avc") return "c2.android.avc.decoder";
+    if (mime == "video/hevc") return "c2.android.hevc.decoder";
+    if (mime == "video/x-vnd.on2.vp8") return "c2.android.vp8.decoder";
+    if (mime == "video/x-vnd.on2.vp9") return "c2.android.vp9.decoder";
+    if (mime == "video/av01") return "c2.android.av1.decoder";
+    if (mime == "audio/mp4a-latm") return "c2.android.aac.decoder";
+    if (mime == "audio/mpeg") return "c2.android.mp3.decoder";
+    if (mime == "audio/opus") return "c2.android.opus.decoder";
+    if (mime == "audio/vorbis") return "c2.android.vorbis.decoder";
+    return nullptr;
+}
+
+AMediaCodec* createDecoder(const std::string& mime) {
+    const char* sw = softwareDecoder(mime);
+    const char* force = std::getenv("VSTUDIO_ANDROID_SOFTWARE_CODECS");
+    if (sw && force && *force && *force != '0') {
+        if (AMediaCodec* c = AMediaCodec_createCodecByName(sw)) return c;
+    }
+    if (AMediaCodec* c = AMediaCodec_createDecoderByType(mime.c_str())) return c;
+    return sw ? AMediaCodec_createCodecByName(sw) : nullptr;
+}
+
 // One extractor + codec per stream: the core already keeps a separate decoder
 // instance per purpose (preview video / audio / export), so each stays sequential.
 class StreamReader {
@@ -182,7 +209,7 @@ public:
         fmt_ = std::move(video ? t.vfmt : t.afmt);
         AMediaExtractor_selectTrack(ex_.get(), static_cast<size_t>(track_));
         const std::string mime = mimeOf(fmt_.get());
-        codec_.reset(AMediaCodec_createDecoderByType(mime.c_str()));
+        codec_.reset(createDecoder(mime));
         if (!codec_) {
             setErr(error, "no decoder for " + mime);
             return false;
@@ -211,12 +238,27 @@ public:
         AMediaExtractor_seekTo(ex_.get(), us, AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
         AMediaCodec_flush(codec_.get());
         inputEos_ = outputEos_ = false;
+        // Some decoders drop SPS/PPS (csd-0/csd-1) on flush; send them again.
+        for (const char* key : {"csd-0", "csd-1", "csd-2"}) {
+            void* data = nullptr;
+            size_t size = 0;
+            if (!AMediaFormat_getBuffer(fmt_.get(), key, &data, &size) || !size) continue;
+            const ssize_t idx = AMediaCodec_dequeueInputBuffer(codec_.get(), kTimeoutUs * 10);
+            if (idx < 0) break;
+            size_t cap = 0;
+            uint8_t* buf = AMediaCodec_getInputBuffer(codec_.get(), static_cast<size_t>(idx), &cap);
+            const size_t n = std::min(cap, size);
+            std::memcpy(buf, data, n);
+            AMediaCodec_queueInputBuffer(codec_.get(), static_cast<size_t>(idx), 0, n, 0, AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG);
+        }
     }
 
     // Next decoded buffer. `fn(data, size, ptsUs)` is called while the buffer is held.
     template <class F>
     bool next(F&& fn) {
-        for (int spins = 0; spins < 2000 && !outputEos_; ++spins) {
+        // Give up after 2 s without output (broken stream or stuck codec) instead of hanging.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!outputEos_ && std::chrono::steady_clock::now() < deadline) {
             feed();
             AMediaCodecBufferInfo info{};
             const ssize_t idx = AMediaCodec_dequeueOutputBuffer(codec_.get(), &info, kTimeoutUs);
