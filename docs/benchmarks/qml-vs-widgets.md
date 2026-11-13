@@ -33,6 +33,19 @@ Widgets đo đến khi timeline vẽ xong và đẩy lên cửa sổ; QML đo đ
 | Cuộn timeline | 3000 | 31,5 / 40,3 ms | 1,3 / 1,7 ms |
 | Kéo 1 clip (ghi lệnh + vẽ lại) | 3000 | 911 / 1381 ms | 4,9 / 6,3 ms |
 
+Windows Server 2022 (máy runner GitHub, không GPU, Qt 6.8.3, bản Release, CI job
+`desktop-bench`):
+
+| Thao tác | Số clip | QML trung bình / p95 | Widgets trung bình / p95 |
+|---|---:|---:|---:|
+| Cuộn timeline | 300 | 16,4 / 16,5 ms (*) | 0,39 / 0,82 ms |
+| Kéo 1 clip (ghi lệnh + vẽ lại) | 300 | 127 / 147 ms | 1,3 / 1,8 ms |
+| Cuộn timeline | 3000 | 73,5 / 76,3 ms | 0,83 / 1,2 ms |
+| Kéo 1 clip (ghi lệnh + vẽ lại) | 3000 | 1115 / 1164 ms | 4,9 / 6,9 ms |
+
+(*) Trên Windows, QML chờ vsync nên mỗi khung tối thiểu khoảng 16,7 ms; con số này
+nghĩa là theo kịp 60 fps. Với 3000 clip QML chỉ còn khoảng 13 fps.
+
 Mốc mượt là 16,7 ms mỗi khung (60 fps). Với 3000 clip, bản QML cuộn chỉ còn
 khoảng 30 fps và mỗi lần kéo clip đứng hình gần 1 giây. Bản Widgets ở dưới mốc
 trong mọi trường hợp; trong 4,9 ms của một lần kéo clip, phần lớn là core
@@ -64,9 +77,9 @@ lệnh sửa trong core, giống nhau ở hai bản, không phải chi phí giao
 Nếu chốt Widgets: giữ bản QML đến hết P0 để tham chiếu, rồi bỏ `desktop/quick/`
 ở P1. Lớp `desktop/common/` đã tách sẵn nên việc bỏ không ảnh hưởng gì khác.
 
-Trạng thái (12/11/2026): chưa chốt, giữ cả hai bản và đo thêm trên máy thật. CI job
-`desktop-bench` chạy cùng phép đo trên Windows và macOS (máy runner không có GPU);
-máy của nhóm có GPU chạy hai lệnh ở trên và gửi kết quả.
+Trạng thái (13/11/2026): chưa chốt, giữ cả hai bản. Đã có số đo Windows (ở trên),
+cùng xu hướng với Linux. macOS chưa đo được vì runner macOS của GitHub liên tục bị
+hủy do hết chỗ; máy của nhóm (có GPU) chạy hai lệnh ở trên và gửi kết quả.
 
 Cần đo lại trên máy thật (Windows, macOS có GPU) trước khi chốt hẳn: render phần
 mềm trên Xvfb làm QML chậm hơn thực tế, nhưng không đổi được nguyên nhân chính là
