@@ -23,7 +23,7 @@ done
 echo "--- all in one process" | tee single.txt
 adb logcat -c
 ( sleep 90; pid=$(adb shell pidof vstudio_android_tests | tr -d '\r'); \
-  if [ -n "$pid" ]; then echo "STILL RUNNING: stacks of $pid"; adb shell debuggerd -b "$pid"; fi ) > stacks.txt 2>&1 &
+  if [ -n "$pid" ]; then echo "STILL RUNNING: stacks of $pid"; adb root >/dev/null; sleep 3; adb wait-for-device; adb shell debuggerd -b "$pid"; fi ) > stacks.txt 2>&1 &
 watch=$!
 timeout 180 adb shell "cd $D && TMPDIR=$D/tmp VSTUDIO_ANDROID_SOFTWARE_CODECS=1 ./vstudio_android_tests; echo exit=\$?" \
   | tee -a single.txt || echo "TIMEOUT: one process" | tee -a single.txt
