@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "vstudio/cover.hpp"
 #include "vstudio/pixel.hpp"
+#include "vstudio/render.hpp"
 
 namespace vstudio {
 
@@ -237,6 +239,42 @@ std::vector<TrackSample> simplifyTrack(const std::vector<TrackSample>& samples, 
     std::vector<TrackSample> out;
     for (std::size_t i = 0; i < samples.size(); ++i)
         if (keep[i]) out.push_back(samples[i]);
+    return out;
+}
+
+CoverTrack trackCoverInClip(const Project& project, MediaPool& pool, const Id& clipId, const Id& coverId,
+                            Time fromTimeline, Time toTimeline, const std::function<bool(double)>& progress) {
+    CoverTrack out;
+    const Clip* clip = project.findClip(clipId);
+    const MediaAsset* asset = clip ? project.findAsset(clip->assetId) : nullptr;
+    const Json* params = nullptr;
+    if (clip && clip->effects.is_array())
+        for (const auto& e : clip->effects)
+            if (e.is_object() && e.value("effect_id", std::string{}) == coverId) params = &e["params"];
+    if (!clip || !asset || !params) {
+        out.result.error = "không tìm thấy vùng che";
+        return out;
+    }
+    const Time a = std::clamp(fromTimeline, clip->timelineIn, clip->timelineOut());
+    const Time b = std::clamp(toTimeline, clip->timelineIn, clip->timelineOut());
+    if (b <= a) {
+        out.result.error = "không còn đoạn nào phía sau để bám theo";
+        return out;
+    }
+    std::string err;
+    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480);
+    if (!dec) {
+        out.result.error = err.empty() ? "không mở được media" : err;
+        return out;
+    }
+    const Time srcA = clip->toSource(a), srcB = clip->toSource(b);
+    const Json now = coverParamsAt(*params, srcA);
+    const TrackBox start{now.value("x", 0.0), now.value("y", 0.0), now.value("w", 0.1), now.value("h", 0.1)};
+    const Rational fps = asset->fps.num > 0 ? asset->fps : project.fps;
+    out.result = trackRegion(*dec, srcA, srcB, fps, start, progress);
+    if (!out.result.error.empty() || out.result.samples.size() < 2) return out;
+    for (const auto& s : simplifyTrack(out.result.samples))
+        out.keys.push_back({s.sourceTime, {s.box.x, s.box.y, s.box.w, s.box.h}});
     return out;
 }
 

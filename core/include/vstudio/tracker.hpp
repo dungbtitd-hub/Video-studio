@@ -6,12 +6,14 @@
 // ordinary keyframes the user can correct by hand.
 #pragma once
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "vstudio/media.hpp"
+#include "vstudio/model.hpp"
 #include "vstudio/time.hpp"
 
 namespace vstudio {
@@ -71,5 +73,17 @@ TrackResult trackRegion(IMediaDecoder& decoder, Time from, Time to, Rational fps
 // Fewest samples whose straight-line interpolation stays within `tolerance`
 // (fraction of the frame) of every tracked box: dense tracking -> few keys.
 std::vector<TrackSample> simplifyTrack(const std::vector<TrackSample>& samples, double tolerance = 0.003);
+
+class MediaPool;
+
+// Tracks a clip's cover from `fromTimeline` towards `toTimeline` (clamped to the clip),
+// starting from the cover's region at that moment. On success `keys` holds the simplified
+// region keys (source time, {x, y, w, h}) for Editor::setCoverTrack.
+struct CoverTrack {
+    TrackResult result;
+    std::vector<std::pair<Time, std::array<double, 4>>> keys;
+};
+CoverTrack trackCoverInClip(const Project& project, MediaPool& pool, const Id& clipId, const Id& coverId,
+                            Time fromTimeline, Time toTimeline, const std::function<bool(double)>& progress = {});
 
 }  // namespace vstudio

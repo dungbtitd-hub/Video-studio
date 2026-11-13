@@ -100,6 +100,23 @@ int main(void) {
     EXPECT(vs_set_property_at(s, "nope", 0, "{\"scale\":2}") != 0);
     EXPECT(vs_zoom_to_region(s, "nope", 0, 0.25, 0.25, 0.5, 0.5) != 0);
     EXPECT(vs_clip_state_at(s, "nope", 0) == NULL);
+    /* Covers: catalogs, thumbnails, refusals. */
+    char* styles = vs_cover_styles_json();
+    EXPECT(styles && strstr(styles, "\"mosaic\"") && strstr(styles, "\"frosted\""));
+    vs_free(styles);
+    char* shapes = vs_cover_shapes_json();
+    EXPECT(shapes && strstr(shapes, "\"heart\""));
+    vs_free(shapes);
+    {
+        uint8_t buf[16 * 16 * 4];
+        for (int i = 0; i < 16 * 16 * 4; ++i) buf[i] = (uint8_t)((i % 4 == 3) ? 255 : ((i / 4) % 2 ? 230 : 20));
+        EXPECT(vs_cover_preview("black", "rect", buf, 16, 16) == 0);
+        EXPECT(buf[(8 * 16 + 8) * 4] < 10); /* centre blacked out */
+        EXPECT(vs_cover_preview("nope", "rect", buf, 16, 16) != 0);
+    }
+    EXPECT(vs_add_cover(s, "nope", "{}") == NULL);
+    EXPECT(vs_track_cover_start(s, "nope", "x", 0, 0) != 0);
+    EXPECT(vs_track_status(s, NULL) == 0);
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

@@ -99,6 +99,36 @@ VS_API int vs_set_property_at(vs_session* s, const char* clip_id, int64_t timeli
 VS_API int vs_zoom_to_region(vs_session* s, const char* clip_id, int64_t timeline_time, double rx, double ry, double rw,
                              double rh);
 VS_API char* vs_clip_state_at(vs_session* s, const char* clip_id, int64_t timeline_time);
+/* ---- covers: blur / mosaic / bars over a region of a clip (cover.hpp); undoable ----
+ * Region x, y, w, h is 0..1 of the clip's SOURCE frame, so it stays on the subject when the clip is zoomed.
+ * vs_cover_styles_json: [{"id","name","category","animated"}]; vs_cover_shapes_json: [{"id","name"}].
+ * vs_add_cover: params_json may be "{}" (centred box, blur); returns the cover id (free with vs_free).
+ * vs_update_cover: patch merged into the params (null removes a key).
+ * vs_set_cover_at: {"x","y","w","h","rotation","amount"} at a time: keyed when the cover follows motion.
+ * vs_key_cover starts following (keys the region at t); vs_clear_cover_keys stops (keeps the region at t).
+ * vs_cover_state_at: the params at t plus "following" (free with vs_free).
+ * vs_covers_json: [{"id", "params"}] of a clip.
+ * vs_cover_preview: applies a style/shape over the middle of an RGBA buffer (thumbnails). */
+VS_API char* vs_cover_styles_json(void);
+VS_API char* vs_cover_shapes_json(void);
+VS_API char* vs_add_cover(vs_session* s, const char* clip_id, const char* params_json);
+VS_API int vs_update_cover(vs_session* s, const char* clip_id, const char* cover_id, const char* patch_json);
+VS_API int vs_remove_cover(vs_session* s, const char* clip_id, const char* cover_id);
+VS_API int vs_set_cover_at(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time,
+                           const char* values_json);
+VS_API int vs_key_cover(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time);
+VS_API int vs_clear_cover_keys(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time);
+VS_API char* vs_cover_state_at(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_time);
+VS_API char* vs_covers_json(vs_session* s, const char* clip_id);
+VS_API int vs_cover_preview(const char* style, const char* shape, uint8_t* rgba, int width, int height);
+/* Follow a moving subject: tracks the cover's region from timeline_from to timeline_to (<= 0: the clip's
+ * end) on a background thread. Poll vs_track_status (0 idle, 1 running, 2 done, -1 failed, -2 cancelled,
+ * -3 lost the subject early: keys up to there were kept); on 2/-3 the keys were applied as ONE undo step
+ * by that status call, so call it from the thread that edits. */
+VS_API int vs_track_cover_start(vs_session* s, const char* clip_id, const char* cover_id, int64_t timeline_from,
+                                int64_t timeline_to);
+VS_API int vs_track_status(vs_session* s, double* progress);
+VS_API void vs_track_cancel(vs_session* s);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);
