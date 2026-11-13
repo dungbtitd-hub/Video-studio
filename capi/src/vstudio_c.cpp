@@ -18,6 +18,7 @@
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
+#include "vstudio/android/gles_compositor.hpp"
 #include "vstudio/android/mediacodec_module.hpp"
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
@@ -63,6 +64,7 @@ struct vs_session {
 #endif
 #if defined(VSTUDIO_HAS_ANDROID_MEDIA)
         android::registerModule(modules);  // hardware codecs; preferred over FFmpeg on Android
+        android::registerGlesCompositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
         apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS

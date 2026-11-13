@@ -11,7 +11,7 @@ cross-platform GPU abstraction library in the core.
 | all | `builtin.cpu_compositor` (reference, fallback) | done |
 | macOS, iOS | `apple.metal_compositor` (Metal) | done in this step |
 | Windows | `windows.d3d11_compositor` (Direct3D 11) | done |
-| Android | GLES 3 / Vulkan compositor | after Windows |
+| Android | `android.gles_compositor` (OpenGL ES 3, offscreen EGL) | done; Vulkan later if needed |
 | Linux (dev/CI only) | CPU | no GPU module planned |
 
 Why native modules rather than one abstraction (bgfx, Dawn/WebGPU, Qt RHI):
@@ -43,6 +43,14 @@ frames that are gone are reused for new frames of the same size.
 Same design and shader logic as Metal (HLSL, compiled at start-up by `d3dcompiler_47.dll`, which is
 loaded at run time). The module only uses a hardware device; tests also accept WARP so the suite runs
 on GPU-less CI runners.
+
+## OpenGL ES 3 compositor (Android)
+
+Same shader logic in GLSL ES 3.00, drawn into an offscreen framebuffer of a pbuffer EGL context.
+The context is current only during one call, so any thread may composite. Layers or outputs larger
+than `GL_MAX_TEXTURE_SIZE` (2048 on the weakest GLES 3 devices) fail the call and that renderer
+continues on the CPU. GLES 3 was chosen over Vulkan first because every API 26+ device has it, and
+the MediaCodec output path (SurfaceTexture) is GLES.
 
 Next steps: keep the output on the GPU for preview (present the texture directly instead of
 reading it back), and import decoder output as textures (CVPixelBuffer to MTLTexture) so
