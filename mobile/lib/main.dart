@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import 'core/project_model.dart';
 import 'core/native_preview.dart';
 import 'core/vstudio.dart';
+import 'ui/media_cache.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
 
@@ -43,6 +44,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   String? _status;
   double? _exportProgress;
   late final Ticker _ticker;
+  final MediaCache _media = MediaCache();
   Timer? _autosave;
 
   @override
@@ -86,6 +88,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void dispose() {
     _ticker.dispose();
     _autosave?.cancel();
+    _media.dispose();
     final vs = _vs;
     // The surface must be detached before the session it renders from is destroyed.
     if (_textureId != null) {
@@ -102,12 +105,14 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (vs.revision != _revision) {
       _revision = vs.revision;
       _project = vs.project();
+      _media.sync(vs, _project!);
     }
   }
 
   void _onTick(Duration _) {
     final vs = _vs;
     if (vs == null) return;
+    _media.poll(vs);
     final playing = vs.playing;
     if (playing) {
       final ph = vs.playhead;
@@ -189,6 +194,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     });
   }
 
+  // Media moved or deleted: pick the file again (the core keeps every clip and its edits).
+  Future<void> _relink(String assetId) async {
+    final files = await FilePicker.pickFiles(type: FileType.media);
+    final path = files.firstOrNull?.path;
+    if (path == null) return;
+    _media.invalidate(assetId);
+    _edit((vs) {
+      vs.relink(assetId, path);
+      _status = 'Đã liên kết lại file';
+    });
+    _vs?.seek(_playhead);
+  }
+
   void _seek(double t) {
     setState(() => _playhead = t.clamp(0, _project?.duration ?? 0).toDouble());
     if (_vs?.playing ?? false) {
@@ -265,8 +283,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               onSeek: _seek,
               onSelect: (id) => setState(() => _selected = id),
               onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
+              media: _media,
             ),
           ),
+          for (final a in project.assets.where((a) => _media.missing.contains(a.id)))
+            Material(
+              color: const Color(0xFF4A1C1C),
+              child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.link_off, color: Color(0xFFFF8A80)),
+                title: Text('Không tìm thấy file: ${a.name}', style: const TextStyle(color: VsColors.fg, fontSize: 13)),
+                trailing: TextButton(onPressed: () => _relink(a.id), child: const Text('Chọn lại')),
+              ),
+            ),
           if (_status != null)
             Container(
               width: double.infinity,

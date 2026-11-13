@@ -89,7 +89,23 @@ class VStudioBindings {
         exportStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
             int Function(Pointer<VsSession>, Pointer<Double>)>('vs_export_status'),
         exportCancel = lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>(
-            'vs_export_cancel');
+            'vs_export_cancel'),
+        requestThumbnails = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32),
+            int Function(Pointer<VsSession>, CStr, int, int)>('vs_request_thumbnails'),
+        requestWaveform = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_request_waveform'),
+        librarySerial = lib.lookupFunction<Int64 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>(
+            'vs_library_serial'),
+        thumbnails = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>, Pointer<Int32>),
+            int Function(Pointer<VsSession>, CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>,
+                Pointer<Int32>)>('vs_thumbnails'),
+        waveform = lib.lookupFunction<Int64 Function(Pointer<VsSession>, CStr, Pointer<Int8>, Int64, Pointer<Int32>),
+            int Function(Pointer<VsSession>, CStr, Pointer<Int8>, int, Pointer<Int32>)>('vs_waveform'),
+        missingAssetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
+            'vs_missing_assets_json'),
+        relinkAsset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_relink_asset');
 
   final CStr Function() version;
   final int Function() ticksPerSecond;
@@ -124,4 +140,12 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int, int, int, int, int) exportStart;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;
+  final int Function(Pointer<VsSession>, CStr, int, int) requestThumbnails;
+  final int Function(Pointer<VsSession>, CStr, int) requestWaveform;
+  final int Function(Pointer<VsSession>) librarySerial;
+  final int Function(Pointer<VsSession>, CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>, Pointer<Int32>)
+      thumbnails;
+  final int Function(Pointer<VsSession>, CStr, Pointer<Int8>, int, Pointer<Int32>) waveform;
+  final CStr Function(Pointer<VsSession>) missingAssetsJson;
+  final int Function(Pointer<VsSession>, CStr, CStr) relinkAsset;
 }
