@@ -695,6 +695,19 @@ private slots:
         QCOMPARE(int(cues.size()), 2);
         QCOMPARE(QString::fromStdString(cues[1].text), QString("VI World"));
         QCOMPARE(QString::fromStdString(settings(vi)["position"].value("anchor", std::string{})), QString("above"));
+        // A program on this computer speaks the same protocol over stdin/stdout.
+        const QString python = QStandardPaths::findExecutable("python3");
+        const QString script = QFINDTESTDATA("../../tools/subtitle-translate/echo_translator.py");
+        if (!python.isEmpty() && !script.isEmpty()) {
+            done.clear();
+            ctrl_->translateSubtitles(imported, {{"provider", "command"}, {"command", ("\"" + python + "\" \"" + script + "\"").toStdString()}},
+                                      "en", "ja", {}, 0, 40);
+            QTRY_COMPARE_WITH_TIMEOUT(done.count(), 1, 20000);
+            QVERIFY2(done.first().at(0).toBool(), qPrintable(done.first().at(1).toString()));
+            const auto replaced = vstudio::subtitles::cuesOf(*ctrl_->project()->findTrack(imported.toStdString()));
+            QCOMPARE(QString::fromStdString(replaced[0].text), QString("[ja] Hello"));
+            ctrl_->undo();
+        }
         // A wrong address fails cleanly, nothing applied.
         const int tracks = int(ctrl_->project()->tracks.size());
         server.close();
