@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
@@ -60,7 +61,7 @@ int main(int argc, char* argv[]) {
     MainWindow win(&editor);
     win.show();
 
-    QList<QUrl> files;
+    QList<QUrl> files, subtitleFiles;
     QString shot;
     int bench = 0;
     double seekTo = -1;
@@ -71,6 +72,8 @@ int main(int argc, char* argv[]) {
         else if (args[i] == "--seek" && i + 1 < args.size()) seekTo = args[++i].toDouble();
         else if (args[i] == "--bench-timeline" && i + 1 < args.size()) bench = args[++i].toInt();
         else if (args[i] == "--look" && i + 1 < args.size()) look = args[++i];
+        else if (QRegularExpression("\\.(srt|vtt|ass|ssa)$", QRegularExpression::CaseInsensitiveOption).match(args[i]).hasMatch())
+            subtitleFiles << QUrl::fromLocalFile(args[i]);  // subtitle files open as subtitle tracks
         else files << QUrl::fromLocalFile(args[i]);
     }
     if (bench > 0) {
@@ -82,6 +85,14 @@ int main(int argc, char* argv[]) {
         return app.exec();
     }
     if (!files.isEmpty()) editor.importMedia(files, true);
+    if (!subtitleFiles.isEmpty())
+        QTimer::singleShot(1500, &editor, [&] {
+            for (const QUrl& f : subtitleFiles) editor.importSubtitles(f);
+            // Show the subtitle panel with the first line selected.
+            const auto p = editor.project();
+            const auto* t = p ? p->findTrack(editor.currentSubtitleTrack().toStdString()) : nullptr;
+            if (t && !t->clips.empty()) editor.setSelectedClip(QString::fromStdString(t->clips.front().id));
+        });
     if (seekTo >= 0) QTimer::singleShot(2500, &editor, [&] { editor.seek(seekTo); });
     if (!look.isEmpty())
         QTimer::singleShot(2000, &editor, [&] {
