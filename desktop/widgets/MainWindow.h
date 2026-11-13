@@ -15,6 +15,7 @@ class QLabel;
 class QToolButton;
 class QCloseEvent;
 class QToolBar;
+class QSlider;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -40,6 +41,7 @@ private:
     bool confirmDiscard();  // false = user cancelled
     void refreshAssets();
     void refreshState();
+    void refreshKeyframes();  // keyframe bar + region select, from the clip under the playhead
     QIcon assetIcon(const QString& id);  // cached until a new thumbnail strip arrives
     void relinkAsset(const QString& id);
 
@@ -55,6 +57,15 @@ private:
     QAction* undo_;
     QAction* redo_;
     QAction* snapAct_ = nullptr;
+    // Keyframe bar under the transport: picture and audio keys are separate.
+    QToolButton* kfPicture_ = nullptr;
+    QToolButton* kfAudio_ = nullptr;
+    QToolButton* kfPrev_ = nullptr;
+    QToolButton* kfNext_ = nullptr;
+    QToolButton* kfResetZoom_ = nullptr;
+    QSlider* kfVolume_ = nullptr;
+    QLabel* kfVolumeLabel_ = nullptr;
+    QLabel* kfInfo_ = nullptr;
     QToolBar* tlBar_ = nullptr;  // timeline tools: snapping, zoom
     QByteArray defaultState_;  // dock layout as built, for "reset layout"
     QHash<QString, QIcon> icons_;  // key: asset id + missing flag

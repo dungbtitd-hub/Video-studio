@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QScrollBar>
 #include <QWidget>
+#include <optional>
 #include <vector>
 
 class EditorController;
@@ -50,6 +51,7 @@ private:
         QString assetId;
         double srcIn;  // source seconds at `start`
         double speed;  // source seconds per timeline second
+        std::vector<double> pictureKeys, audioKeys;  // keyframes, timeline seconds (inside the clip)
     };
     struct Track {
         QString id, name;
@@ -73,6 +75,9 @@ private:
     void paintThumbnails(QPainter& p, const Clip& c, const QRectF& r) const;
     void paintWaveform(QPainter& p, const Clip& c, const QRectF& r) const;
     void updateScrollBar();
+    // Keyframe diamond under `pos` on clip `c` (timeline seconds), if any.
+    [[nodiscard]] std::optional<double> keyAt(const Clip& c, const QRectF& r, QPointF pos) const;
+    void paintKeyframes(QPainter& p, const Clip& c, const QRectF& r, bool selected) const;
 
     static constexpr int kHeaderW = 120, kRulerH = 24, kTrackH = 54;
     EditorController* editor_;
