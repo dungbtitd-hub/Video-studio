@@ -182,6 +182,17 @@ char* guardStr(vs_session* s, F&& f) {
 
 std::string str(const char* c) { return c ? std::string(c) : std::string(); }
 
+// Kept out of the extern "C" block: MSVC (/EHsc) assumes C-linkage functions never throw.
+const Clip& clipOrThrow(vs_session* s, const char* clip_id) {
+    const Clip* c = s->editor->project().findClip(str(clip_id));
+    if (!c) throw std::runtime_error("unknown clip");
+    return *c;
+}
+kf::Group groupFrom(int g) {
+    if (g != 0 && g != 1) throw std::runtime_error("group must be 0 (picture) or 1 (audio)");
+    return g == 1 ? kf::Group::Audio : kf::Group::Picture;
+}
+
 }  // namespace
 
 extern "C" {
@@ -403,18 +414,6 @@ int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, 
         s->edited();
     });
 }
-
-namespace {
-const Clip& clipOrThrow(vs_session* s, const char* clip_id) {
-    const Clip* c = s->editor->project().findClip(str(clip_id));
-    if (!c) throw std::runtime_error("unknown clip");
-    return *c;
-}
-kf::Group groupFrom(int g) {
-    if (g != 0 && g != 1) throw std::runtime_error("group must be 0 (picture) or 1 (audio)");
-    return g == 1 ? kf::Group::Audio : kf::Group::Picture;
-}
-}  // namespace
 
 int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {
     return guard(s, [&] {
