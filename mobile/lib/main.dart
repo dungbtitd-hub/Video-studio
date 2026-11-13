@@ -207,6 +207,88 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     _vs?.seek(_playhead);
   }
 
+  // Track actions (long-press a track header, or "+ Track" above the headers).
+  Future<void> _trackMenu(TrackView? t) async {
+    final project = _project;
+    if (project == null) return;
+    final sameType = t == null ? 0 : project.tracks.where((x) => x.audio == t.audio).length;
+    // Shown top-down: for video a higher index is a higher layer.
+    final up = t == null ? -1 : (t.audio ? t.indexInType - 1 : t.indexInType + 1);
+    final down = t == null ? -1 : (t.audio ? t.indexInType + 1 : t.indexInType - 1);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      builder: (context) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (t != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(t.name, style: const TextStyle(color: VsColors.fg2, fontSize: 13)),
+            ),
+          ListTile(
+              leading: const Icon(Icons.video_library_outlined),
+              title: const Text('Thêm track video'),
+              onTap: () => Navigator.pop(context, 'addVideo')),
+          ListTile(
+              leading: const Icon(Icons.audiotrack_outlined),
+              title: const Text('Thêm track âm thanh'),
+              onTap: () => Navigator.pop(context, 'addAudio')),
+          if (t != null) ...[
+            const Divider(height: 1),
+            ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Đổi tên'),
+                onTap: () => Navigator.pop(context, 'rename')),
+            ListTile(
+                leading: const Icon(Icons.arrow_upward),
+                title: const Text('Lên trên'),
+                enabled: up >= 0 && up < sameType,
+                onTap: () => Navigator.pop(context, 'up')),
+            ListTile(
+                leading: const Icon(Icons.arrow_downward),
+                title: const Text('Xuống dưới'),
+                enabled: down >= 0 && down < sameType,
+                onTap: () => Navigator.pop(context, 'down')),
+            ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Xóa track'),
+                onTap: () => Navigator.pop(context, 'remove')),
+          ],
+        ]),
+      ),
+    );
+    if (!mounted || action == null) return;
+    String nextName(bool audio) =>
+        '${audio ? 'Audio' : 'Video'} ${project.tracks.where((x) => x.audio == audio).length + 1}';
+    switch (action) {
+      case 'addVideo':
+        _edit((vs) => vs.addTrack(audio: false, name: nextName(false)));
+      case 'addAudio':
+        _edit((vs) => vs.addTrack(audio: true, name: nextName(true)));
+      case 'up':
+        _edit((vs) => vs.moveTrack(t!.id, up));
+      case 'down':
+        _edit((vs) => vs.moveTrack(t!.id, down));
+      case 'remove':
+        _edit((vs) => vs.removeTrack(t!.id));
+      case 'rename':
+        final controller = TextEditingController(text: t!.name);
+        final name = await showDialog<String>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Đổi tên track'),
+            content: TextField(controller: controller, autofocus: true),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy')),
+              TextButton(onPressed: () => Navigator.pop(context, controller.text.trim()), child: const Text('Lưu')),
+            ],
+          ),
+        );
+        controller.dispose();
+        if (name != null && name.isNotEmpty) _edit((vs) => vs.renameTrack(t.id, name));
+    }
+  }
+
   void _seek(double t) {
     setState(() => _playhead = t.clamp(0, _project?.duration ?? 0).toDouble());
     if (_vs?.playing ?? false) {
@@ -283,6 +365,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               onSeek: _seek,
               onSelect: (id) => setState(() => _selected = id),
               onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
+              onTrackFlags: (t, {required enabled, required locked, required muted}) =>
+                  _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
+              onTrackMenu: _trackMenu,
+              snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
               media: _media,
             ),
           ),

@@ -60,6 +60,16 @@ public:
     Q_INVOKABLE void deleteSelected();
     Q_INVOKABLE void moveClip(const QString& clipId, const QString& trackId, double seconds);
     Q_INVOKABLE void trimClip(const QString& clipId, bool start, double seconds);
+    // ---- tracks (each one undo step) ----
+    Q_INVOKABLE void addTrack(bool audio);
+    Q_INVOKABLE void removeTrack(const QString& trackId);
+    Q_INVOKABLE void renameTrack(const QString& trackId, const QString& name);
+    Q_INVOKABLE void setTrackFlags(const QString& trackId, bool enabled, bool locked, bool muted);
+    Q_INVOKABLE void moveTrack(const QString& trackId, int indexInType);
+    // Snapping while dragging: reads the current snapshot, never edits. Returns the time to use.
+    double snapClipMove(const QString& clipId, double proposedStart, double tolerance, bool* snapped,
+                        double* target = nullptr) const;
+    double snapTime(double t, double tolerance, const QString& excludeClip, bool* snapped, double* target = nullptr) const;
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void togglePlay();

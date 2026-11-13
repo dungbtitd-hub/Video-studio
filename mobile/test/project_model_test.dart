@@ -11,7 +11,7 @@ const sample = '''
     {"clip_id":"c1","asset_id":"a1","timeline_in":0,"source_in":0,"source_out":1411200000,"speed":"1/1"},
     {"clip_id":"c2","asset_id":"a1","timeline_in":1411200000,"source_in":1411200000,"source_out":2822400000,"speed":"2/1"}]},
   {"track_id":"t1","type":"audio","name":"A1","order":1,"clips":[]},
-  {"track_id":"t2","type":"video","name":"V2","order":2,"clips":[]}]}
+  {"track_id":"t2","type":"video","name":"V2","order":2,"enabled":false,"locked":true,"clips":[]}]}
 ''';
 
 void main() {
@@ -26,6 +26,17 @@ void main() {
     expect(v1.clips[1].duration, closeTo(1.0, 1e-9)); // 2 s of source at 2x
     expect(p.duration, closeTo(3.0, 1e-9));
     expect(v1.clips[0].name, 'clip.mp4');
+  });
+
+  test('track flags and order within type', () {
+    final p = ProjectView.fromJson(sample);
+    final v2 = p.tracks[0], v1 = p.tracks[1], a1 = p.tracks[2];
+    expect((v2.enabled, v2.locked, v2.muted), (false, true, false));
+    expect((v1.enabled, v1.locked, v1.muted), (true, false, false)); // defaults when absent
+    expect(v2.indexInType, 1); // top layer
+    expect(v1.indexInType, 0);
+    expect(a1.indexInType, 0);
+    expect(a1.audio, isTrue);
   });
 
   test('tick conversion is exact for whole frames', () {

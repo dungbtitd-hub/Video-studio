@@ -335,6 +335,63 @@ int vs_remove_clip(vs_session* s, const char* clip_id) {
     });
 }
 
+/* ---- tracks ---- */
+
+int vs_remove_track(vs_session* s, const char* track_id) {
+    return guard(s, [&] {
+        s->editor->removeTrack(str(track_id));
+        s->edited();
+    });
+}
+
+int vs_rename_track(vs_session* s, const char* track_id, const char* name) {
+    return guard(s, [&] {
+        s->editor->renameTrack(str(track_id), str(name));
+        s->edited();
+    });
+}
+
+int vs_set_track_flags(vs_session* s, const char* track_id, int enabled, int locked, int muted) {
+    return guard(s, [&] {
+        s->editor->setTrackFlags(str(track_id), enabled != 0, locked != 0, muted != 0);
+        s->edited();
+    });
+}
+
+int vs_set_track_volume(vs_session* s, const char* track_id, double volume) {
+    return guard(s, [&] {
+        s->editor->setTrackVolume(str(track_id), volume);
+        s->edited();
+    });
+}
+
+int vs_move_track(vs_session* s, const char* track_id, int index_in_type) {
+    return guard(s, [&] {
+        if (index_in_type < 0) throw std::runtime_error("negative index");
+        s->editor->moveTrack(str(track_id), static_cast<std::size_t>(index_in_type));
+        s->edited();
+    });
+}
+
+int64_t vs_snap_clip_move(vs_session* s, const char* clip_id, int64_t proposed_start, int64_t tolerance, int64_t playhead,
+                          int* snapped) {
+    if (!s) return proposed_start;
+    const auto r = snapClipMove(s->editor->project(), str(clip_id), Time::fromTicks(proposed_start),
+                                Time::fromTicks(tolerance),
+                                playhead >= 0 ? std::optional<Time>(Time::fromTicks(playhead)) : std::nullopt);
+    if (snapped) *snapped = r.snapped ? 1 : 0;
+    return r.time.ticks();
+}
+
+int64_t vs_snap_time(vs_session* s, int64_t t, int64_t tolerance, const char* exclude_clip_id, int64_t playhead,
+                     int* snapped) {
+    if (!s) return t;
+    const auto r = snapTime(s->editor->project(), Time::fromTicks(t), Time::fromTicks(tolerance), str(exclude_clip_id),
+                            playhead >= 0 ? std::optional<Time>(Time::fromTicks(playhead)) : std::nullopt);
+    if (snapped) *snapped = r.snapped ? 1 : 0;
+    return r.time.ticks();
+}
+
 int vs_set_clip_volume(vs_session* s, const char* clip_id, double v) {
     return guard(s, [&] {
         s->editor->setClipVolume(str(clip_id), v);

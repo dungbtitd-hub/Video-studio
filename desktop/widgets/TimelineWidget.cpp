@@ -1,17 +1,24 @@
 #include "TimelineWidget.h"
 
 #include <QHash>
+#include <QContextMenuEvent>
+#include <QInputDialog>
+#include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <utility>
 
 #include "EditorController.h"
 #include "Theme.h"
 
 TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWidget(parent), editor_(editor) {
     setMouseTracking(true);
+    setFocusPolicy(Qt::ClickFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setMinimumHeight(kRulerH + kTrackH * 2 + 20);
     hbar_ = new QScrollBar(Qt::Horizontal, this);
@@ -44,9 +51,17 @@ void TimelineWidget::rebuild() {
     for (const auto& t : proj->tracks)
         if (t.type == vstudio::TrackType::Audio) order.push_back(&t);
     tracks_.reserve(order.size());
+    int videoIndex = 0, audioIndex = 0;
+    for (const auto& tr : proj->tracks) (tr.type == vstudio::TrackType::Video ? videoIndex : audioIndex)++;
+    int vSeen = 0, aSeen = 0;
     for (const vstudio::Track* src : order) {
         Track t{QString::fromStdString(src->id), QString::fromStdString(src->name),
                 src->type == vstudio::TrackType::Audio, {}};
+        t.enabled = src->enabled;
+        t.locked = src->locked;
+        t.muted = src->muted;
+        // Display order is top video first: the index in the project is the reverse for video.
+        t.indexInType = t.audio ? aSeen++ : videoIndex - 1 - vSeen++;
         t.clips.reserve(src->clips.size());
         for (const auto& c : src->clips) {
             const double st = c.timelineIn.seconds();
@@ -115,13 +130,24 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
     clipFont.setPixelSize(11);
     p.setFont(clipFont);
     const QString sel = editor_->selectedClip();
+    // Backgrounds first, so a clip dragged onto another track is never covered.
     for (size_t i = 0; i < tracks_.size(); ++i) {
-        const Track& t = tracks_[i];
         const int top = kRulerH + int(i) * kTrackH;
         p.fillRect(kHeaderW, top, w - kHeaderW, kTrackH - 2, Theme::panel2());
+        if (int(i) == dragTargetTrack_ && drag_ == Drag::Move && tracks_[i].id != dragTrack_)
+            p.fillRect(kHeaderW, top, w - kHeaderW, kTrackH - 2, QColor(255, 255, 255, 18));
+    }
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+        const Track& t = tracks_[i];
+        const int trackTop = kRulerH + int(i) * kTrackH;
         auto first = std::lower_bound(t.clips.begin(), t.clips.end(), t0, [](const Clip& c, double v) { return c.end < v; });
+        const bool dim = !t.enabled || (t.audio && t.muted);
+        if (dim) p.setOpacity(0.4);
         for (auto it = first; it != t.clips.end() && it->start <= t1 + 1; ++it) {
             const bool dragging = it->id == dragClip_;
+            const int top = dragging && drag_ == Drag::Move && dragTargetTrack_ >= 0
+                                ? kRulerH + dragTargetTrack_ * kTrackH
+                                : trackTop;
             double s = it->start, e = it->end;
             if (dragging && drag_ == Drag::Move) s += dragDelta_, e += dragDelta_;
             if (dragging && drag_ == Drag::TrimStart) s += dragDelta_;
@@ -147,6 +173,19 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
                            (it->fx ? "fx · " : "") + p.fontMetrics().elidedText(it->name, Qt::ElideRight, int(r.width()) - 12));
             }
         }
+        p.setOpacity(1.0);
+        if (t.locked) {  // locked: hatched, clips still visible
+            p.setPen(Qt::NoPen);
+            p.setBrush(QBrush(QColor(255, 255, 255, 22), Qt::BDiagPattern));
+            p.drawRect(kHeaderW, trackTop, w - kHeaderW, kTrackH - 2);
+            p.setBrush(Qt::NoBrush);
+        }
+    }
+    // Snap indicator
+    if (snapAt_ >= 0 && drag_ != Drag::None && drag_ != Drag::Scrub) {
+        const double sx = timeToX(snapAt_);
+        p.setPen(QPen(QColor(255, 214, 90), 1, Qt::DashLine));
+        p.drawLine(QPointF(sx, kRulerH), QPointF(sx, kRulerH + kTrackH * double(tracks_.size())));
     }
     p.setClipping(false);
 
@@ -157,8 +196,31 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         p.fillRect(0, top, kHeaderW, kTrackH, Theme::panel());
         p.setPen(Theme::lineSoft());
         p.drawRect(0, top, kHeaderW - 1, kTrackH - 1);
+        const Track& t = tracks_[i];
         p.setPen(Theme::fg2());
-        p.drawText(QRect(10, top, kHeaderW - 12, kTrackH), Qt::AlignVCenter, tracks_[i].name);
+        p.setFont(clipFont);
+        p.drawText(QRect(10, top + 6, kHeaderW - 12, 18), Qt::AlignVCenter,
+                   p.fontMetrics().elidedText(t.name, Qt::ElideRight, kHeaderW - 20));
+        // Toggles: lock + (hide for video | mute for audio). Active = accent fill.
+        p.setFont(small);
+        const auto pill = [&](Toggle which, const QString& label, bool active) {
+            const QRect r = toggleRect(int(i), which);
+            p.setPen(active ? Theme::accent() : Theme::lineSoft());
+            p.setBrush(active ? QColor(Theme::accent().red(), Theme::accent().green(), Theme::accent().blue(), 60)
+                              : QColor(Qt::transparent));
+            p.drawRoundedRect(r, 7, 7);
+            p.setPen(active ? Theme::fg() : Theme::fg3());
+            p.drawText(r, Qt::AlignCenter, label);
+        };
+        pill(Toggle::Lock, tr("Khóa"), t.locked);
+        if (t.audio) pill(Toggle::Visible, tr("Câm"), t.muted);
+        else pill(Toggle::Visible, tr("Ẩn"), !t.enabled);
+        p.setBrush(Qt::NoBrush);
+    }
+    if (!snapping_) {
+        p.setPen(Theme::fg3());
+        p.setFont(small);
+        p.drawText(QRect(4, 0, kHeaderW - 8, kRulerH), Qt::AlignVCenter, tr("Hít: tắt (N)"));
     }
 
     // Playhead
@@ -181,7 +243,17 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
 
 void TimelineWidget::mousePressEvent(QMouseEvent* e) {
     const QPointF pos = e->position();
-    if (pos.x() < kHeaderW) return;
+    if (pos.x() < kHeaderW) {
+        const int ti = trackAt(int(pos.y()));
+        if (ti < 0 || e->button() != Qt::LeftButton) return;
+        const Track& tr = tracks_[size_t(ti)];
+        if (toggleRect(ti, Toggle::Lock).contains(pos.toPoint()))
+            editor_->setTrackFlags(tr.id, tr.enabled, !tr.locked, tr.muted);
+        else if (toggleRect(ti, Toggle::Visible).contains(pos.toPoint()))
+            editor_->setTrackFlags(tr.id, tr.audio ? tr.enabled : !tr.enabled, tr.locked, tr.audio ? !tr.muted : tr.muted);
+        return;
+    }
+    if (e->button() != Qt::LeftButton) return;
     const double t = xToTime(pos.x());
     if (pos.y() < kRulerH) {
         drag_ = Drag::Scrub;
@@ -197,10 +269,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
         return;
     }
     editor_->setSelectedClip(c->id);
+    if (tracks_[size_t(ti)].locked) return;  // selectable, not editable
     dragClip_ = c->id;
     dragTrack_ = tracks_[size_t(ti)].id;
+    dragTargetTrack_ = ti;
     dragOrigin_ = t;
     dragDelta_ = 0;
+    snapAt_ = -1;
     const double edge = 6 / pxPerSec_;
     drag_ = t - c->start < edge ? Drag::TrimStart : (c->end - t < edge ? Drag::TrimEnd : Drag::Move);
 }
@@ -214,6 +289,38 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
     }
     if (drag_ != Drag::None) {
         dragDelta_ = t - dragOrigin_;
+        snapAt_ = -1;
+        const Clip* c = nullptr;
+        for (const Track& tr : tracks_)
+            for (const Clip& x : tr.clips)
+                if (x.id == dragClip_) c = &x;
+        const bool snap = snapping_ && !(e->modifiers() & Qt::ShiftModifier) && c;
+        const double tol = 8 / pxPerSec_;
+        if (drag_ == Drag::Move) {
+            // Other tracks of the same type that are not locked accept the clip.
+            const int over = trackAt(int(pos.y()));
+            const Track& from = *std::find_if(tracks_.begin(), tracks_.end(), [&](const Track& x) { return x.id == dragTrack_; });
+            if (over >= 0 && tracks_[size_t(over)].audio == from.audio && !tracks_[size_t(over)].locked)
+                dragTargetTrack_ = over;
+            if (snap) {
+                bool hit = false;
+                const double start = std::max(0.0, c->start + dragDelta_);
+                double target = 0;
+                const double s = editor_->snapClipMove(c->id, start, tol, &hit, &target);
+                if (hit) {
+                    dragDelta_ = s - c->start;
+                    snapAt_ = target;
+                }
+            }
+        } else if (snap) {
+            bool hit = false;
+            const double edge = (drag_ == Drag::TrimStart ? c->start : c->end) + dragDelta_;
+            const double s = editor_->snapTime(edge, tol, c->id, &hit);
+            if (hit) {
+                dragDelta_ = s - (drag_ == Drag::TrimStart ? c->start : c->end);
+                snapAt_ = s;
+            }
+        }
         update();  // visual only
         return;
     }
@@ -225,21 +332,78 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
 void TimelineWidget::mouseReleaseEvent(QMouseEvent*) {
     const Drag d = drag_;
     drag_ = Drag::None;
-    if (d == Drag::None || d == Drag::Scrub || std::abs(dragDelta_) < 0.01) {
+    snapAt_ = -1;
+    const QString target = dragTargetTrack_ >= 0 ? tracks_[size_t(dragTargetTrack_)].id : dragTrack_;
+    dragTargetTrack_ = -1;
+    if (d == Drag::None || d == Drag::Scrub || (std::abs(dragDelta_) < 0.01 && target == dragTrack_)) {
         dragClip_.clear();
         update();
         return;
     }
-    // Commit once: one command, one undo step.
+    // Commit once: one command, one undo step. Copy first: the edit rebuilds tracks_.
+    std::optional<Clip> found;
     for (const Track& t : tracks_)
         for (const Clip& c : t.clips)
-            if (c.id == dragClip_) {
-                if (d == Drag::Move) editor_->moveClip(c.id, dragTrack_, std::max(0.0, c.start + dragDelta_));
-                else if (d == Drag::TrimStart) editor_->trimClip(c.id, true, c.start + dragDelta_);
-                else editor_->trimClip(c.id, false, c.end + dragDelta_);
-            }
-    dragClip_.clear();
+            if (c.id == dragClip_) found = c;
+    const QString id = std::exchange(dragClip_, {});
+    if (found) {
+        if (d == Drag::Move) editor_->moveClip(id, target, std::max(0.0, found->start + dragDelta_));
+        else if (d == Drag::TrimStart) editor_->trimClip(id, true, found->start + dragDelta_);
+        else editor_->trimClip(id, false, found->end + dragDelta_);
+    }
     update();
+}
+
+QRect TimelineWidget::toggleRect(int track, Toggle which) const {
+    const int top = kRulerH + track * kTrackH;
+    return {which == Toggle::Lock ? 10 : 58, top + kTrackH - 24, 44, 16};
+}
+
+void TimelineWidget::headerMenu(int track, const QPoint& globalPos) {
+    QMenu m(this);
+    m.addAction(tr("Thêm track video"), this, [this] { editor_->addTrack(false); });
+    m.addAction(tr("Thêm track âm thanh"), this, [this] { editor_->addTrack(true); });
+    if (track >= 0) {
+        const Track t = tracks_[size_t(track)];  // copy: the menu outlives a rebuild
+        int sameType = 0;
+        for (const Track& x : tracks_) sameType += x.audio == t.audio;
+        m.addSeparator();
+        m.addAction(tr("Đổi tên…"), this, [this, t] {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, tr("Đổi tên track"), tr("Tên"), QLineEdit::Normal, t.name, &ok);
+            if (ok && !name.trimmed().isEmpty()) editor_->renameTrack(t.id, name.trimmed());
+        });
+        // Video is shown top layer first, so "up" means a higher index for video.
+        const int up = t.audio ? t.indexInType - 1 : t.indexInType + 1;
+        const int down = t.audio ? t.indexInType + 1 : t.indexInType - 1;
+        m.addAction(tr("Lên trên"), this, [this, t, up] { editor_->moveTrack(t.id, up); })
+            ->setEnabled(up >= 0 && up < sameType);
+        m.addAction(tr("Xuống dưới"), this, [this, t, down] { editor_->moveTrack(t.id, down); })
+            ->setEnabled(down >= 0 && down < sameType);
+        m.addSeparator();
+        m.addAction(t.locked ? tr("Mở khóa") : tr("Khóa"), this,
+                    [this, t] { editor_->setTrackFlags(t.id, t.enabled, !t.locked, t.muted); });
+        m.addAction(tr("Xóa track"), this, [this, t] { editor_->removeTrack(t.id); });
+    }
+    m.addSeparator();
+    QAction* snap = m.addAction(tr("Hít cạnh (N)"), this, [this] { snapping_ = !snapping_; update(); });
+    snap->setCheckable(true);
+    snap->setChecked(snapping_);
+    m.exec(globalPos);
+}
+
+void TimelineWidget::contextMenuEvent(QContextMenuEvent* e) {
+    if (drag_ != Drag::None) return;
+    headerMenu(trackAt(e->pos().y()), e->globalPos());
+}
+
+void TimelineWidget::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_N && e->modifiers() == Qt::NoModifier) {
+        snapping_ = !snapping_;
+        update();
+        return;
+    }
+    QWidget::keyPressEvent(e);
 }
 
 void TimelineWidget::wheelEvent(QWheelEvent* e) {

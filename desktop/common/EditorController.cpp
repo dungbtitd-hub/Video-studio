@@ -282,6 +282,44 @@ void EditorController::trimClip(const QString& clipId, bool start, double second
     edit([&] { editor_->trimClip(s(clipId), start ? TrimEdge::Start : TrimEdge::End, fromSecs(seconds)); });
 }
 
+void EditorController::addTrack(bool audio) {
+    int n = 1;
+    for (const auto& t : editor_->project().tracks) n += (t.type == TrackType::Audio) == audio;
+    const QString name = QString(audio ? "Audio %1" : "Video %1").arg(n);
+    edit([&] { editor_->addTrack(audio ? TrackType::Audio : TrackType::Video, s(name)); });
+}
+
+void EditorController::removeTrack(const QString& trackId) { edit([&] { editor_->removeTrack(s(trackId)); }); }
+
+void EditorController::renameTrack(const QString& trackId, const QString& name) {
+    edit([&] { editor_->renameTrack(s(trackId), s(name)); });
+}
+
+void EditorController::setTrackFlags(const QString& trackId, bool enabled, bool locked, bool muted) {
+    edit([&] { editor_->setTrackFlags(s(trackId), enabled, locked, muted); });
+}
+
+void EditorController::moveTrack(const QString& trackId, int indexInType) {
+    if (indexInType < 0) return;
+    edit([&] { editor_->moveTrack(s(trackId), std::size_t(indexInType)); });
+}
+
+double EditorController::snapClipMove(const QString& clipId, double proposedStart, double tolerance, bool* snapped,
+                                      double* target) const {
+    const auto r = vstudio::snapClipMove(*snapshot_, s(clipId), fromSecs(proposedStart), fromSecs(tolerance), fromSecs(playhead_));
+    if (snapped) *snapped = r.snapped;
+    if (target) *target = secs(r.target);
+    return secs(r.time);
+}
+
+double EditorController::snapTime(double t, double tolerance, const QString& excludeClip, bool* snapped,
+                                  double* target) const {
+    const auto r = vstudio::snapTime(*snapshot_, fromSecs(t), fromSecs(tolerance), s(excludeClip), fromSecs(playhead_));
+    if (snapped) *snapped = r.snapped;
+    if (target) *target = secs(r.target);
+    return secs(r.time);
+}
+
 void EditorController::undo() {
     if (editor_->undo()) published();
 }

@@ -64,6 +64,16 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, int)>('vs_trim_clip'),
         splitAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Int64), int Function(Pointer<VsSession>, int)>(
             'vs_split_at'),
+        removeTrack = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
+            'vs_remove_track'),
+        renameTrack = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_rename_track'),
+        setTrackFlags = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32),
+            int Function(Pointer<VsSession>, CStr, int, int, int)>('vs_set_track_flags'),
+        moveTrack = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_move_track'),
+        snapClipMove = lib.lookupFunction<Int64 Function(Pointer<VsSession>, CStr, Int64, Int64, Int64, Pointer<Int32>),
+            int Function(Pointer<VsSession>, CStr, int, int, int, Pointer<Int32>)>('vs_snap_clip_move'),
         removeClip = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
             'vs_remove_clip'),
         undo = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_undo'),
@@ -126,6 +136,11 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, int) moveClip;
   final int Function(Pointer<VsSession>, CStr, int, int) trimClip;
   final int Function(Pointer<VsSession>, int) splitAt;
+  final int Function(Pointer<VsSession>, CStr) removeTrack;
+  final int Function(Pointer<VsSession>, CStr, CStr) renameTrack;
+  final int Function(Pointer<VsSession>, CStr, int, int, int) setTrackFlags;
+  final int Function(Pointer<VsSession>, CStr, int) moveTrack;
+  final int Function(Pointer<VsSession>, CStr, int, int, int, Pointer<Int32>) snapClipMove;
   final int Function(Pointer<VsSession>, CStr) removeClip;
   final int Function(Pointer<VsSession>) undo;
   final int Function(Pointer<VsSession>) redo;

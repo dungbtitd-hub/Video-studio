@@ -33,6 +33,15 @@ public:
     // Appends the whole asset (or [sourceIn, sourceOut)) at the end of the track.
     Id appendClip(const Id& trackId, const Id& assetId, std::optional<Time> sourceIn = {}, std::optional<Time> sourceOut = {});
     void removeClip(const Id& clipId);
+    // ---- tracks ----
+    // Removes a track and its clips (refused while locked). Undoable.
+    void removeTrack(const Id& trackId);
+    void renameTrack(const Id& trackId, const std::string& name);
+    // Hidden (video) / silenced (audio) / locked: locked refuses every clip edit on the track.
+    void setTrackFlags(const Id& trackId, bool enabled, bool locked, bool muted);
+    void setTrackVolume(const Id& trackId, double volume);
+    // Moves a track among the tracks of its type: 0 = bottom video layer / first audio track.
+    void moveTrack(const Id& trackId, std::size_t indexInType);
     void moveClip(const Id& clipId, const Id& toTrackId, Time timelineIn);
     void trimClip(const Id& clipId, TrimEdge edge, Time timelineTime);
     Id splitClip(const Id& clipId, Time timelineTime);

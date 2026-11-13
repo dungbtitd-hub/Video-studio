@@ -60,6 +60,52 @@ Id Editor::addTrack(TrackType type, const std::string& name) {
     return id;
 }
 
+void Editor::removeTrack(const Id& trackId) {
+    run("Remove track", EditCommand::Scope::AllTracks, {}, [=](Project& p) { edit::removeTrack(p, trackId); });
+}
+
+void Editor::renameTrack(const Id& trackId, const std::string& name) {
+    if (!project_.findTrack(trackId)) throw EditError("track not found");
+    run("Rename track", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) { p.findTrack(trackId)->name = name; });
+}
+
+void Editor::setTrackFlags(const Id& trackId, bool enabled, bool locked, bool muted) {
+    const Track* t = project_.findTrack(trackId);
+    if (!t) throw EditError("track not found");
+    const char* label = t->locked != locked ? (locked ? "Lock track" : "Unlock track")
+                        : t->muted != muted ? (muted ? "Mute track" : "Unmute track")
+                                            : (enabled ? "Show track" : "Hide track");
+    run(label, EditCommand::Scope::Tracks, {trackId},
+        [=](Project& p) { edit::setTrackFlags(p, trackId, enabled, locked, muted); });
+}
+
+void Editor::setTrackVolume(const Id& trackId, double volume) {
+    if (!project_.findTrack(trackId)) throw EditError("track not found");
+    if (!(volume >= 0.0 && volume <= 4.0)) throw EditError("volume must be within 0..4");
+    run("Track volume", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) { p.findTrack(trackId)->volume = volume; });
+}
+
+void Editor::moveTrack(const Id& trackId, std::size_t indexInType) {
+    const Track* t = project_.findTrack(trackId);
+    if (!t) throw EditError("track not found");
+    const TrackType type = t->type;
+    run("Move track", EditCommand::Scope::AllTracks, {}, [=](Project& p) {
+        // Positions (in p.tracks) of this type's tracks, in order; reorder within them only.
+        std::vector<std::size_t> slots;
+        std::vector<Track> same;
+        for (std::size_t i = 0; i < p.tracks.size(); ++i)
+            if (p.tracks[i].type == type) {
+                slots.push_back(i);
+                same.push_back(std::move(p.tracks[i]));
+            }
+        auto it = std::find_if(same.begin(), same.end(), [&](const Track& x) { return x.id == trackId; });
+        Track moving = std::move(*it);
+        same.erase(it);
+        same.insert(same.begin() + static_cast<std::ptrdiff_t>(std::min(indexInType, same.size())), std::move(moving));
+        for (std::size_t k = 0; k < slots.size(); ++k) p.tracks[slots[k]] = std::move(same[k]);
+    });
+}
+
 Id Editor::insertClip(const Id& trackId, const Id& assetId, Time timelineIn, Time sourceIn, Time sourceOut) {
     Clip c;
     c.id = newId();
