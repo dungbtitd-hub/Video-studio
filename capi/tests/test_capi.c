@@ -177,6 +177,29 @@ int main(void) {
         EXPECT(vs_content_preview("{\"kind\":\"nope\"}", 0, 1, icon, 32, 32) != 0);
         EXPECT(vs_register_font("mine", "Mine", icon, 16) != 0);
     }
+    /* Overlay effects: catalog, a full-frame snowfall clip, a region, a thumbnail. */
+    {
+        char* ovs = vs_overlays_json();
+        EXPECT(ovs && strstr(ovs, "\"snow\"") && strstr(ovs, "\"fireworks\""));
+        vs_free(ovs);
+        EXPECT(vs_default_overlay_json("nope") == NULL);
+        char* snow = vs_default_overlay_json("snow");
+        EXPECT(snow && strstr(snow, "\"kind\":\"overlay\""));
+        char* oc = vs_add_generated_clip(s, snow, 0, 3 * 705600000LL, NULL);
+        EXPECT(oc != NULL);
+        if (oc) {
+            double r[4] = {0, 0, 0, 0};
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[0] < 1e-6 && r[2] > 0.999 && r[3] > 0.999);
+            EXPECT(vs_update_clip_content(s, oc, "{\"w\":640,\"h\":360}") == 0);
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[2] < 0.6);
+            EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1);
+            vs_free(oc);
+        }
+        vs_free(snow);
+        uint8_t icon[48 * 27 * 4];
+        EXPECT(vs_overlay_icon("snow", 1.0, icon, 48, 27) == 0 && icon[3] == 255);
+        EXPECT(vs_overlay_icon("nope", 1.0, icon, 48, 27) != 0);
+    }
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

@@ -516,6 +516,12 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
     c.sourceIn = Time::zero();
     c.sourceOut = duration.snapToFrame(project_.fps);
     c.content = content;
+    const std::string kind = content.value("kind", std::string{});
+    if (kind == "overlay") {  // covers the whole frame unless a region is given
+        if (!c.content.contains("w")) c.content["w"] = project_.canvas.width;
+        if (!c.content.contains("h")) c.content["h"] = project_.canvas.height;
+        if (!c.content.contains("ref")) c.content["ref"] = project_.canvas.height;
+    }
     const Id id = c.id;
     Id target = trackId;
     std::size_t newIndex = 0;
@@ -540,10 +546,10 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
         if (target.empty()) {
             target = newId();
             newIndex = firstVideo < project_.tracks.size() ? lastVideo + 1 : 0;
-            newName = content.value("kind", std::string{}) == "text" ? "Chữ" : "Sticker";
+            newName = kind == "text" ? "Chữ" : kind == "overlay" ? "Lớp phủ" : "Sticker";
         }
     }
-    run(content.value("kind", std::string{}) == "text" ? "Add text" : "Add sticker", EditCommand::Scope::AllTracks, {},
+    run(kind == "text" ? "Add text" : kind == "overlay" ? "Add overlay" : "Add sticker", EditCommand::Scope::AllTracks, {},
         [=](Project& p) {
             if (!newName.empty()) {
                 Track t;
@@ -560,7 +566,7 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
 void Editor::updateClipContent(const Id& clipId, const Json& patch) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");
-    if (!tr->findClip(clipId)->generated()) throw EditError("not a text or sticker clip");
+    if (!tr->findClip(clipId)->generated()) throw EditError("not a generated clip");
     run("Edit content", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
         Clip& c = editableClip(p, clipId);
         c.content.merge_patch(patch);

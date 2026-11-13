@@ -24,6 +24,7 @@
 #include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/motion.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 #include "vstudio/vector.hpp"
@@ -1774,6 +1775,70 @@ TEST("stickers: a large library, each drawing inside its box at every moment") {
     CHECK(draw(0) < 1);
     CHECK(draw(1.5) > 1000);
     CHECK(draw(3) < 1);
+}
+
+TEST("overlays: every effect draws, fades in and out, stays in its region, and repeats exactly") {
+    const auto& cat = overlays::overlayCatalog();
+    CHECK(cat.size() >= 20u);
+    std::set<std::string> ids;
+    for (const auto& o : cat) ids.insert(o.id);
+    CHECK_EQ(ids.size(), cat.size());
+    CHECK(overlays::overlayCategories().size() >= 4u);
+    const vec::Affine place = vec::Affine::translate(160, 90) * vec::Affine::scale(320.0 / 1920);
+    for (const auto& o : cat) {
+        const Json c = overlays::defaultOverlayContent(o.id, 1920, 1080);
+        auto draw = [&](const Json& content, double t) {
+            VideoFrame f;
+            f.allocate(320, 180);
+            overlays::drawOverlay(content, t, 6, place, f);
+            return f;
+        };
+        CHECK(alphaSum(draw(c, 0)) < 1);  // fades in from nothing
+        CHECK(alphaSum(draw(c, 6)) < 1);  // and out to nothing
+        const VideoFrame a = draw(c, 2.5);
+        if (alphaSum(a) <= 20) std::printf("  %s draws %.1f\n", o.id.c_str(), alphaSum(a));
+        CHECK(alphaSum(a) > 20);
+        CHECK(draw(c, 2.5).rgba == a.rgba);  // a pure function of time: seeking shows the same frame
+        // A region (the left third, centred vertically): nothing outside it.
+        Json part = c;
+        part["w"] = 640;
+        part["h"] = 540;
+        VideoFrame r;
+        r.allocate(320, 180);
+        overlays::drawOverlay(part, 2.5, 6, vec::Affine::translate(160 - 640.0 / 6, 90) * vec::Affine::scale(320.0 / 1920), r);
+        double outside = 0;
+        for (int y = 0; y < 180; ++y)
+            for (int x = 0; x < 320; ++x)
+                if (x >= 108 || y < 44 || y >= 136) outside += r.rgba[(y * 320 + x) * 4 + 3];
+        CHECK(outside == 0);
+        VideoFrame icon;
+        icon.allocate(96, 54);
+        overlays::drawOverlayIcon(o.id, 1.5, icon);
+        CHECK(icon.rgba[3] == 255);
+    }
+    // Through the editor: a full-frame overlay on a "Lớp phủ" track, drawn by the renderer.
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    Json snow = overlays::defaultOverlayContent("snow");
+    snow.erase("w");
+    snow.erase("h");
+    const Id id = f.ed.addGeneratedClip(snow, sec(0), sec(4));
+    const Clip* clip = f.ed.project().findClip(id);
+    CHECK_EQ(clip->content.value("w", 0), f.ed.project().canvas.width);
+    CHECK_EQ(clip->content.value("h", 0), f.ed.project().canvas.height);
+    CHECK(f.ed.project().trackOfClip(id)->name == "Lớp phủ");
+    const auto rect = generatedRectOnCanvas(f.ed.project(), *clip, sec(1));
+    CHECK(std::abs(rect[0]) < 1e-6 && std::abs(rect[2] - f.ed.project().canvas.width) < 1e-6);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    Renderer r(f.ed.project(), pool);
+    Project bare = f.ed.project();
+    bare.tracks.erase(std::remove_if(bare.tracks.begin(), bare.tracks.end(), [&](const Track& t) { return t.findClip(id); }), bare.tracks.end());
+    Renderer rb(bare, pool);
+    const VideoFrame with = r.renderVideo(sec(2), 320, 180), without = rb.renderVideo(sec(2), 320, 180);
+    long diff = 0;
+    for (std::size_t i = 0; i < with.rgba.size(); ++i) diff += std::abs(int(with.rgba[i]) - int(without.rgba[i]));
+    CHECK(diff > 2000);
 }
 
 TEST("generated clips: added on an overlay track, rendered, undone, saved") {

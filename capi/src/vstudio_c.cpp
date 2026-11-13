@@ -20,6 +20,7 @@
 #include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/motion.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 #include "vstudio/media_library.hpp"
@@ -831,6 +832,35 @@ char* vs_stickers_json(void) {
     return dup(out.dump());
 }
 
+char* vs_overlays_json(void) {
+    Json out = Json::array();
+    for (const auto& o : overlays::overlayCatalog())
+        out.push_back({{"id", o.id}, {"name", o.name}, {"category", o.category}, {"tintable", o.tintable}});
+    return dup(out.dump());
+}
+
+char* vs_default_overlay_json(const char* id) {
+    if (!overlays::findOverlay(str(id))) return nullptr;
+    Json c = overlays::defaultOverlayContent(str(id));
+    c.erase("w");  // sized to the project's canvas when added
+    c.erase("h");
+    c.erase("ref");
+    return dup(c.dump());
+}
+
+int vs_overlay_icon(const char* id, double seconds, uint8_t* out, int width, int height) {
+    if (!out || width <= 0 || height <= 0 || !overlays::findOverlay(str(id))) return -1;
+    try {
+        VideoFrame f;
+        f.allocate(width, height);
+        overlays::drawOverlayIcon(str(id), seconds, f);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
 char* vs_default_text_json(const char* t) {
     try {
         return dup(text::defaultTextContent(t && *t ? std::string(t) : std::string("Nhập chữ")).dump());
@@ -863,7 +893,7 @@ int vs_update_clip_content(vs_session* s, const char* clip_id, const char* patch
 int vs_generated_rect(vs_session* s, const char* clip_id, int64_t t, double* xywh) {
     return guard(s, [&] {
         const Clip& c = clipOrThrow(s, clip_id);
-        if (!c.generated()) throw std::runtime_error("not a text or sticker clip");
+        if (!c.generated()) throw std::runtime_error("not a generated clip");
         const Project& p = s->editor->project();
         const auto r = generatedRectOnCanvas(p, c, c.toSource(Time::fromTicks(t)));
         if (xywh) {
