@@ -22,6 +22,8 @@
 
 #include "EditorController.h"
 #include "CoverPanel.h"
+#include "GradePanel.h"
+#include "GradeWidgets.h"
 #include "LooksPanel.h"
 #include "MainWindow.h"
 #include "PreviewWidget.h"
@@ -184,6 +186,44 @@ private slots:
         QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
         emit list->itemClicked(list->item(0));  // "Gốc": no look
         QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
+    }
+
+    void proGrade() {
+        GradePanel* panel = win_->grade();
+        const QString clip = QString::fromStdString(ctrl_->project()->tracks.front().clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        QVERIFY(panel->tabs()->isEnabled());
+        const auto undoDepth = [&] { return ctrl_->undoLabel(); };
+        // Dragging a slider previews live without an undo step; release commits one.
+        QSlider* sat = panel->slider("saturation");
+        sat->setSliderDown(true);
+        sat->setValue(150);
+        QVERIFY(ctrl_->clipGrade(clip).empty());  // still uncommitted
+        sat->setSliderDown(false);
+        emit sat->sliderReleased();
+        QCOMPARE(ctrl_->clipGrade(clip).value("saturation", 0.0), 1.5);
+        // A warm push on the highlights wheel.
+        panel->wheel(2)->dragPuckTo(30, 0.5);
+        const auto gain = ctrl_->clipGrade(clip)["gain"];
+        QVERIFY(gain.is_array() && gain[0].get<double>() > gain[2].get<double>());
+        // Curves: a point on the master curve is stored and drawn from the same spline.
+        panel->tabs()->setCurrentIndex(1);
+        panel->curve()->setPoints({{0, 0}, {0.5, 0.65}, {1, 1}});
+        emit panel->curve()->committed();
+        QCOMPARE(ctrl_->clipGrade(clip)["curves"]["master"].size(), std::size_t(3));
+        // Eyedropper -> qualifier selects that colour (kept even before any change inside it).
+        panel->pickColor(QColor(60, 120, 230));
+        const auto q = ctrl_->clipGrade(clip)["qualifier"];
+        QVERIFY(q.is_object());
+        QVERIFY(std::abs(q["hue"][0].get<double>() - 219) < 3);
+        // Undo goes back one control at a time; reset removes the grade.
+        ctrl_->undo();
+        QVERIFY(!ctrl_->clipGrade(clip).contains("qualifier"));
+        QVERIFY(ctrl_->clipGrade(clip).contains("curves"));
+        ctrl_->setClipGrade({clip}, vstudio::Json());
+        QVERIFY(ctrl_->clipGrade(clip).empty());
+        QCOMPARE(panel->slider("saturation")->value(), 100);  // panel follows the project
+        (void)undoDepth;
     }
 
     void logInputAndLut() {

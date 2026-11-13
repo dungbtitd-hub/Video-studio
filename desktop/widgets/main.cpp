@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "EditorController.h"
+#include "GradePanel.h"
 #include "MainWindow.h"
+
+#include <QDockWidget>
 #include "Theme.h"
 #include "TimelineWidget.h"
 
@@ -65,12 +68,14 @@ int main(int argc, char* argv[]) {
     int bench = 0;
     double seekTo = -1;
     QString look;  // --look <id>: select the first video clip and apply a look (screenshots, CI)
+    QString grade;  // --grade <json>: same with a colour grade; shows the Chỉnh màu panel
     const QStringList args = app.arguments();
     for (int i = 1; i < args.size(); ++i) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) shot = args[++i];
         else if (args[i] == "--seek" && i + 1 < args.size()) seekTo = args[++i].toDouble();
         else if (args[i] == "--bench-timeline" && i + 1 < args.size()) bench = args[++i].toInt();
         else if (args[i] == "--look" && i + 1 < args.size()) look = args[++i];
+        else if (args[i] == "--grade" && i + 1 < args.size()) grade = args[++i];
         else files << QUrl::fromLocalFile(args[i]);
     }
     if (bench > 0) {
@@ -89,6 +94,14 @@ int main(int argc, char* argv[]) {
             if (clips.isEmpty()) return;
             editor.setSelectedClip(clips.front());
             editor.setClipLook({clips.front()}, look, 1.0);
+        });
+    if (!grade.isEmpty())
+        QTimer::singleShot(2000, &editor, [&] {
+            const QStringList clips = editor.lookableClips();
+            if (clips.isEmpty()) return;
+            editor.setSelectedClip(clips.front());
+            editor.setClipGrade({clips.front()}, vstudio::Json::parse(grade.toStdString(), nullptr, false));
+            if (auto* d = qobject_cast<QDockWidget*>(win.grade()->parentWidget())) d->raise();
         });
     if (!shot.isEmpty()) {
         QTimer::singleShot(4000, &app, [&] {

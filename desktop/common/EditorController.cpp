@@ -9,6 +9,7 @@
 #include "vstudio/tracker.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
+#include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 
 #include <QDir>
@@ -259,6 +260,10 @@ bool EditorController::edit(F&& f) {
 
 void EditorController::published() {
     snapshot_ = editor_->snapshot();
+    if (gradePreviewOn_) {  // an edit (or undo) always shows the committed project
+        gradePreviewOn_ = false;
+        preview_->setEffectOverride(nullptr);
+    }
     preview_->setProject(snapshot_);
     assetsDirty_ = tracksDirty_ = true;
     refreshLibrary();
@@ -319,6 +324,30 @@ const Json* clipEffect(const Project* p, const QString& clipId, const char* type
     return nullptr;
 }
 }  // namespace
+
+void EditorController::setClipGrade(const QStringList& clipIds, const Json& params) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    gradePreviewOn_ = false;
+    preview_->setEffectOverride(nullptr);
+    edit([&] { editor_->setClipGrade(ids, params); });
+}
+
+Json EditorController::clipGrade(const QString& clipId) const {
+    if (const Json* p = clipEffect(snapshot_.get(), clipId, kColorGradeEffect)) return *p;
+    return Json::object();
+}
+
+void EditorController::previewGrade(const QString& clipId, const Json& params) {
+    gradePreviewOn_ = true;
+    preview_->setEffectOverride(std::make_shared<EffectOverride>(EffectOverride{s(clipId), kColorGradeEffect, params}));
+}
+
+void EditorController::clearGradePreview() {
+    if (!gradePreviewOn_) return;
+    gradePreviewOn_ = false;
+    preview_->setEffectOverride(nullptr);
+}
 
 void EditorController::setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure) {
     std::vector<Id> ids;

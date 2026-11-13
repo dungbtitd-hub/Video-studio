@@ -115,6 +115,12 @@ public:
     [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
     [[nodiscard]] QString clipAsset(const QString& clipId) const;
     // Log/HDR -> Rec.709 (vstudio/color_space.hpp): input id ("" = none) and exposure.
+    // Pro grade (grade.hpp). setClipGrade commits one undo step (null/neutral removes);
+    // previewGrade shows uncommitted params on the preview while a control is dragged.
+    void setClipGrade(const QStringList& clipIds, const vstudio::Json& params);
+    [[nodiscard]] vstudio::Json clipGrade(const QString& clipId) const;  // {} when none
+    void previewGrade(const QString& clipId, const vstudio::Json& params);
+    void clearGradePreview();
     void setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure = 0.0);
     [[nodiscard]] QPair<QString, double> clipColorSpace(const QString& clipId) const;
     // What the clip's file says it is (HLG today); "" when unknown.
@@ -239,6 +245,7 @@ private:
     template <class F>
     bool edit(F&& f);  // runs an edit, reports EditError in the status bar
     void published();  // take a new snapshot, hand it to the preview, invalidate QML models
+    bool gradePreviewOn_ = false;
     void setStatus(const QString& s);
     void startExport(const QUrl& file, const vstudio::ExportSettings& es);
     void buildAssetsModel() const;

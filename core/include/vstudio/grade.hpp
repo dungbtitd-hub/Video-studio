@@ -53,6 +53,7 @@ const std::vector<HslBand>& hslBands();
 void applyColorGrade(VideoFrame& frame, const Json& params);
 
 // True when the parameters leave every picture unchanged (the UI then removes the effect).
+// An enabled qualifier counts as a grade: its selection is kept before anything is adjusted.
 bool isNeutralGrade(const Json& params);
 
 // Smooth monotone curve through control points (sorted by x, ends added at 0/1

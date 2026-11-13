@@ -31,6 +31,7 @@
 #include "TransitionsPanel.h"
 #include "TextPanel.h"
 #include "StickerPanel.h"
+#include "GradePanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -227,6 +228,15 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
+    auto* gradeDock = new QDockWidget("Chỉnh màu", this);
+    gradeDock->setObjectName("grade");
+    grade_ = new GradePanel(editor_, gradeDock);
+    gradeDock->setWidget(grade_);
+    addDockWidget(Qt::RightDockWidgetArea, gradeDock);
+    tabifyDockWidget(looksDock, gradeDock);
+    // Eyedropper: the qualifier asks the preview for one click.
+    connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
+    connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);
     auto* coverDock = new QDockWidget("Che mờ", this);
     coverDock->setObjectName("covers");
     covers_ = new CoverPanel(editor_, coverDock);

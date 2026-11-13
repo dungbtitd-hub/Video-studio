@@ -7,6 +7,8 @@ qt_add_executable(VideoStudio
   PreviewWidget.cpp PreviewWidget.h
   TimelineWidget.cpp TimelineWidget.h
   LooksPanel.cpp LooksPanel.h
+  GradePanel.cpp GradePanel.h
+  GradeWidgets.cpp GradeWidgets.h
   CoverPanel.cpp CoverPanel.h
   TransitionsPanel.cpp TransitionsPanel.h
   AnimationBox.cpp AnimationBox.h

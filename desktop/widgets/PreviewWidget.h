@@ -26,7 +26,14 @@ public:
     void setObjectRect(const QRectF& normalized);
     [[nodiscard]] bool objectEditing() const { return coverOn_ && object_; }
 
+    // Eyedropper: the next click on the picture emits colorPicked (average of a 5x5 spot)
+    // instead of editing; Esc cancels.
+    void setPickMode(bool on);
+    [[nodiscard]] bool pickMode() const { return pick_; }
+
 signals:
+    void colorPicked(const QColor& c);
+    void pickModeChanged(bool on);
     void previewSizeChanged(int w, int h);  // device pixels
     void regionSelected(const QRectF& normalized);  // 0..1 of the frame, frame aspect
     void coverRectChanged(const QRectF& normalized);  // cover moved/resized/drawn (on release)
@@ -50,6 +57,7 @@ private:
     [[nodiscard]] QRectF toNormalized(const QRectF& widgetRect) const;
 
     QImage frame_;
+    bool pick_ = false;
     bool coverOn_ = false;
     bool object_ = false;  // the box is a text/sticker, not a cover
     QRectF cover_;  // normalized

@@ -96,7 +96,35 @@ QRectF PreviewWidget::bandRect(QPointF to) const {
     return QRectF(anchor_, QSizeF(sx * w, sy * h)).normalized();
 }
 
+void PreviewWidget::setPickMode(bool on) {
+    if (pick_ == on) return;
+    pick_ = on;
+    setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
+    if (on) setFocus();
+    emit pickModeChanged(on);
+}
+
 void PreviewWidget::mousePressEvent(QMouseEvent* e) {
+    if (pick_) {
+        const QRectF fr = frameRect();
+        if (e->button() == Qt::LeftButton && fr.contains(e->position()) && !frame_.isNull()) {
+            const int cx = int((e->position().x() - fr.x()) / fr.width() * frame_.width());
+            const int cy = int((e->position().y() - fr.y()) / fr.height() * frame_.height());
+            double r = 0, g = 0, b = 0;
+            int n = 0;
+            for (int y = std::max(0, cy - 2); y <= std::min(frame_.height() - 1, cy + 2); ++y)
+                for (int x = std::max(0, cx - 2); x <= std::min(frame_.width() - 1, cx + 2); ++x) {
+                    const QColor c = frame_.pixelColor(x, y);
+                    r += c.redF();
+                    g += c.greenF();
+                    b += c.blueF();
+                    ++n;
+                }
+            if (n) emit colorPicked(QColor::fromRgbF(float(r / n), float(g / n), float(b / n)));
+        }
+        setPickMode(false);
+        return;
+    }
     if (coverOn_ && e->button() == Qt::LeftButton && !frameRect().isEmpty()) {
         const QRectF r = coverWidgetRect();
         const QPointF p = e->position();
@@ -171,6 +199,10 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void PreviewWidget::keyPressEvent(QKeyEvent* e) {
+    if (pick_ && e->key() == Qt::Key_Escape) {
+        setPickMode(false);
+        return;
+    }
     if (coverDrag_ != CoverDrag::None && e->key() == Qt::Key_Escape) {
         coverDrag_ = CoverDrag::None;
         cover_ = toNormalized(coverStart_);

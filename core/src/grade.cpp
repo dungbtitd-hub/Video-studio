@@ -356,6 +356,8 @@ void balanceToWheel(const std::array<double, 3>& c, double* angleDeg, double* di
 
 bool isNeutralGrade(const Json& p) {
     if (!p.is_object()) return true;
+    // A qualifier selection is kept even before anything is adjusted inside it.
+    if (auto q = p.find("qualifier"); q != p.end() && q->is_object() && q->value("enabled", true)) return false;
     VideoFrame probe;
     probe.width = 16;
     probe.height = 16;
