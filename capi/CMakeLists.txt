@@ -12,6 +12,9 @@ set_target_properties(vstudio_capi PROPERTIES C_VISIBILITY_PRESET hidden CXX_VIS
 if(VSTUDIO_WITH_FFMPEG)
   target_link_libraries(vstudio_capi PRIVATE vstudio::ffmpeg)
 endif()
+if(TARGET vstudio_android)
+  target_link_libraries(vstudio_capi PRIVATE vstudio::android)
+endif()
 
 if(VSTUDIO_BUILD_TESTS)
   add_executable(vstudio_capi_tests tests/test_capi.c)

@@ -17,7 +17,7 @@
 | Chọn công nghệ desktop | Đã chốt Qt Widgets (13/11/2026) | số đo Linux/Windows/macOS trong `docs/benchmarks/qml-vs-widgets.md`; bản QML giữ đến hết P0 để tham chiếu |
 | Module FFmpeg (Windows) | Code xong | CI Windows hiện build core không FFmpeg; cần thêm FFmpeg qua vcpkg |
 | Module Apple (macOS/iOS) | Chưa | AVFoundation/VideoToolbox, dùng chung macOS và iOS |
-| Module MediaCodec (Android) | Đang làm | nhánh `p0/android-mediacodec`, chưa build |
+| Module MediaCodec (Android) | Xong (emulator) | qua bộ test chung trên emulator Android 11 trong CI; chưa thử trên điện thoại thật |
 | Flutter shell + FFI | Xong (chạy trên Linux) | FFI đã test end-to-end với core thật; chưa chạy trên điện thoại |
 | Preview mobile qua native texture | Chưa | hiện copy khung RGBA qua FFI |
 | CI 4 hệ điều hành | Xong (cấu hình) | Linux, macOS, Windows, Android, iOS, Flutter |
