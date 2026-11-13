@@ -19,7 +19,7 @@
 | Module Apple (macOS/iOS) | Xong (CI macOS) | AVFoundation/VideoToolbox, dùng chung macOS và iOS; qua bộ test chung trên CI macOS; chưa thử trên iPhone thật |
 | Module MediaCodec (Android) | Xong (emulator) | qua bộ test chung trên emulator Android 11 trong CI; chưa thử trên điện thoại thật |
 | Flutter shell + FFI | Xong (Android emulator, build iOS) | APK cài và chạy trên emulator Android 11 trong CI, core nạp được; app iOS build được (chưa ký); chưa thử trên điện thoại thật |
-| Preview mobile qua native texture | Chưa | hiện copy khung RGBA qua FFI |
+| Preview mobile qua native texture | Xong (Android emulator, build iOS) | core ghi khung thẳng vào texture của Flutter (Android Surface, iOS CVPixelBuffer) qua `vs_preview_set_sink`, không qua Dart; CI kiểm tra khung đầu tiên trên emulator; iOS mới build, chưa chạy thử |
 | CI 4 hệ điều hành | Xong (cấu hình) | Linux, macOS, Windows, Android, iOS, Flutter |
 | Benchmark trên máy/thiết bị thật | Chưa | mới có số đo trên máy ảo Linux |
 
