@@ -128,6 +128,39 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_zoom_to_region'),
         clipStateAt = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, Int64),
             CStr Function(Pointer<VsSession>, CStr, int)>('vs_clip_state_at'),
+        coverStylesJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_cover_styles_json'),
+        coverShapesJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_cover_shapes_json'),
+        addCover = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr),
+            CStr Function(Pointer<VsSession>, CStr, CStr)>('vs_add_cover'),
+        updateCover = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr)>('vs_update_cover'),
+        removeCover = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_remove_cover'),
+        setCoverAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Int64, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr, int, CStr)>('vs_set_cover_at'),
+        keyCover = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Int64),
+            int Function(Pointer<VsSession>, CStr, CStr, int)>('vs_key_cover'),
+        clearCoverKeys = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Int64),
+            int Function(Pointer<VsSession>, CStr, CStr, int)>('vs_clear_cover_keys'),
+        coverStateAt = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr, Int64),
+            CStr Function(Pointer<VsSession>, CStr, CStr, int)>('vs_cover_state_at'),
+        coversJson =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_covers_json'),
+        coverCanvasRect = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Int64, Pointer<Double>),
+            int Function(Pointer<VsSession>, CStr, CStr, int, Pointer<Double>)>('vs_cover_canvas_rect'),
+        setCoverCanvasRect = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, CStr, Int64, Double, Double, Double, Double),
+            int Function(
+                Pointer<VsSession>, CStr, CStr, int, double, double, double, double)>('vs_set_cover_canvas_rect'),
+        coverPreview = lib.lookupFunction<Int32 Function(CStr, CStr, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, CStr, Pointer<Uint8>, int, int)>('vs_cover_preview'),
+        trackCoverStart = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, Int64, Int64),
+            int Function(Pointer<VsSession>, CStr, CStr, int, int)>('vs_track_cover_start'),
+        trackStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
+            int Function(Pointer<VsSession>, Pointer<Double>)>('vs_track_status'),
+        trackCancel =
+            lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_track_cancel'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
@@ -206,6 +239,22 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipColorSpace;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLut;
   final CStr Function(Pointer<VsSession>, CStr) suggestedLogFormat;
+  final CStr Function() coverStylesJson;
+  final CStr Function() coverShapesJson;
+  final CStr Function(Pointer<VsSession>, CStr, CStr) addCover;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr) updateCover;
+  final int Function(Pointer<VsSession>, CStr, CStr) removeCover;
+  final int Function(Pointer<VsSession>, CStr, CStr, int, CStr) setCoverAt;
+  final int Function(Pointer<VsSession>, CStr, CStr, int) keyCover;
+  final int Function(Pointer<VsSession>, CStr, CStr, int) clearCoverKeys;
+  final CStr Function(Pointer<VsSession>, CStr, CStr, int) coverStateAt;
+  final CStr Function(Pointer<VsSession>, CStr) coversJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, int, Pointer<Double>) coverCanvasRect;
+  final int Function(Pointer<VsSession>, CStr, CStr, int, double, double, double, double) setCoverCanvasRect;
+  final int Function(CStr, CStr, Pointer<Uint8>, int, int) coverPreview;
+  final int Function(Pointer<VsSession>, CStr, CStr, int, int) trackCoverStart;
+  final int Function(Pointer<VsSession>, Pointer<Double>) trackStatus;
+  final void Function(Pointer<VsSession>) trackCancel;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;

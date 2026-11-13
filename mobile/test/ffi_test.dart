@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:video_studio/core/transfer.dart';
 import 'package:video_studio/core/vstudio.dart';
+import 'package:video_studio/ui/cover_panel.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
 
 void main() {
@@ -305,6 +306,120 @@ void main() {
     await tester.tap(find.text('Sony S-Log3 / S-Gamut3.Cine').last);
     await tester.pumpAndSettle();
     expect(applied.last, 'input slog3');
+    expect(tester.takeException(), isNull); // no overflow at phone width
+  }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
+
+  test('covers: add, region from the preview, keyed follow, tracking in the background', () async {
+    final vs = VStudio.create('Covers', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    expect(vs.coverStyles().length, greaterThanOrEqualTo(36));
+    expect(vs.coverShapes().map((e) => e.$1), containsAll(['rect', 'ellipse', 'heart']));
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single.id;
+    final cover = vs.addCover(clip, {'style': 'mosaic', 'shape': 'ellipse'});
+    expect(vs.covers(clip).single.$1, cover);
+    var st = vs.coverStateAt(clip, cover, 0.5);
+    expect((st.style, st.shape, st.following), ('mosaic', 'ellipse', false));
+    // A box drawn on the preview (canvas 0..1) reads back the same on the canvas.
+    vs.setCoverCanvasRect(clip, cover, 0.5, 0.1, 0.2, 0.3, 0.25);
+    final r = vs.coverCanvasRect(clip, cover, 0.5)!;
+    expect([
+      r.$1,
+      r.$2,
+      r.$3,
+      r.$4
+    ], [
+      for (final v in [0.1, 0.2, 0.3, 0.25]) closeTo(v, 1e-6)
+    ]);
+    // Static cover: the region holds everywhere. Following: keyed, moves between keys.
+    expect(vs.coverCanvasRect(clip, cover, 1.5)!.$1, closeTo(0.1, 1e-6));
+    vs.setCoverFollowing(clip, cover, 0.5, true);
+    expect(vs.coverStateAt(clip, cover, 0.5).following, isTrue);
+    vs.setCoverCanvasRect(clip, cover, 1.5, 0.5, 0.2, 0.3, 0.25);
+    expect(vs.coverCanvasRect(clip, cover, 1.0)!.$1, inExclusiveRange(0.1, 0.5));
+    vs.updateCover(clip, cover, {'style': 'blur', 'invert': true});
+    vs.setCoverAt(clip, cover, 1.0, {'amount': 0.9});
+    st = vs.coverStateAt(clip, cover, 1.0);
+    expect((st.style, st.invert), ('blur', true));
+    expect(st.amount, closeTo(0.9, 1e-6));
+    expect(vs.undo(), isTrue);
+    expect(vs.coverStateAt(clip, cover, 1.0).amount, isNot(closeTo(0.9, 1e-6)));
+    // Thumbnails: the style changes the middle of the picture.
+    final px = Uint8List(32 * 20 * 4)..fillRange(0, 32 * 20 * 4, 128);
+    for (var i = 0; i < px.length; i += 37) {
+      px[i] = 255;
+    }
+    expect(vs.coverPreview('black', 'rect', px, 32, 20)![(10 * 32 + 16) * 4], lessThan(10));
+    expect(vs.coverPreview('nope', 'rect', px, 32, 20), isNull);
+    // Tracking runs off the UI thread; polling applies the keys once.
+    vs.setCoverFollowing(clip, cover, 0.5, false);
+    final before = vs.revision;
+    vs.startTrackCover(clip, cover, 0.2);
+    expect(() => vs.startTrackCover(clip, cover, 0.2), throwsA(isA<VStudioException>()));
+    var (state, _) = vs.trackStatus();
+    for (var i = 0; i < 600 && state == TrackState.running; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      (state, _) = vs.trackStatus();
+    }
+    expect(state, anyOf(TrackState.done, TrackState.lost), reason: vs.lastError);
+    expect(vs.revision, greaterThan(before));
+    expect(vs.coverStateAt(clip, cover, 1.0).following, isTrue);
+    vs.removeCover(clip, cover);
+    expect(vs.covers(clip), isEmpty);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  testWidgets('cover panel: style thumbnails, tap to add or restyle, no overflow', (tester) async {
+    final vs = VStudio.create('ffi-covers', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single.id;
+    final events = <String>[];
+    Widget panel(String? active) => MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: 360,
+                child: CoverPanel(
+                  vs: vs,
+                  covers: active == null ? const [] : [active],
+                  active: active,
+                  state: active == null ? null : vs.coverStateAt(clip, active, 0.5),
+                  tracking: false,
+                  trackProgress: 0,
+                  onSelect: (id) => events.add('select'),
+                  onAdd: (style, shape) => events.add('add $style $shape'),
+                  onPatch: (p) => events.add('patch ${p.entries.single.key}=${p.entries.single.value}'),
+                  onAmount: (v) => events.add('amount'),
+                  onFollow: (on) => events.add('follow $on'),
+                  onTrack: () => events.add('track'),
+                  onRemove: () => events.add('remove'),
+                  onDone: () => events.add('done'),
+                ),
+              ),
+            ),
+          ),
+        );
+    await tester.pumpWidget(panel(null));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300))); // image decodes
+    await tester.pump();
+    expect(find.byType(RawImage), findsWidgets);
+    await tester.tap(find.byKey(const Key('cover-style-frosted')));
+    await tester.pump();
+    expect(events.last, 'add frosted rect');
+    expect(tester.widget<FilledButton>(find.byKey(const Key('cover-track'))).onPressed, isNull);
+    final cover = vs.addCover(clip, {'style': 'blur'});
+    await tester.pumpWidget(panel(cover));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('cover-style-frosted')));
+    await tester.tap(find.text('Elip'));
+    await tester.tap(find.byKey(const Key('cover-track')));
+    await tester.tap(find.byKey(const Key('cover-follow')));
+    await tester.tap(find.byKey(const Key('cover-done')));
+    await tester.pump();
+    expect(events.skip(1), ['patch style=frosted', 'patch shape=ellipse', 'track', 'follow true', 'done']);
     expect(tester.takeException(), isNull); // no overflow at phone width
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
 }
