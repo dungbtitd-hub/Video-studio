@@ -74,8 +74,18 @@ Projects store the font id, so the same font must be registered on every device 
 
 ## Stickers
 
-About 135 stickers in 9 groups, all drawn in-house as vectors: Mặt cười, Trái tim, Hoa lá, Sao lấp lánh, Thời tiết,
-Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật.
+About 250 stickers in 17 groups, all drawn in-house as vectors: Mặt cười, Mạng xã hội, Trái tim, Hoa lá, Sao lấp
+lánh, Thời tiết, Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật, Nhãn khuyến mãi, Chữ hiệu ứng, Vẽ tay, Video & kênh, Thể
+thao & game, Tết & mùa lễ, Du lịch & đời sống. The groups follow what video apps commonly offer.
+
+* **Mạng xã hội** buttons (Đăng ký, Thích, Theo dõi, Chia sẻ, Thả tim, in Vietnamese and English) play a click once:
+  a hand taps, the button changes colour and text smoothly, the icon reacts, then it holds. They are generic designs
+  with no platform logos or names (decided 2026-11-14, to keep store releases safe).
+* Text inside stickers (labels, comic words, Tết greetings) uses the bundled fonts, so Vietnamese renders the same
+  everywhere.
+* Self-drawing stickers (hand-drawn marks, the countdown, the clapper) play once and hold their last frame.
+* The drawing kit shared by the groups is `core/src/sticker_kit.hpp`; new groups go in their own file and register
+  through `kit::Add`.
 
 ## Using it
 

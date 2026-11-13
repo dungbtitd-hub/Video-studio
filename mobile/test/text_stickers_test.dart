@@ -250,6 +250,8 @@ void main() {
     ));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200))); // icons decode
     await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('sticker-cat-Trái tim')));
+    await tester.pump();
     await tester.tap(find.byKey(const Key('sticker-cat-Trái tim')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('sticker-heart_red')));
