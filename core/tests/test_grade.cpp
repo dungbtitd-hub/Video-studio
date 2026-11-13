@@ -277,14 +277,97 @@ TEST("grade: full grade is fast enough for preview and 4K export") {
     const Json p{{"lift", {0.05, 0, -0.05, 0.1}}, {"gamma", {0, 0.1, 0, 0.2}}, {"contrast", 1.2}, {"saturation", 1.3},
                  {"curves", {{"master", {{0.25, 0.2}, {0.75, 0.8}}}}}, {"hsl", {{"orange", {0.2, 0.3, 0.1}}}},
                  {"qualifier", {{"hue", {120, 60}}, {"saturation", 0.5}}}};
-    VideoFrame prev = testCard(960, 540);
+    // Steady-state cost (what playback sees): best of a few frames, so the first call's
+    // cold caches and thread start-up on slow emulators do not count.
+    const VideoFrame card = testCard(960, 540);
+    double msPrev = 1e9;
     auto t0 = std::chrono::steady_clock::now();
-    applyColorGrade(prev, p);
-    const double msPrev = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    for (int i = 0; i < 4; ++i) {
+        VideoFrame prev = card;
+        t0 = std::chrono::steady_clock::now();
+        applyColorGrade(prev, p);
+        msPrev = std::min(msPrev, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
     VideoFrame uhd = convertedFrame(testCard(3840, 2160), PixelFormat::RGBA16F);
     t0 = std::chrono::steady_clock::now();
     applyColorGrade(uhd, p);
     const double msUhd = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     std::printf("       full grade 960x540 8-bit: %.2f ms, 3840x2160 deep: %.1f ms\n", msPrev, msUhd);
     CHECK(msPrev < 40);
+}
+
+// ------------------------------------------------------------------ scopes
+
+#include "vstudio/scopes.hpp"
+
+namespace {
+int brightness(const ScopeImage& s, int x, int y) {
+    const std::uint8_t* p = s.rgba.data() + (static_cast<std::size_t>(y) * s.width + x) * 4;
+    return p[0] + p[1] + p[2];
+}
+int brightestRow(const ScopeImage& s, int x0, int x1) {
+    int best = -1, row = -1;
+    for (int y = 0; y < s.height; ++y) {
+        int sum = 0;
+        for (int x = x0; x < x1; ++x) sum += brightness(s, x, y);
+        if (sum > best) best = sum, row = y;
+    }
+    return row;
+}
+}  // namespace
+
+TEST("scopes: waveform and parade put levels where they belong") {
+    VideoFrame f;
+    f.allocate(200, 100);
+    for (int y = 0; y < 100; ++y)
+        for (int x = 0; x < 200; ++x) {
+            std::uint8_t* p = f.rgba.data() + (static_cast<std::size_t>(y) * 200 + x) * 4;
+            const std::uint8_t v = x < 100 ? 0 : 255;  // left black, right white
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+    const auto wf = renderScope(f, ScopeKind::Waveform, 256, 128);
+    CHECK_EQ(wf.width, 256);
+    CHECK(brightestRow(wf, 10, 118) >= 125);   // black half at the bottom
+    CHECK(brightestRow(wf, 138, 246) <= 2);    // white half at the top
+    CHECK(brightness(wf, 64, 64) < 100);       // nothing in the middle (only the grid line)
+    // Parade of pure red: red lane at the top, green and blue lanes at the bottom.
+    VideoFrame red = solid(255, 0, 0, 64, 36);
+    const auto pa = renderScope(red, ScopeKind::Parade, 300, 100);
+    CHECK(brightestRow(pa, 5, 95) <= 2);
+    CHECK(brightestRow(pa, 105, 195) >= 97);
+    CHECK(brightestRow(pa, 205, 295) >= 97);
+}
+
+TEST("scopes: vectorscope centres greys and places colours by hue") {
+    const auto grey = renderScope(solid(128, 128, 128, 64, 36), ScopeKind::Vectorscope, 200, 200);
+    CHECK(brightness(grey, 100, 100) > 300);  // a dot in the centre
+    auto spot = [](const ScopeImage& s) {      // brightest pixel
+        int bx = 0, by = 0, best = -1;
+        for (int y = 0; y < s.height; ++y)
+            for (int x = 0; x < s.width; ++x)
+                if (brightness(s, x, y) > best) best = brightness(s, x, y), bx = x, by = y;
+        return std::pair<int, int>{bx, by};
+    };
+    const auto red = spot(renderScope(solid(200, 30, 30, 64, 36), ScopeKind::Vectorscope, 200, 200));
+    CHECK(red.second < 80);   // red is up (Cr > 0) ...
+    CHECK(red.first < 100);   // ... and slightly left (Cb < 0)
+    const auto blue = spot(renderScope(solid(30, 30, 200, 64, 36), ScopeKind::Vectorscope, 200, 200));
+    CHECK(blue.first > 140);  // blue is right (Cb > 0)
+}
+
+TEST("scopes: histogram counts every sample; scopes stay cheap") {
+    const auto h = computeHistogram(solid(128, 64, 200, 100, 50));
+    CHECK_EQ(h.r[128], std::uint32_t(5000));
+    CHECK_EQ(h.g[64], std::uint32_t(5000));
+    CHECK_EQ(h.b[200], std::uint32_t(5000));
+    const auto img = renderScope(solid(128, 64, 200, 100, 50), ScopeKind::Histogram, 256, 100);
+    CHECK(brightness(img, 128, 98) > brightness(img, 10, 98));
+    // A 4K deep frame samples ~150k pixels: a few milliseconds per scope.
+    VideoFrame uhd = convertedFrame(testCard(3840, 2160), PixelFormat::RGBA16F);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int k = 0; k < 4; ++k) (void)renderScope(uhd, static_cast<ScopeKind>(k), 320, 180);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 4;
+    std::printf("       scope on a 4K deep frame: %.2f ms\n", ms);
+    CHECK(ms < 30);
 }

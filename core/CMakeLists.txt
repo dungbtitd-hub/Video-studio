@@ -16,6 +16,7 @@ add_library(vstudio_core STATIC
   src/export_presets.cpp
   src/looks.cpp
   src/grade.cpp
+  src/scopes.cpp
   src/transfer.cpp
     src/pixel.cpp
     src/color_space.cpp
