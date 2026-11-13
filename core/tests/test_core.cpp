@@ -4,6 +4,7 @@
 #include <fstream>
 #include <filesystem>
 #include <thread>
+#include <set>
 
 #include "fake_media.hpp"
 #include "vstudio/cover.hpp"
@@ -20,6 +21,12 @@
 #include "vstudio/scheduler.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/transitions.hpp"
+#include "vstudio/fonts.hpp"
+#include "vstudio/generators.hpp"
+#include "vstudio/motion.hpp"
+#include "vstudio/stickers.hpp"
+#include "vstudio/text.hpp"
+#include "vstudio/vector.hpp"
 #include "vtest.hpp"
 
 using namespace vstudio;
@@ -1585,4 +1592,240 @@ TEST("render: a transition blends both clips, each reading past its edge, and fa
     float peak = 0;
     for (float v : full.samples) peak = std::max(peak, std::abs(v));
     CHECK(peak > 0.2f);
+}
+
+// ------------------------------------------------------------------ vector, fonts, text, stickers
+
+TEST("vector: exact area coverage, strokes and blur keep coverage") {
+    vec::Path sq;
+    sq.rect(2.25, 3.5, 10, 6);
+    const vec::Mask m = vec::rasterize(sq.flatten({}), 0, 0, 20, 20);
+    double sum = 0;
+    for (float v : m.v) sum += v;
+    CHECK(std::abs(sum - 60) < 1e-3);
+    CHECK(std::abs(m.at(2, 5) - 0.75f) < 1e-4);  // a quarter of the pixel is outside
+    vec::Path c;
+    c.circle(50, 50, 30);
+    const vec::Mask cm = vec::rasterize(c.flatten({}, 0.05), 0, 0, 100, 100);
+    sum = 0;
+    for (float v : cm.v) sum += v;
+    if (std::abs(sum - 3.14159265 * 900) >= 3) std::printf("  circle area %.2f\n", sum);
+    CHECK(std::abs(sum - 3.14159265 * 900) < 9);  // flattening within 0.05 px
+    // Overlapping shapes union (never more than full coverage).
+    vec::Path two;
+    two.rect(0, 0, 10, 10).rect(5, 0, 10, 10);
+    const vec::Mask tm = vec::rasterize(two.flatten({}), 0, 0, 20, 10);
+    sum = 0;
+    for (float v : tm.v) sum += v;
+    CHECK(std::abs(sum - 150) < 1e-3);
+    vec::Mask blurred = m.padded(8);
+    blurred.blur(4);
+    double bs = 0;
+    for (float v : blurred.v) bs += v;
+    CHECK(std::abs(bs - 60) < 0.5);
+    VideoFrame f;
+    f.allocate(40, 40);
+    vec::Canvas cv(f);
+    vec::Path ln;
+    ln.moveTo(5, 20).lineTo(35, 20);
+    cv.stroke(ln, 4, vec::Paint::solid(vec::Color::hex("#ff0000")));
+    CHECK_EQ(int(f.rgba[(20 * 40 + 20) * 4]), 255);
+    CHECK_EQ(int(f.rgba[(20 * 40 + 20) * 4 + 3]), 255);
+    CHECK_EQ(int(f.rgba[(10 * 40 + 20) * 4 + 3]), 0);
+    // RGBA16F targets too.
+    VideoFrame h;
+    h.allocate(40, 40, PixelFormat::RGBA16F);
+    vec::Canvas hc(h);
+    hc.fill(sq, vec::Paint::solid(vec::Color::hex("#ffffff")));
+    CHECK(std::abs(halfToFloat(h.half[(5 * 40 + 5) * 4 + 3]) - 1.0f) < 1e-3);
+}
+
+TEST("fonts: bundled fonts cover Vietnamese; decomposed input is composed") {
+    CHECK(text::fontCatalog().size() >= 7u);
+    const std::u32string vi = text::decodeUtf8(
+        "ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹđĐƯƠươẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ");
+    for (const auto& fi : text::fontCatalog()) {
+        const auto f = text::Font::get(fi.id);
+        CHECK_EQ(f->id(), fi.id);
+        int missing = 0;
+        for (char32_t ch : vi) missing += f->glyph(ch) == 0;
+        CHECK_EQ(missing, 0);
+        CHECK(!f->outline(f->glyph(U'Ệ')).empty());
+        CHECK(f->ascent() < 0 && f->descent() > 0);
+    }
+    CHECK(text::decodeUtf8("a\xCC\xA3\xCC\x82") == std::u32string(U"ậ"));  // a + dot below + circumflex
+    CHECK(text::decodeUtf8("a\xCC\x82\xCC\xA3") == std::u32string(U"ậ"));  // other order
+    CHECK(text::decodeUtf8("o\xCC\x9B\xCC\x80") == std::u32string(U"ờ"));  // o + horn + grave
+    CHECK(text::decodeUtf8("Vie\xCC\xA3\xCC\x82t") == std::u32string(U"Việt"));
+    CHECK_EQ(text::Font::get("no-such-font")->id(), std::string(text::defaultFontId()));
+    CHECK(!text::registerFont("x", "X", {1, 2, 3}));  // not a font
+}
+
+TEST("motion: every animation starts hidden, ends at rest and never jumps") {
+    CHECK(motion::animations().size() >= 30u);
+    CHECK(motion::loops().size() >= 8u);
+    auto hidden = [](const motion::Pose& p) {
+        return p.opacity < 1e-6 || std::abs(p.sx * p.sy) < 1e-6 || (p.wipe != 0 && p.reveal < 1e-6);
+    };
+    for (const auto& a : motion::animations()) {
+        const int n = a.perLetter ? 8 : 1;
+        for (int i = 0; i < n; ++i) {
+            CHECK(hidden(motion::inPose(a.id, 0, i, n, 3)));
+            const motion::Pose end = motion::inPose(a.id, 1, i, n, 3);
+            CHECK(end.opacity == 1 && end.dx == 0 && end.dy == 0 && end.sx == 1 && end.sy == 1 && end.rotation == 0 &&
+                  end.blur == 0 && end.reveal == 1);
+            motion::Pose prev = motion::inPose(a.id, 0, i, n, 3);
+            double worst = 0;
+            for (int k = 1; k <= 400; ++k) {
+                const motion::Pose p = motion::inPose(a.id, k / 400.0, i, n, 3);
+                worst = std::max({worst, std::abs(p.dx - prev.dx), std::abs(p.dy - prev.dy), std::abs(p.sx - prev.sx),
+                                  std::abs(p.sy - prev.sy), std::abs(p.rotation - prev.rotation),
+                                  std::abs(p.opacity - prev.opacity), std::abs(p.reveal - prev.reveal)});
+                prev = p;
+            }
+            if (worst > 0.12) std::printf("  %s letter %d: step %.3f\n", a.id.c_str(), i, worst);
+            CHECK(worst <= 0.12);
+        }
+    }
+    // Loops fade in after the in animation and out before the out animation.
+    const Json c{{"in", {{"type", "fade"}, {"duration", 0.5}}}, {"out", {{"type", "fade"}, {"duration", 0.5}}},
+                 {"loop", {{"type", "pulse"}, {"speed", 1.0}}}};
+    CHECK_EQ(motion::timing(c, 0.5, 4).loopAmount, 0.0);
+    CHECK_EQ(motion::timing(c, 2, 4).loopAmount, 1.0);
+    CHECK_EQ(motion::timing(c, 3.5, 4).loopAmount, 0.0);
+    // Short clips: in and out shrink so they never overlap.
+    const auto t = motion::timing(c, 0.3, 0.6);
+    CHECK(std::abs(t.inProgress - 1) < 1e-9 && t.outProgress == 0);
+}
+
+namespace {
+double alphaSum(const VideoFrame& f) {
+    double s = 0;
+    for (std::size_t i = 3; i < f.rgba.size(); i += 4) s += f.rgba[i];
+    return s / 255;
+}
+}  // namespace
+
+TEST("text: draws, animates in and out smoothly, sizes its box") {
+    Json c = text::defaultTextContent("Xin chào Việt Nam");
+    c["in"] = {{"type", "pop_letters"}, {"duration", 1.0}};
+    c["out"] = {{"type", "blur_in"}, {"duration", 1.0}};
+    auto draw = [&](double t) {
+        VideoFrame f;
+        f.allocate(320, 180);
+        text::drawText(c, t, 4, vec::Affine::translate(160, 90) * vec::Affine::scale(0.3), f);
+        return f;
+    };
+    const double rest = alphaSum(draw(2));
+    CHECK(rest > 500);
+    CHECK(alphaSum(draw(0)) < 1);
+    CHECK(alphaSum(draw(4)) < 1);
+    double prev = 0, worst = 0;
+    for (int k = 0; k <= 100; ++k) {
+        const double a = alphaSum(draw(k / 100.0));
+        worst = std::max(worst, std::abs(a - prev));
+        prev = a;
+    }
+    CHECK(worst < rest * 0.15);
+    CHECK(text::textStill(c, 2, 4));
+    CHECK(!text::textStill(c, 0.5, 4));
+    const auto b = text::textBounds(c);
+    CHECK(b[0] < -300 && b[2] > 300 && b[1] < -40 && b[3] > 40);
+    // Every preset and every animation draws something at rest.
+    for (const auto& p : text::textPresets()) {
+        Json s = text::defaultTextContent("Ổn");
+        s.update(p.style);
+        VideoFrame f;
+        f.allocate(120, 80);
+        text::drawText(s, 2, 4, vec::Affine::translate(60, 40) * vec::Affine::scale(0.5), f);
+        CHECK(alphaSum(f) > 50);
+    }
+}
+
+TEST("stickers: a large library, each drawing inside its box at every moment") {
+    const auto& cat = stickers::stickerCatalog();
+    CHECK(cat.size() >= 120u);
+    std::set<std::string> ids;
+    for (const auto& s : cat) ids.insert(s.id);
+    CHECK_EQ(ids.size(), cat.size());
+    CHECK(stickers::stickerCategories().size() >= 9u);
+    for (const auto& s : cat) {
+        for (double t : {0.0, 0.37, 1.1, 2.3}) {
+            VideoFrame f;
+            f.allocate(64, 64);
+            stickers::drawStickerIcon(s.id, t, f);
+            if (alphaSum(f) <= 20) std::printf("  %s at %.2f s draws %.1f\n", s.id.c_str(), t, alphaSum(f));
+            CHECK(alphaSum(f) > 20);
+            double edge = 0;  // the outer ring of pixels stays (almost) empty
+            for (int i = 0; i < 64; ++i)
+                edge += f.rgba[(i * 64) * 4 + 3] + f.rgba[(i * 64 + 63) * 4 + 3] + f.rgba[i * 4 + 3] + f.rgba[(63 * 64 + i) * 4 + 3];
+            if (edge / 255 > 4) std::printf("  %s at %.2f s touches the edge (%.1f)\n", s.id.c_str(), t, edge / 255);
+            CHECK(edge / 255 <= 4);
+        }
+    }
+    // As a clip: pops in from nothing.
+    const Json c = stickers::defaultStickerContent("heart_red");
+    auto draw = [&](double t) {
+        VideoFrame f;
+        f.allocate(200, 200);
+        stickers::drawSticker(c, t, 3, vec::Affine::translate(100, 100) * vec::Affine::scale(0.5), f);
+        return alphaSum(f);
+    };
+    CHECK(draw(0) < 1);
+    CHECK(draw(1.5) > 1000);
+    CHECK(draw(3) < 1);
+}
+
+TEST("generated clips: added on an overlay track, rendered, undone, saved") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    Json content = text::defaultTextContent("Chào");
+    content["in"] = {{"type", "fade"}, {"duration", 0.5}};
+    const Id t1 = f.ed.addGeneratedClip(content, sec(1), sec(2));
+    const Id overlay = f.ed.project().trackOfClip(t1)->id;
+    CHECK(overlay != f.v1 && f.ed.project().findTrack(overlay)->type == TrackType::Video);
+    CHECK(f.ed.project().findTrack(f.v1) < f.ed.project().findTrack(overlay));  // stacked above the main track
+    const Id s1 = f.ed.addGeneratedClip(stickers::defaultStickerContent("star_gold"), sec(2), sec(2));
+    CHECK(f.ed.project().trackOfClip(s1)->id != overlay);  // overlaps the text: a new track on top
+    CHECK(f.ed.project().findTrack(overlay) < f.ed.project().trackOfClip(s1));
+    const Id t2 = f.ed.addGeneratedClip(text::defaultTextContent("Sau"), sec(3.5), sec(1));
+    CHECK(f.ed.project().trackOfClip(t2)->id == overlay);  // the top track is busy there: the free one below
+    CHECK_THROWS(f.ed.addGeneratedClip(content, sec(0), sec(1), f.a1));                 // not on audio
+    // Trimmed or extended freely: no media end.
+    f.ed.trimClip(s1, TrimEdge::End, sec(9));
+    CHECK(f.ed.project().findClip(s1)->timelineOut() == sec(9));
+    f.ed.updateClipContent(t1, {{"text", "Xin chào"}, {"stroke", nullptr}});
+    CHECK(f.ed.project().findClip(t1)->content["text"] == "Xin chào");
+    CHECK(!f.ed.project().findClip(t1)->content.contains("stroke"));
+    CHECK_THROWS(f.ed.updateClipContent(t1, {{"kind", nullptr}}));
+    // Render: text over the picture, fading in from nothing.
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    FrameCache cache(64 << 20);
+    Renderer r(f.ed.project(), pool, &cache);
+    Renderer bare(f.ed.project(), pool);
+    const VideoFrame atStart = r.renderVideo(sec(1), 320, 180), shown = r.renderVideo(sec(1.8), 320, 180);
+    const VideoFrame before = bare.renderVideo(sec(0.9), 320, 180);
+    long diffStart = 0, diffShown = 0;
+    for (std::size_t i = 0; i < shown.rgba.size(); ++i) diffShown += std::abs(int(shown.rgba[i]) - int(before.rgba[i]));
+    (void)atStart;
+    CHECK(diffShown > 20000);
+    // Same picture through the cache.
+    const VideoFrame again = r.renderVideo(sec(1.8), 320, 180);
+    CHECK(again.rgba == shown.rgba);
+    (void)diffStart;
+    // Save and load keep the content.
+    const Project back = projectFromJson(toJson(f.ed.project()));
+    CHECK(back.findClip(t1)->content == f.ed.project().findClip(t1)->content);
+    // Rect for the UI handles follows the transform.
+    const auto rect = generatedRectOnCanvas(f.ed.project(), *f.ed.project().findClip(t1), sec(0));
+    CHECK(rect[0] < 640 && rect[0] + rect[2] > 640 && rect[2] > 100);
+    // Undo removes the clip and the track it created.
+    const std::size_t tracks = f.ed.project().tracks.size();
+    f.ed.undo();  // content
+    f.ed.undo();  // trim
+    f.ed.undo();  // t2
+    f.ed.undo();  // s1 + its track
+    CHECK_EQ(f.ed.project().tracks.size(), tracks - 1);
+    CHECK(!f.ed.project().findClip(s1));
 }

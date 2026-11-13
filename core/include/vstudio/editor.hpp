@@ -97,6 +97,14 @@ public:
     // The same transition on every cut between touching clips of every unlocked video
     // track ("Áp dụng cho tất cả"); empty `type` removes them. Returns the number of cuts.
     int setTransitionEverywhere(const std::string& type, Time duration = defaultTransitionDuration());
+
+    // ---- text and stickers (generators.hpp) ----
+    // Adds a generated clip ({"kind": "text" | "sticker", ...}) at `at` for `duration` on
+    // `trackId`, or (empty) on the highest video track above the main one that is free
+    // there, creating a new top track when none is. One undo step. Returns the clip id.
+    Id addGeneratedClip(const Json& content, Time at, Time duration, const Id& trackId = {});
+    // Merges `patch` into the clip's content (JSON merge patch: null removes a key). Undoable.
+    void updateClipContent(const Id& clipId, const Json& patch);
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null

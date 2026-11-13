@@ -1,5 +1,7 @@
 #include "vstudio/modules.hpp"
 
+#include "vstudio/generators.hpp"
+
 #include "vstudio/color_space.hpp"
 #include "vstudio/compositor.hpp"
 #include "vstudio/cover.hpp"
@@ -222,6 +224,7 @@ void registerBuiltinModules(ModuleRegistry& r) {
                         [] { return std::make_shared<CoverEffect>(); });
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<Grayscale>(); });
+    registerGeneratorModules(r);
 }
 
 void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Time localTime,

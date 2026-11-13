@@ -35,13 +35,25 @@ void checkNoOverlap(const Track& t, const TimeRange& r, const Id& ignoreClip) {
 
 Time minDuration(const Project& p) { return Time::fromFrame(1, p.fps); }
 
-// Source media bounds. Still images have no upper bound.
+// Source media bounds. Still images and generated clips (text, stickers) have no upper bound.
 void checkSourceRange(const Project& p, const Clip& c) {
+    if (c.generated()) {
+        if (c.sourceIn < Time::zero()) throw EditError("source in before start");
+        if (c.sourceOut <= c.sourceIn) throw EditError("empty clip");
+        return;
+    }
     const MediaAsset* a = p.findAsset(c.assetId);
     if (!a) throw EditError("asset not found: " + c.assetId);
     if (c.sourceIn < Time::zero()) throw EditError("source in before media start");
     if (c.sourceOut <= c.sourceIn) throw EditError("empty clip");
     if (a->type != MediaType::Image && c.sourceOut > a->duration) throw EditError("source out beyond media end");
+}
+
+// Generated clips draw pictures: video tracks only.
+bool fits(const Project& p, const Clip& c, TrackType t) {
+    if (c.generated()) return t == TrackType::Video;
+    const MediaAsset* a = p.findAsset(c.assetId);
+    return a && compatible(*a, t);
 }
 
 }  // namespace
@@ -75,7 +87,7 @@ void insertClip(Project& p, const Id& trackId, Clip clip) {
     if (clip.speed.num <= 0 || clip.speed.den <= 0) throw EditError("speed must be positive");
     if (clip.timelineIn < Time::zero()) throw EditError("clip starts before 0");
     checkSourceRange(p, clip);
-    if (!compatible(*p.findAsset(clip.assetId), t.type)) throw EditError("asset does not fit this track type");
+    if (!fits(p, clip, t.type)) throw EditError("asset does not fit this track type");
     if (clip.duration() < minDuration(p)) throw EditError("clip shorter than one frame");
     checkNoOverlap(t, clip.range(), {});
     t.clips.push_back(std::move(clip));
@@ -103,7 +115,7 @@ void moveClip(Project& p, const Id& clipId, const Id& toTrackId, Time newTimelin
     Clip c = requireClip(p, clipId, &from);
     Track& to = requireUnlocked(p, toTrackId);
     if (newTimelineIn < Time::zero()) throw EditError("clip starts before 0");
-    if (!compatible(*p.findAsset(c.assetId), to.type)) throw EditError("asset does not fit this track type");
+    if (!fits(p, c, to.type)) throw EditError("asset does not fit this track type");
     c.timelineIn = newTimelineIn;
     checkNoOverlap(to, c.range(), clipId);
     std::erase_if(from->clips, [&](const Clip& x) { return x.id == clipId; });

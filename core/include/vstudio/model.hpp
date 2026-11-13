@@ -67,8 +67,12 @@ struct Clip {
     // no clip follows right after it (a fade out to nothing).
     Json transitionIn;
     Json transitionOut;
+    // Generated clips (text, stickers: generators.hpp) have no asset (assetId is empty) and
+    // describe what they draw here: {"kind": "text", ...}. Null for media clips.
+    Json content;
     Json extra = Json::object();
 
+    [[nodiscard]] bool generated() const { return content.is_object() && content.contains("kind"); }
     [[nodiscard]] Time sourceDuration() const { return sourceOut - sourceIn; }
     [[nodiscard]] Time duration() const { return sourceDuration().scaled(speed.inverse()); }
     [[nodiscard]] Time timelineOut() const { return timelineIn + duration(); }
