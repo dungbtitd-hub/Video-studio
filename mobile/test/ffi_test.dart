@@ -24,6 +24,27 @@ void main() {
     expect(vs.modulesJson(), contains('builtin.color_adjust'));
   }, skip: skip);
 
+  test('tracks: flags, rename, reorder, remove, snap', () {
+    final vs = VStudio.create('ffi-tracks', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final v1 = vs.addTrack(audio: false, name: 'V1');
+    final v2 = vs.addTrack(audio: false, name: 'V2');
+    vs.setTrackFlags(v1, enabled: false, locked: true, muted: false);
+    final t = vs.project().tracks.firstWhere((x) => x.id == v1);
+    expect((t.enabled, t.locked), (false, true));
+    vs.renameTrack(v2, 'Top');
+    expect(vs.project().tracks.first.name, 'Top'); // top video layer shown first
+    vs.moveTrack(v2, 0);
+    expect(vs.project().tracks.first.id, v1);
+    expect(vs.undo(), isTrue);
+    expect(vs.project().tracks.first.id, v2);
+    vs.removeTrack(v2);
+    expect(vs.project().tracks.single.id, v1);
+    expect(() => vs.removeTrack('nope'), throwsA(isA<VStudioException>()));
+    // No clips: nothing to snap to except 0 and the playhead.
+    expect(() => vs.snapClipMove('nope', 1, 0.1), returnsNormally);
+  }, skip: skip);
+
   test('import, split and preview a real file', () async {
     final vs = VStudio.create('ffi', width: 640, height: 360);
     addTearDown(vs.dispose);
@@ -32,6 +53,10 @@ void main() {
     vs.appendClip(track, asset);
     expect(vs.splitAt(1.0), 1);
     expect(vs.project().tracks.single.clips.length, 2);
+    // Right half dragged 0.05 s past the playhead at 3.0 snaps back onto it.
+    final right = vs.project().tracks.single.clips[1];
+    expect(vs.snapClipMove(right.id, 3.05, 0.1, playhead: 3.0), closeTo(3.0, 1e-9));
+    expect(vs.snapClipMove(right.id, 3.5, 0.1, playhead: 3.0), isNull);
     vs.setPreviewSize(320, 180);
     vs.seek(1.5);
     PreviewFrame? f;

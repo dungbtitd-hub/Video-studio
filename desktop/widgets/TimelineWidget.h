@@ -28,6 +28,8 @@ protected:
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void contextMenuEvent(QContextMenuEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
     void wheelEvent(QWheelEvent*) override;
     void resizeEvent(QResizeEvent*) override;
 
@@ -45,7 +47,13 @@ private:
         QString id, name;
         bool audio;
         std::vector<Clip> clips;  // sorted by start
+        bool enabled = true, locked = false, muted = false;
+        int indexInType = 0;  // 0 = bottom video layer / first audio track
     };
+    // Header toggles, hit-tested by rect.
+    enum class Toggle { None, Lock, Visible };
+    [[nodiscard]] QRect toggleRect(int track, Toggle which) const;
+    void headerMenu(int track, const QPoint& globalPos);
     enum class Drag { None, Scrub, Move, TrimStart, TrimEnd };
 
     void rebuild();  // copy the project into flat arrays (only after an edit)
@@ -66,4 +74,7 @@ private:
     Drag drag_ = Drag::None;
     QString dragClip_, dragTrack_;
     double dragOrigin_ = 0, dragDelta_ = 0;
+    int dragTargetTrack_ = -1;      // track under the pointer while moving (same type, unlocked)
+    bool snapping_ = true;          // N toggles; hold Shift to drag freely
+    double snapAt_ = -1;            // snapped edge to highlight while dragging (seconds), -1 = none
 };

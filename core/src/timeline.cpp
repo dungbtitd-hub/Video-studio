@@ -156,3 +156,49 @@ void setTrackFlags(Project& p, const Id& trackId, bool enabled, bool locked, boo
 }
 
 }  // namespace vstudio::edit
+
+namespace vstudio {
+
+SnapResult snapTime(const Project& p, Time t, Time tolerance, const Id& excludeClip, std::optional<Time> playhead) {
+    SnapResult r{t, false, t};
+    Time best = tolerance + Time::fromTicks(1);
+    auto consider = [&](Time target) {
+        const Time d = target > t ? target - t : t - target;
+        if (d < best) {
+            best = d;
+            r = {target, true, target};
+        }
+    };
+    consider(Time::zero());
+    if (playhead) consider(*playhead);
+    for (const Track& tr : p.tracks) {
+        const auto& cs = tr.clips;  // sorted, non-overlapping: starts and ends both ascend
+        auto it = std::lower_bound(cs.begin(), cs.end(), t, [](const Clip& c, Time v) { return c.timelineIn < v; });
+        // The nearest edges belong to the clips around the insertion point.
+        const std::ptrdiff_t at = it - cs.begin(), n = static_cast<std::ptrdiff_t>(cs.size());
+        for (std::ptrdiff_t k = std::max<std::ptrdiff_t>(0, at - 2); k < std::min(n, at + 2); ++k) {
+            const Clip& c = cs[static_cast<std::size_t>(k)];
+            if (c.id == excludeClip) continue;
+            consider(c.timelineIn);
+            consider(c.timelineOut());
+        }
+    }
+    return r;
+}
+
+SnapResult snapClipMove(const Project& p, const Id& clipId, Time proposedStart, Time tolerance,
+                        std::optional<Time> playhead) {
+    const Track* tr = p.trackOfClip(clipId);
+    const Clip* c = tr ? tr->findClip(clipId) : nullptr;
+    if (!c) return {proposedStart, false, proposedStart};
+    const Time len = c->duration();
+    const SnapResult a = snapTime(p, proposedStart, tolerance, clipId, playhead);
+    const SnapResult b = snapTime(p, proposedStart + len, tolerance, clipId, playhead);
+    auto dist = [](Time x, Time y) { return x > y ? x - y : y - x; };
+    const bool useEnd = b.snapped && (!a.snapped || dist(b.target, proposedStart + len) < dist(a.target, proposedStart));
+    if (useEnd) return {b.target - len, true, b.target};
+    if (a.snapped) return {std::max(Time::zero(), a.target), true, a.target};
+    return {proposedStart, false, proposedStart};
+}
+
+}  // namespace vstudio

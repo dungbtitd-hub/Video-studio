@@ -27,11 +27,24 @@ class ClipView {
 }
 
 class TrackView {
-  TrackView({required this.id, required this.type, required this.name, required this.clips});
+  TrackView(
+      {required this.id,
+      required this.type,
+      required this.name,
+      required this.clips,
+      this.enabled = true,
+      this.locked = false,
+      this.muted = false,
+      this.indexInType = 0});
   final String id;
   final String type; // "video" | "audio"
   final String name;
   final List<ClipView> clips;
+  final bool enabled; // video: shown in the picture
+  final bool locked; // no edits; clips stay visible
+  final bool muted; // audio: silent
+  final int indexInType; // order among tracks of this type in the project (0 = bottom video layer / first audio)
+  bool get audio => type == 'audio';
 }
 
 class AssetView {
@@ -74,7 +87,7 @@ class ProjectView {
     }
     final raw = (j['tracks'] as List? ?? const []).cast<Map<String, dynamic>>().toList()
       ..sort((a, b) => ((a['order'] ?? 0) as int).compareTo((b['order'] ?? 0) as int));
-    TrackView toView(Map<String, dynamic> t) {
+    TrackView toView(Map<String, dynamic> t, int indexInType) {
       final clips = <ClipView>[];
       for (final c in (t['clips'] as List? ?? const [])) {
         final m = c as Map<String, dynamic>;
@@ -90,11 +103,25 @@ class ProjectView {
           speed: speed > 0 ? speed : 1,
         ));
       }
-      return TrackView(id: t['track_id'] as String, type: t['type'] as String, name: (t['name'] ?? '') as String, clips: clips);
+      return TrackView(
+        id: t['track_id'] as String,
+        type: t['type'] as String,
+        name: (t['name'] ?? '') as String,
+        clips: clips,
+        enabled: (t['enabled'] ?? true) as bool,
+        locked: (t['locked'] ?? false) as bool,
+        muted: (t['muted'] ?? false) as bool,
+        indexInType: indexInType,
+      );
     }
 
-    final video = raw.where((t) => t['type'] == 'video').map(toView).toList().reversed;
-    final audio = raw.where((t) => t['type'] == 'audio').map(toView);
+    List<TrackView> ofType(String type) {
+      final list = raw.where((t) => t['type'] == type).toList();
+      return [for (var i = 0; i < list.length; i++) toView(list[i], i)];
+    }
+
+    final video = ofType('video').reversed;
+    final audio = ofType('audio');
     return ProjectView(
       name: (j['name'] ?? '') as String,
       fps: _rational(j['fps'] as String),

@@ -63,6 +63,22 @@ int main(void) {
     EXPECT(strlen(vs_last_error(s)) > 0);
     EXPECT(vs_remove_clip(s, "nope") != 0);
 
+    /* Tracks: flags, rename, reorder, remove, all undoable. */
+    char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");
+    EXPECT(v2 != NULL);
+    EXPECT(vs_set_track_flags(s, v2, 1, 1, 0) == 0);
+    EXPECT(vs_remove_track(s, v2) != 0); /* locked */
+    EXPECT(vs_undo(s) == 1);
+    EXPECT(vs_rename_track(s, v2, "Titles") == 0);
+    EXPECT(vs_move_track(s, v2, 0) == 0);
+    EXPECT(vs_set_track_volume(s, v2, 9.0) != 0);
+    EXPECT(vs_remove_track(s, v2) == 0);
+    EXPECT(vs_undo(s) == 1);
+    int snapped = -1;
+    EXPECT(vs_snap_time(s, vs_ticks_per_second() / 20, vs_ticks_per_second() / 10, NULL, -1, &snapped) == 0);
+    EXPECT(snapped == 1); /* 0.05 s snaps to 0 */
+    vs_free(v2);
+
     char* json = vs_project_json(s);
     EXPECT(json && strstr(json, "\"V1\""));
     vs_free(json);

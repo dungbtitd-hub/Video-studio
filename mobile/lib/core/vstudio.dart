@@ -118,6 +118,26 @@ class VStudio {
     return n;
   }
 
+  void removeTrack(String trackId) => using((a) => _check(_b.removeTrack(_s, trackId.toNativeUtf8(allocator: a))));
+  void renameTrack(String trackId, String name) => using((a) =>
+      _check(_b.renameTrack(_s, trackId.toNativeUtf8(allocator: a), name.toNativeUtf8(allocator: a))));
+  void setTrackFlags(String trackId, {required bool enabled, required bool locked, required bool muted}) =>
+      using((a) => _check(_b.setTrackFlags(
+          _s, trackId.toNativeUtf8(allocator: a), enabled ? 1 : 0, locked ? 1 : 0, muted ? 1 : 0)));
+
+  /// Reorders within tracks of the same type; 0 = bottom video layer / first audio track.
+  void moveTrack(String trackId, int indexInType) =>
+      using((a) => _check(_b.moveTrack(_s, trackId.toNativeUtf8(allocator: a), indexInType)));
+
+  /// While dragging a clip: the start to use, or null when nothing is within [tolerance] seconds.
+  /// Read-only and cheap (binary search per track), safe on every pointer move.
+  double? snapClipMove(String clipId, double proposedStart, double tolerance, {double? playhead}) => using((a) {
+        final snapped = a<Int32>();
+        final t = _b.snapClipMove(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(proposedStart),
+            secondsToTicks(tolerance), playhead == null ? -1 : secondsToTicks(playhead), snapped);
+        return snapped.value != 0 ? ticksToSeconds(t) : null;
+      });
+
   void removeClip(String clipId) => using((a) => _check(_b.removeClip(_s, clipId.toNativeUtf8(allocator: a))));
   bool undo() => _b.undo(_s) == 1;
   bool redo() => _b.redo(_s) == 1;

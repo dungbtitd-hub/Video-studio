@@ -67,6 +67,19 @@ VS_API int vs_trim_clip(vs_session* s, const char* clip_id, int edge, int64_t ti
 VS_API char* vs_split_clip(vs_session* s, const char* clip_id, int64_t timeline_time);
 VS_API int vs_split_at(vs_session* s, int64_t timeline_time); /* returns number of clips split, <0 on error */
 VS_API int vs_remove_clip(vs_session* s, const char* clip_id);
+/* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
+ * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
+VS_API int vs_remove_track(vs_session* s, const char* track_id);
+VS_API int vs_rename_track(vs_session* s, const char* track_id, const char* name);
+VS_API int vs_set_track_flags(vs_session* s, const char* track_id, int enabled, int locked, int muted);
+VS_API int vs_set_track_volume(vs_session* s, const char* track_id, double volume);
+VS_API int vs_move_track(vs_session* s, const char* track_id, int index_in_type);
+/* Snapping while dragging (read-only, cheap): returns the time to use; *snapped = 1 if it moved
+ * onto a clip edge, the playhead (pass -1 for none) or 0. */
+VS_API int64_t vs_snap_clip_move(vs_session* s, const char* clip_id, int64_t proposed_start, int64_t tolerance,
+                                 int64_t playhead, int* snapped);
+VS_API int64_t vs_snap_time(vs_session* s, int64_t t, int64_t tolerance, const char* exclude_clip_id, int64_t playhead,
+                            int* snapped);
 VS_API int vs_set_clip_volume(vs_session* s, const char* clip_id, double volume);
 VS_API int vs_add_clip_effect(vs_session* s, const char* clip_id, const char* effect_module_id, const char* params_json);
 VS_API int vs_undo(vs_session* s); /* 1 = undone, 0 = nothing to undo */

@@ -4,6 +4,8 @@
 // wrap them in commands (history.hpp / editor.hpp) for undo/redo.
 #pragma once
 
+#include <optional>
+
 #include <stdexcept>
 
 #include "vstudio/model.hpp"
@@ -40,4 +42,21 @@ void setTrackFlags(Project& p, const Id& trackId, bool enabled, bool locked, boo
 bool compatible(const MediaAsset& a, TrackType t);
 
 }  // namespace edit
+
+// ---- snapping (read-only helpers for UIs while dragging) ----
+
+struct SnapResult {
+    Time time;             // the (possibly adjusted) value to use
+    bool snapped = false;  // true if it moved onto a target
+    Time target;           // the edge / playhead it snapped to
+};
+// Nearest clip edge (any track, except `excludeClip`), the playhead or 0 within
+// `tolerance` of `t`. Cost: a binary search per track, so it is safe to call on
+// every pointer move even with thousands of clips.
+SnapResult snapTime(const Project& p, Time t, Time tolerance, const Id& excludeClip = {},
+                    std::optional<Time> playhead = {});
+// For moving a clip: snaps whichever of its start or end edge is closer to a target.
+// Returns the clip start to use.
+SnapResult snapClipMove(const Project& p, const Id& clipId, Time proposedStart, Time tolerance,
+                        std::optional<Time> playhead = {});
 }  // namespace vstudio

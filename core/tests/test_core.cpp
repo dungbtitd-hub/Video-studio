@@ -1,3 +1,4 @@
+#include <chrono>
 #include <filesystem>
 #include <thread>
 
@@ -533,4 +534,90 @@ TEST("relink: missing media found by fingerprint, undoable") {
     CHECK_EQ(missingAssets(f.ed.project(), base).size(), 1u);
     CHECK_THROWS(f.ed.relinkAsset("nope", "x"));
     fs::remove_all(dir);
+}
+
+// ------------------------------------------------------------------ multi-track
+
+TEST("tracks: remove, rename, flags, volume, reorder - all undoable") {
+    Fixture f;
+    const Id v2 = f.ed.addTrack(TrackType::Video, "V2");
+    const Id v3 = f.ed.addTrack(TrackType::Video, "V3");
+    f.ed.appendClip(f.v1, f.asset);
+    auto videoOrder = [&] {
+        std::string s;
+        for (const auto& t : f.ed.project().tracks)
+            if (t.type == TrackType::Video) s += t.name + ",";
+        return s;
+    };
+    CHECK_EQ(videoOrder(), std::string("V1,V2,V3,"));
+    f.ed.moveTrack(v3, 0);  // V3 becomes the bottom layer
+    CHECK_EQ(videoOrder(), std::string("V3,V1,V2,"));
+    CHECK(f.ed.project().tracks.back().type == TrackType::Audio);  // audio tracks untouched
+    f.ed.undo();
+    CHECK_EQ(videoOrder(), std::string("V1,V2,V3,"));
+
+    f.ed.renameTrack(v2, "Titles");
+    CHECK_EQ(f.ed.project().findTrack(v2)->name, std::string("Titles"));
+    f.ed.setTrackVolume(f.a1, 0.5);
+    CHECK_THROWS(f.ed.setTrackVolume(f.a1, -1));
+
+    // Locked: clip edits and removal refused; unlock is one undo step.
+    f.ed.setTrackFlags(f.v1, true, true, false);
+    CHECK_EQ(f.ed.undoLabel(), std::string("Lock track"));
+    const Id clip = f.ed.project().findTrack(f.v1)->clips[0].id;
+    CHECK_THROWS(f.ed.moveClip(clip, f.v1, sec(5)));
+    CHECK_THROWS(f.ed.removeTrack(f.v1));
+    CHECK_EQ(f.ed.splitAt(sec(1)), 0);
+    f.ed.undo();
+    f.ed.moveClip(clip, f.v1, sec(5));
+
+    // Hidden video track is not rendered; muted audio track is silent.
+    f.ed.setTrackFlags(f.v1, false, false, false);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    Renderer r(f.ed.project(), pool);
+    CHECK_EQ(int(r.renderVideo(sec(6), 64, 36).rgba[(18 * 64 + 32) * 4]), 0);
+
+    f.ed.removeTrack(v2);
+    CHECK(f.ed.project().findTrack(v2) == nullptr);
+    f.ed.undo();
+    CHECK(f.ed.project().findTrack(v2) != nullptr);
+}
+
+TEST("snap: clip edges, playhead and zero within tolerance") {
+    Fixture f;
+    const Id a = f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));      // 0..4
+    const Id b = f.ed.insertClip(f.v1, f.asset, sec(10), sec(0), sec(2));  // 10..12
+    const Id c = f.ed.insertClip(f.a1, f.asset, sec(6), sec(0), sec(3));   // 6..9 on audio
+    const Time tol = Time::fromMilliseconds(200);
+    const Project& p = f.ed.project();
+    auto s = snapTime(p, sec(4.1), tol);
+    CHECK(s.snapped);
+    CHECK_EQ(s.time, sec(4));
+    CHECK(!snapTime(p, sec(5), tol).snapped);
+    CHECK_EQ(snapTime(p, sec(7.9), tol, {}, sec(8)).time, sec(8));  // playhead
+    CHECK_EQ(snapTime(p, sec(0.1), tol).time, Time::zero());
+    // Moving b: its end (len 2) snaps to c's start at 6 -> start 4... and its start snaps to 4.
+    auto m = snapClipMove(p, b, sec(4.15), tol);
+    CHECK(m.snapped);
+    CHECK_EQ(m.time, sec(4));  // start edge onto a's end (closer than end edge 6.15 -> 6)
+    m = snapClipMove(p, b, sec(6.95), tol);  // end at 8.95 -> c's end 9
+    CHECK_EQ(m.time, sec(7));
+    CHECK_EQ(m.target, sec(9));
+    // The moving clip never snaps to itself.
+    CHECK(!snapTime(p, sec(10.05), tol, b).snapped);
+    (void)a;
+    (void)c;
+}
+
+TEST("snap: thousands of clips stay fast") {
+    Fixture f;
+    for (int i = 0; i < 3000; ++i) f.ed.insertClip(f.v1, f.asset, sec(i * 2.0), sec(0), sec(1));
+    const auto t0 = std::chrono::steady_clock::now();
+    int snapped = 0;
+    for (int i = 0; i < 10000; ++i) snapped += snapTime(f.ed.project(), sec(i * 0.6), Time::fromMilliseconds(50)).snapped;
+    const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / 10000;
+    std::printf("       snapTime over 3000 clips: %.2f us/call\n", us);
+    CHECK(snapped > 0);
+    CHECK(us < 50);
 }

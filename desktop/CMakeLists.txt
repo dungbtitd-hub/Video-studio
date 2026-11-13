@@ -23,3 +23,7 @@ if(TARGET vstudio_windows)
 endif()
 
 add_subdirectory(widgets)
+
+if(VSTUDIO_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

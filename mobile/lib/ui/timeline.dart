@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/project_model.dart';
 import 'media_cache.dart';
@@ -7,6 +8,10 @@ import 'theme.dart';
 /// Touch timeline. Gestures only change what is drawn; the core is edited
 /// once when a gesture ends (one command, one undo step), so dragging stays
 /// smooth however large the project is.
+///
+/// Left column: one header per track (lock, hide/mute; long-press for the track
+/// menu). Long-press a clip to drag it in time or onto another unlocked track of
+/// the same type; it snaps to clip edges and the playhead when [snapMove] is set.
 class TimelineView extends StatefulWidget {
   const TimelineView({
     super.key,
@@ -16,6 +21,9 @@ class TimelineView extends StatefulWidget {
     required this.onSeek,
     required this.onSelect,
     required this.onMove,
+    this.onTrackFlags,
+    this.onTrackMenu,
+    this.snapMove,
     this.media,
   });
 
@@ -26,25 +34,38 @@ class TimelineView extends StatefulWidget {
   final ValueChanged<double> onSeek;
   final ValueChanged<String?> onSelect;
   final void Function(String clipId, String trackId, double start) onMove;
+  final void Function(TrackView track, {required bool enabled, required bool locked, required bool muted})?
+      onTrackFlags;
+  final ValueChanged<TrackView?>? onTrackMenu; // null = no track (add a track)
+  /// Snapped clip start for a proposed one, or null if nothing is within [tolerance] seconds.
+  final double? Function(String clipId, double proposedStart, double tolerance)? snapMove;
+
+  static const trackH = 56.0;
+  static const rulerH = 22.0;
+  static const headerW = 76.0;
 
   @override
   State<TimelineView> createState() => _TimelineViewState();
 }
 
 class _TimelineViewState extends State<TimelineView> {
-  static const trackH = 56.0;
-  static const rulerH = 22.0;
+  static const trackH = TimelineView.trackH;
+  static const rulerH = TimelineView.rulerH;
   double pxPerSec = 40;
   double scroll = 0; // seconds at the left edge
   double _zoomStart = 40;
 
   // Clip drag (visual only until release)
   String? _dragClip;
-  String? _dragTrack;
+  int _dragRow = -1; // source row
+  int _targetRow = -1; // row the clip would land on
   double _dragDelta = 0;
+  bool _snapped = false;
+
+  int _rowAt(double dy) => ((dy - rulerH) / trackH).floor();
 
   (TrackView, ClipView)? _hit(Offset p) {
-    final row = ((p.dy - rulerH) / trackH).floor();
+    final row = _rowAt(p.dy);
     if (row < 0 || row >= widget.project.tracks.length) return null;
     final t = scroll + p.dx / pxPerSec;
     final track = widget.project.tracks[row];
@@ -54,9 +75,70 @@ class _TimelineViewState extends State<TimelineView> {
     return null;
   }
 
+  void _dragUpdate(LongPressMoveUpdateDetails d) {
+    final id = _dragClip;
+    if (id == null) return;
+    final tracks = widget.project.tracks;
+    final from = tracks[_dragRow];
+    final row = _rowAt(d.localPosition.dy);
+    var target = _targetRow;
+    if (row >= 0 && row < tracks.length && tracks[row].audio == from.audio && !tracks[row].locked) target = row;
+    var delta = d.offsetFromOrigin.dx / pxPerSec;
+    var snapped = false;
+    final clip = from.clips.firstWhere((c) => c.id == id);
+    final snap = widget.snapMove?.call(id, (clip.start + delta).clamp(0, double.infinity).toDouble(), 12 / pxPerSec);
+    if (snap != null) {
+      delta = snap - clip.start;
+      snapped = true;
+    }
+    if (snapped && !_snapped) HapticFeedback.selectionClick();
+    setState(() {
+      _dragDelta = delta;
+      _targetRow = target;
+      _snapped = snapped;
+    });
+  }
+
+  Widget _header(TrackView t) {
+    final onFlags = widget.onTrackFlags;
+    Widget toggle(IconData icon, bool active, String tip, VoidCallback onTap) => InkResponse(
+          onTap: onFlags == null ? null : onTap,
+          radius: 18,
+          child: Padding(
+            padding: const EdgeInsets.all(5),
+            child: Icon(icon, size: 17, color: active ? VsColors.accent : VsColors.fg3, semanticLabel: tip),
+          ),
+        );
+    return GestureDetector(
+      onLongPress: () => widget.onTrackMenu?.call(t),
+      child: Container(
+        height: trackH,
+        padding: const EdgeInsets.only(left: 6, top: 4),
+        decoration: const BoxDecoration(
+            color: VsColors.panel, border: Border(bottom: BorderSide(color: VsColors.panel2, width: 2))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(t.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: VsColors.fg2, fontSize: 11)),
+          Row(children: [
+            toggle(t.locked ? Icons.lock : Icons.lock_open, t.locked, t.locked ? 'Mở khóa' : 'Khóa',
+                () => onFlags!(t, enabled: t.enabled, locked: !t.locked, muted: t.muted)),
+            if (t.audio)
+              toggle(t.muted ? Icons.volume_off : Icons.volume_up, t.muted, t.muted ? 'Bật tiếng' : 'Tắt tiếng',
+                  () => onFlags!(t, enabled: t.enabled, locked: t.locked, muted: !t.muted))
+            else
+              toggle(t.enabled ? Icons.visibility : Icons.visibility_off, !t.enabled, t.enabled ? 'Ẩn' : 'Hiện',
+                  () => onFlags!(t, enabled: !t.enabled, locked: t.locked, muted: t.muted)),
+          ]),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, box) {
+    final lanes = LayoutBuilder(builder: (context, box) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (d) {
@@ -67,21 +149,29 @@ class _TimelineViewState extends State<TimelineView> {
         onLongPressStart: (d) {
           final h = _hit(d.localPosition);
           if (h == null) return;
+          widget.onSelect(h.$2.id);
+          if (h.$1.locked) return; // selectable, not editable
+          final row = _rowAt(d.localPosition.dy);
           setState(() {
             _dragClip = h.$2.id;
-            _dragTrack = h.$1.id;
+            _dragRow = row;
+            _targetRow = row;
             _dragDelta = 0;
+            _snapped = false;
           });
-          widget.onSelect(h.$2.id);
         },
-        onLongPressMoveUpdate: (d) => setState(() => _dragDelta = d.offsetFromOrigin.dx / pxPerSec),
+        onLongPressMoveUpdate: _dragUpdate,
         onLongPressEnd: (_) {
-          final id = _dragClip, track = _dragTrack;
-          if (id != null && track != null && _dragDelta.abs() > 0.02) {
-            final clip = widget.project.tracks.expand((t) => t.clips).firstWhere((c) => c.id == id);
-            widget.onMove(id, track, (clip.start + _dragDelta).clamp(0, double.infinity).toDouble());
+          final id = _dragClip;
+          if (id != null && (_dragDelta.abs() > 0.02 || _targetRow != _dragRow)) {
+            final clip = widget.project.tracks[_dragRow].clips.firstWhere((c) => c.id == id);
+            widget.onMove(id, widget.project.tracks[_targetRow].id,
+                (clip.start + _dragDelta).clamp(0, double.infinity).toDouble());
           }
-          setState(() => _dragClip = null);
+          setState(() {
+            _dragClip = null;
+            _snapped = false;
+          });
         },
         onScaleStart: (_) => _zoomStart = pxPerSec,
         onScaleUpdate: (d) => setState(() {
@@ -102,11 +192,37 @@ class _TimelineViewState extends State<TimelineView> {
             scroll: scroll,
             dragClip: _dragClip,
             dragDelta: _dragDelta,
+            dragRow: _targetRow,
+            snapped: _snapped,
             media: widget.media,
           ),
         ),
       );
     });
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(
+        width: TimelineView.headerW,
+        child: Column(children: [
+          SizedBox(
+            height: rulerH,
+            child: widget.onTrackMenu == null
+                ? null
+                : InkWell(
+                    onTap: () => widget.onTrackMenu!(null),
+                    child: const Row(children: [
+                      SizedBox(width: 4),
+                      Icon(Icons.add, size: 14, color: VsColors.fg2),
+                      Flexible(
+                          child: Text(' Track',
+                              maxLines: 1, overflow: TextOverflow.clip, style: TextStyle(color: VsColors.fg2, fontSize: 11))),
+                    ]),
+                  ),
+          ),
+          for (final t in widget.project.tracks) _header(t),
+        ]),
+      ),
+      Expanded(child: lanes),
+    ]);
   }
 }
 
@@ -119,6 +235,8 @@ class _TimelinePainter extends CustomPainter {
     required this.scroll,
     required this.dragClip,
     required this.dragDelta,
+    this.dragRow = -1,
+    this.snapped = false,
     this.media,
   }) : super(repaint: media);
 
@@ -129,11 +247,13 @@ class _TimelinePainter extends CustomPainter {
   final double scroll;
   final String? dragClip;
   final double dragDelta;
+  final int dragRow; // row the dragged clip is drawn on
+  final bool snapped;
   final MediaCache? media;
 
   @override
   void paint(Canvas canvas, Size size) {
-    const trackH = _TimelineViewState.trackH, rulerH = _TimelineViewState.rulerH;
+    const trackH = TimelineView.trackH, rulerH = TimelineView.rulerH;
     canvas.drawRect(Offset.zero & size, Paint()..color = VsColors.panel);
     final tick = Paint()..color = VsColors.fg3;
     final step = pxPerSec >= 30 ? 1 : (pxPerSec >= 8 ? 5 : 15);
@@ -149,13 +269,21 @@ class _TimelinePainter extends CustomPainter {
         tp.paint(canvas, Offset(x + 3, 2));
       }
     }
+    // Backgrounds first, so a clip dragged onto another row is never covered.
+    for (var i = 0; i < project.tracks.length; i++) {
+      canvas.drawRect(Rect.fromLTWH(0, rulerH + i * trackH, size.width, trackH - 2),
+          Paint()..color = i == dragRow && dragClip != null ? const Color(0xFF2A2F3A) : VsColors.panel2);
+    }
     for (var i = 0; i < project.tracks.length; i++) {
       final t = project.tracks[i];
-      final top = rulerH + i * trackH;
-      canvas.drawRect(Rect.fromLTWH(0, top, size.width, trackH - 2), Paint()..color = VsColors.panel2);
-      final audio = t.type == 'audio';
+      final trackTop = rulerH + i * trackH;
+      final audio = t.audio;
+      final dim = !t.enabled || (audio && t.muted);
+      if (dim) canvas.saveLayer(Offset.zero & size, Paint()..color = const Color(0x66000000)); // 40% opacity
       for (final c in t.clips) {
-        final start = c.start + (c.id == dragClip ? dragDelta : 0);
+        final dragging = c.id == dragClip;
+        final top = dragging && dragRow >= 0 ? rulerH + dragRow * trackH : trackTop;
+        final start = c.start + (dragging ? dragDelta : 0);
         final x = (start - scroll) * pxPerSec;
         final w = c.duration * pxPerSec;
         if (x > size.width || x + w < 0) continue; // cull off-screen clips
@@ -176,7 +304,11 @@ class _TimelinePainter extends CustomPainter {
             Paint()
               ..style = PaintingStyle.stroke
               ..strokeWidth = c.id == selected ? 2 : 1
-              ..color = c.id == selected ? VsColors.accent : (audio ? VsColors.clipAudio : VsColors.clipVideo));
+              ..color = dragging && snapped
+                  ? const Color(0xFFFFD65A)
+                  : c.id == selected
+                      ? VsColors.accent
+                      : (audio ? VsColors.clipAudio : VsColors.clipVideo));
         if (w > 30) {
           final tp = TextPainter(
             text: TextSpan(text: c.name, style: const TextStyle(color: VsColors.fg, fontSize: 11)),
@@ -186,6 +318,18 @@ class _TimelinePainter extends CustomPainter {
           )..layout(maxWidth: w - 10);
           tp.paint(canvas, Offset(x + 6, top + 8));
         }
+      }
+      if (dim) canvas.restore();
+      if (t.locked) {
+        final hatch = Paint()
+          ..color = const Color(0x1FFFFFFF)
+          ..strokeWidth = 1;
+        canvas.save();
+        canvas.clipRect(Rect.fromLTWH(0, trackTop, size.width, trackH - 2));
+        for (var x = -trackH; x < size.width; x += 10) {
+          canvas.drawLine(Offset(x, trackTop + trackH), Offset(x + trackH, trackTop), hatch);
+        }
+        canvas.restore();
       }
     }
     final px = (playhead - scroll) * pxPerSec;
@@ -248,5 +392,7 @@ class _TimelinePainter extends CustomPainter {
       old.scroll != scroll ||
       old.dragClip != dragClip ||
       old.dragDelta != dragDelta ||
+      old.dragRow != dragRow ||
+      old.snapped != snapped ||
       old.media != media;
 }
