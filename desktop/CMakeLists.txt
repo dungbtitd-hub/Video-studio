@@ -1,8 +1,8 @@
 # Qt 6 desktop shells (Windows, macOS; Linux for development/CI).
 # Two P0 front-ends share one controller (common/) so they can be compared
 # on equal terms before choosing the desktop UI technology:
-#   quick/   Qt Quick (QML)   -> bin/VideoStudio
-#   widgets/ Qt Widgets       -> bin/VideoStudioWidgets
+#   quick/   Qt Quick (QML)   -> bin/VideoStudio        (reference only until end of P0)
+#   widgets/ Qt Widgets       -> bin/VideoStudioWidgets (chosen desktop UI, 2026-11-13)
 # See docs/benchmarks/qml-vs-widgets.md.
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Multimedia)
 qt_standard_project_setup()
