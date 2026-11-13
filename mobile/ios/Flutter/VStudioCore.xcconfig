@@ -9,3 +9,5 @@ OTHER_LDFLAGS[sdk=iphonesimulator*] = $(inherited) -force_load $(VSTUDIO_CORE_DI
 // Release builds strip all symbols by default, which would also remove the vs_* entry points
 // that dlsym() looks up; keep global symbols.
 STRIP_STYLE = non-global
+// Nothing in the app references vs_* at link time, so dead-code stripping would drop them.
+DEAD_CODE_STRIPPING = NO

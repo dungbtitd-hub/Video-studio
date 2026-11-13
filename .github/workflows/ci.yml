@@ -242,6 +242,8 @@ jobs:
           xcodebuild -project mobile/ios/Runner.xcodeproj -target Runner -configuration Release -showBuildSettings 2>/dev/null \
             | grep -E " (OTHER_LDFLAGS|STRIP_STYLE|DEAD_CODE_STRIPPING|VSTUDIO_CORE_DIR) = " || true
           ls -l build-ios/iphoneos/libVStudioCore.a
+          ls -l mobile/build/ios/iphoneos/Runner.app/Runner
+          echo "all vs_ symbols: $(nm mobile/build/ios/iphoneos/Runner.app/Runner 2>/dev/null | grep -c '_vs_')"
           nm -gU mobile/build/ios/iphoneos/Runner.app/Runner | grep " _vs_" | head -3 || true
           nm -gU mobile/build/ios/iphoneos/Runner.app/Runner | grep -c " _vs_" | tee n.txt || true
           test $(cat n.txt) -ge 30
