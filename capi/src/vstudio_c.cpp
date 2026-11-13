@@ -31,6 +31,10 @@
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 
+#include "vstudio/stills.hpp"
+#if defined(VSTUDIO_HAS_LIBRAW)
+#include "vstudio/libraw/libraw_module.hpp"
+#endif
 #if defined(VSTUDIO_HAS_FFMPEG)
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
@@ -41,6 +45,7 @@
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
 #include "vstudio/apple/avfoundation_module.hpp"
 #include "vstudio/apple/metal_compositor.hpp"
+#include "vstudio/apple/apple_raw.hpp"
 #endif
 #if defined(VSTUDIO_HAS_D3D11)
 #include "vstudio/windows/d3d11_compositor.hpp"
@@ -100,14 +105,18 @@ struct vs_session {
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
         apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS
         apple::registerMetalCompositor(modules);  // GPU compositing; CPU stays the fallback
+        apple::registerRawModule(modules);  // camera RAW with Apple's engine; LibRaw reads the rest
 #endif
 #if defined(VSTUDIO_HAS_D3D11)
         windows::registerD3D11Compositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
+#if defined(VSTUDIO_HAS_LIBRAW)
+        libraw::registerModule(modules);  // camera RAW photos, loaded on the first RAW file
+#endif
     }
 
     IMediaBackend* media() {
-        if (!backend) backend = modules.best<IMediaBackend>("decode", &error);
+        if (!backend) backend = withStillDecoders(modules.best<IMediaBackend>("decode", &error), modules);
         return backend.get();
     }
 

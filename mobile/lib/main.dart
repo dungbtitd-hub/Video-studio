@@ -311,7 +311,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   static const _mediaExtensions = [
     'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp', //
     'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', //
-    'jpg', 'jpeg', 'png', 'webp', 'heic',
+    'jpg', 'jpeg', 'png', 'webp', 'heic', //
+    // Camera RAW photos (developed by LibRaw / Apple's RAW engine in the core).
+    'dng', 'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'raf', 'orf', 'rw2', 'pef', 'srw', 'x3f', //
+    '3fr', 'fff', 'iiq', 'erf', 'mef', 'mos', 'mrw', 'kdc', 'dcr', 'rwl',
   ];
 
   Future<void> _import() async {
@@ -328,6 +331,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           ListTile(
               leading: const Icon(Icons.folder_open),
               title: const Text('Tệp'),
+              subtitle: const Text('Cả ảnh RAW từ máy ảnh (DNG, CR3, NEF, ARW, RAF…)'),
               onTap: () => Navigator.pop(context, FileType.custom)),
         ]),
       ),

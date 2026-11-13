@@ -25,6 +25,13 @@
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
 
+#include "vstudio/stills.hpp"
+#if defined(VSTUDIO_HAS_LIBRAW)
+#include "vstudio/libraw/libraw_module.hpp"
+#endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+#include "vstudio/apple/apple_raw.hpp"
+#endif
 #if defined(VSTUDIO_HAS_FFMPEG)
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
@@ -55,8 +62,14 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 #if defined(VSTUDIO_HAS_D3D11)
     windows::registerD3D11Compositor(modules_);
 #endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+    apple::registerRawModule(modules_);  // camera RAW with Apple's engine; LibRaw reads the rest
+#endif
+#if defined(VSTUDIO_HAS_LIBRAW)
+    libraw::registerModule(modules_);  // camera RAW photos, loaded on the first RAW file
+#endif
     std::string err;
-    backend_ = modules_.best<IMediaBackend>("decode", &err);
+    backend_ = withStillDecoders(modules_.best<IMediaBackend>("decode", &err), modules_);
     jobs_ = std::make_unique<JobScheduler>();
     libJobs_ = std::make_unique<JobScheduler>(1);
     resetSession(Editor::newProject("Untitled", 1920, 1080, {30, 1}, ModuleRegistry::currentPlatform()), {});

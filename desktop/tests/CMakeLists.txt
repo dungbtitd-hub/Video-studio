@@ -24,7 +24,7 @@ qt_add_executable(main_window_tests
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )
-target_include_directories(main_window_tests PRIVATE ../widgets)
+target_include_directories(main_window_tests PRIVATE ../widgets ${PROJECT_SOURCE_DIR}/core/tests)
 target_link_libraries(main_window_tests PRIVATE vstudio_desktop_common Qt6::Widgets Qt6::Test)
 add_test(NAME main_window_tests COMMAND main_window_tests)
 set_tests_properties(main_window_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

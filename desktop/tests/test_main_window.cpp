@@ -1,6 +1,7 @@
 // Workspace: every shortcut is unique and documented, keys drive navigation and
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
+#include "raw_sample.hpp"
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -147,6 +148,19 @@ private slots:
         QVERIFY(tl->pxPerSec() > fit);
         key(Qt::Key_Minus);
         QVERIFY(std::abs(tl->pxPerSec() - fit) < 1e-6);
+    }
+
+    void importCameraRaw() {
+        // A camera RAW photo imports like any picture (LibRaw / Apple RAW behind the backend).
+        const QString path = QDir::temp().filePath("vstudio_desktop_test.dng");
+        vtest::writeTestDng(path.toStdString(), 640, 360);
+        const int before = ctrl_->assets().size();
+        ctrl_->importMedia({QUrl::fromLocalFile(path)});
+        QTRY_COMPARE(ctrl_->assets().size(), before + 1);
+        const QVariantMap m = ctrl_->assets().back().toMap();
+        QCOMPARE(m["name"].toString(), QString("vstudio_desktop_test.dng"));
+        QCOMPARE(m["type"].toString(), QString("image"));
+        QCOMPARE(m["resolution"].toString(), QString("640×360"));
     }
 
     void exportPresetsForProject() {

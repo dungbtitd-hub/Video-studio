@@ -17,6 +17,7 @@ add_library(vstudio_core STATIC
   src/looks.cpp
   src/grade.cpp
   src/scopes.cpp
+  src/stills.cpp
   src/transfer.cpp
     src/pixel.cpp
     src/color_space.cpp

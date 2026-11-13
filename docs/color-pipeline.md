@@ -150,3 +150,28 @@ RGBA16F, đổi sang YCbCr Rec.709 giới hạn 10-bit (gắn thẻ màu BT.709 
 Máy không có bộ mã hoá cho định dạng đã chọn thì việc xuất dừng ngay với thông báo rõ ràng; không bao giờ lặng lẽ
 xuất ra 8-bit hay H.264. Kiểm thử: dải xám 1024 cột qua H.265 10-bit còn ≈ 870 mức (8-bit tối đa 256); clip 10-bit
 có chỉnh màu xuất ra còn ≈ 770 mức. Bộ kiểm thử chung chạy trên cả FFmpeg, AVFoundation và MediaCodec.
+
+# Bước 5: Ảnh RAW từ máy ảnh
+
+Ảnh RAW (DNG, CR2/CR3, NEF, ARW, RAF, ORF, RW2, PEF, …) nhập như mọi ảnh khác (desktop: hộp "Nhập media" có
+mục "Ảnh RAW"; mobile: "Tệp"). Thiết kế theo module, lõi không gọi thư viện RAW nào:
+
+- Hợp đồng `IStillDecoder` (loại module `media.still`, `vstudio/stills.hpp`): `probe` (chỉ đọc đầu file) và
+  `decode(path, maxW, maxH, deep)`.
+- `withStillDecoders(backend, modules)` bọc backend media của phiên: file RAW đi tới module RAW có ưu tiên cao nhất
+  đọc được nó (thử lần lượt), mọi file khác vẫn đi tới FFmpeg / AVFoundation / MediaCodec. Module RAW chỉ được nạp
+  khi mở file RAW đầu tiên.
+- `libraw` (mọi hệ điều hành): LibRaw 0.21 (LGPL/CDDL). Dùng thư viện hệ thống nếu có (Linux, Homebrew), nếu không
+  thì tự biên dịch từ mã nguồn (Windows, Android, iOS), không thêm phụ thuộc.
+- `apple.raw` (macOS 12+/iOS 15+, ưu tiên cao hơn): CIRAWFilter của Apple, hồ sơ máy ảnh mới nhất, rửa ảnh trên GPU.
+  File nó không đọc được (hoặc máy cũ) tự chuyển sang LibRaw.
+
+Rửa ảnh: cân bằng trắng của máy, ma trận màu máy → gam Rec.709, đường truyền Rec.709, 16 bit mỗi kênh. Khi có chỉnh
+màu hoặc xuất 10-bit, ảnh vào đường xử lý dạng RGBA16F nên giữ đủ 12–14 bit của cảm biến. Xem trước xin đúng kích
+thước khung xem: LibRaw rửa ở nửa độ phân giải (không cần demosaic, nhanh ≈ 4 lần), Apple dùng `scaleFactor` và chế
+độ nháp; xuất dùng đủ kích thước. Ảnh rửa một lần rồi dùng lại cho mọi thời điểm của clip.
+
+Kiểm thử chung `core/tests/still_conformance.hpp` (chạy cho cả LibRaw và Apple) dùng một file DNG 14-bit tự tạo
+(`raw_sample.hpp`): đọc kích thước, dải xám còn > 400 mức (≈ 1000 với LibRaw; 8-bit tối đa 256), xám trung tính,
+khung xem trước vừa hộp, ảnh dọc được xoay đúng, định tuyến qua backend (file RAW không bao giờ tới backend video),
+nhập vào dự án là ảnh. Desktop có thêm phép thử nhập DNG qua giao diện.

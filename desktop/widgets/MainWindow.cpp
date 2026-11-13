@@ -28,6 +28,7 @@
 #include <cmath>
 
 #include "EditorController.h"
+#include "vstudio/stills.hpp"
 #include "CoverPanel.h"
 #include "TransitionsPanel.h"
 #include "TextPanel.h"
@@ -583,8 +584,12 @@ void MainWindow::showShortcuts() {
 }
 
 void MainWindow::importMedia() {
+    // Camera RAW photos (vstudio/stills.hpp) sit next to video, audio and ordinary images.
+    QString raw;
+    for (const std::string& e : vstudio::cameraRawExtensions()) raw += " *" + QString::fromStdString(e);
     const QList<QUrl> files = QFileDialog::getOpenFileUrls(this, "Nhập media", {},
-        "Media (*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.mp3 *.wav *.m4a *.aac *.flac *.jpg *.jpeg *.png *.webp);;All (*)");
+        "Media (*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.mp3 *.wav *.m4a *.aac *.flac *.jpg *.jpeg *.png *.webp" + raw +
+            ");;Ảnh RAW (" + raw.trimmed() + ");;All (*)");
     if (!files.isEmpty()) editor_->importMedia(files);
 }
 
