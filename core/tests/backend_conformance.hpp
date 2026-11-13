@@ -224,6 +224,7 @@ private:
         pol.pixelThreshold = 0;
         CHECK(needsProxy(a, pol));
         const auto res = generateProxy(*b, src, a, (workDir() / (clip + ".proxy.mp4")).string(), pol, CancelToken{});
+        if (!res.ok) std::printf("       proxy error: %s\n", res.error.c_str());
         CHECK(res.ok);
         auto pp = b->probe(res.path, &err);
         CHECK_EQ(pp->height, 90);

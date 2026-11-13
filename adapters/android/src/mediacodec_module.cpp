@@ -610,8 +610,9 @@ private:
     // Queues input (possibly larger than one codec buffer) and drains output to the muxer.
     bool queue(AMediaCodec* c, ssize_t& track, const uint8_t* data, size_t size, int64_t ptsUs, bool eos, std::string* error) {
         size_t off = 0;
-        int guard = 0;
-        do {
+        // A codec that takes no input for 5 s is stuck: fail instead of hanging the export.
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (;;) {
             const ssize_t idx = AMediaCodec_dequeueInputBuffer(c, kTimeoutUs);
             if (idx >= 0) {
                 size_t cap = 0;
@@ -623,14 +624,17 @@ private:
                 AMediaCodec_queueInputBuffer(c, static_cast<size_t>(idx), 0, n, static_cast<uint64_t>(ptsUs),
                                              eos && last ? AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM : 0);
                 if (last) break;
+                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             }
             if (!drain(c, track, false, error)) return false;
-        } while (++guard < 10000);
+            if (std::chrono::steady_clock::now() > deadline) return fail(error, "encoder accepts no input");
+        }
         return drain(c, track, eos, error);
     }
 
     bool drain(AMediaCodec* c, ssize_t& track, bool untilEos, std::string* error) {
-        for (int spins = 0; spins < 5000; ++spins) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (std::chrono::steady_clock::now() < deadline) {
             AMediaCodecBufferInfo info{};
             const ssize_t idx = AMediaCodec_dequeueOutputBuffer(c, &info, untilEos ? kTimeoutUs : 0);
             if (idx == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
