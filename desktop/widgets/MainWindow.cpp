@@ -29,6 +29,8 @@
 #include "EditorController.h"
 #include "CoverPanel.h"
 #include "TransitionsPanel.h"
+#include "TextPanel.h"
+#include "StickerPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -237,7 +239,28 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     transitionsDock->setWidget(transitions_);
     addDockWidget(Qt::RightDockWidgetArea, transitionsDock);
     tabifyDockWidget(coverDock, transitionsDock);
+    auto* textDock = new QDockWidget("Chữ", this);
+    textDock->setObjectName("text");
+    text_ = new TextPanel(editor_, textDock);
+    textDock->setWidget(text_);
+    addDockWidget(Qt::RightDockWidgetArea, textDock);
+    tabifyDockWidget(transitionsDock, textDock);
+    auto* stickerDock = new QDockWidget("Sticker", this);
+    stickerDock->setObjectName("stickers");
+    stickers_ = new StickerPanel(editor_, stickerDock);
+    stickerDock->setWidget(stickers_);
+    addDockWidget(Qt::RightDockWidgetArea, stickerDock);
+    tabifyDockWidget(textDock, stickerDock);
     looksDock->raise();
+    // Selecting a text or sticker on the timeline brings its panel forward.
+    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock] {
+        const auto c = editor_->selectedContent();
+        if (!c) return;
+        QDockWidget* d = c->value("kind", std::string{}) == "text" ? textDock : stickerDock;
+        d->show();
+        d->raise();
+    });
+    connect(preview_, &PreviewWidget::objectRectChanged, editor_, &EditorController::setObjectCanvasRect);
     // Region on the preview follows the active cover; dragging it there edits the cover.
     connect(editor_, &EditorController::coversChanged, this, &MainWindow::refreshCoverOverlay);
     connect(preview_, &PreviewWidget::coverRectChanged, editor_, &EditorController::setCoverCanvasRect);
@@ -354,6 +377,8 @@ void MainWindow::refreshState() {
 void MainWindow::refreshCoverOverlay() {
     const QRectF r = editor_->coverCanvasRect();
     preview_->setCoverRect(editor_->playing() ? QRectF() : r, editor_->coverState().value("shape").toString());
+    // No cover being edited: the selected text/sticker gets move/scale handles.
+    if (r.isNull()) preview_->setObjectRect(editor_->playing() ? QRectF() : editor_->objectCanvasRect());
 }
 
 void MainWindow::refreshKeyframes() {

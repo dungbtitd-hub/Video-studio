@@ -20,12 +20,17 @@ public:
     // drag inside to move, a corner to resize, outside to draw a new region. A null rect
     // turns cover editing off (the zoom box comes back).
     void setCoverRect(const QRectF& normalized, const QString& shape = "rect");
-    [[nodiscard]] bool coverEditing() const { return coverOn_; }
+    [[nodiscard]] bool coverEditing() const { return coverOn_ && !object_; }
+    // Text or sticker under the playhead: its box with corner handles; drag inside to move it,
+    // a corner to scale it (aspect kept). A null rect hides it.
+    void setObjectRect(const QRectF& normalized);
+    [[nodiscard]] bool objectEditing() const { return coverOn_ && object_; }
 
 signals:
     void previewSizeChanged(int w, int h);  // device pixels
     void regionSelected(const QRectF& normalized);  // 0..1 of the frame, frame aspect
     void coverRectChanged(const QRectF& normalized);  // cover moved/resized/drawn (on release)
+    void objectRectChanged(const QRectF& from, const QRectF& to);  // text/sticker moved or scaled (on release)
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -46,6 +51,7 @@ private:
 
     QImage frame_;
     bool coverOn_ = false;
+    bool object_ = false;  // the box is a text/sticker, not a cover
     QRectF cover_;  // normalized
     QString coverShape_;
     CoverDrag coverDrag_ = CoverDrag::None;
