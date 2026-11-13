@@ -4,6 +4,10 @@
 //
 // Paths may be plain file paths or "fd:<number>" for files the Flutter side
 // opened through the Storage Access Framework / Photo Picker.
+//
+// The host process needs binder threads (an app process always has them): the
+// extractor service reads files back through binder calls into this process.
+// A bare executable must start them first (see tests/test_mediacodec.cpp).
 #pragma once
 
 #include <memory>
