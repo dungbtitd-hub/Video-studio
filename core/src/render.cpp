@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "detail/paths.hpp"
+#include "vstudio/keyframes.hpp"
 #include "vstudio/pixel.hpp"
 
 namespace vstudio {
@@ -339,7 +340,7 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
         }
         if (frame->deep() && !out.deep())  // 8-bit output: dither down once, after grading
             frame = std::make_shared<const VideoFrame>(convertedFrame(*frame, PixelFormat::RGBA8));
-        Transform tr = Transform::fromJson(layer.clip->transform);
+        Transform tr = animatedTransform(*layer.clip, layer.sourceTime);  // keyframes (zoom, pan, opacity)
         // Scale offsets from canvas pixels to output pixels (preview may be smaller).
         const double k = static_cast<double>(out.width) / project_.canvas.width;
         tr.x *= k;
@@ -386,10 +387,24 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
             // For speed != 1 read the corresponding source span and resample linearly (no pitch correction in P0).
             const std::int64_t need = unity ? n : std::max<std::int64_t>(1, mulDiv(n, c.speed.num, c.speed.den, Rounding::Up));
             AudioBuffer in = d->readAudio(src, need, sr, ch);
-            const float gain = static_cast<float>(c.volume * tr.volume);
             const std::int64_t inFrames = in.frames();
             if (inFrames == 0) continue;
+            // Volume keyframes: gain evaluated every 32 samples and ramped in between,
+            // so fades are smooth (no zipper noise) and cheap.
+            const bool animated = c.keyframes.is_object() && c.keyframes.contains(kf::kVolume);
+            const KeyframeCurve volumeCurve = animated ? KeyframeCurve(c.keyframes[kf::kVolume]) : KeyframeCurve();
+            auto gainAt = [&](std::int64_t i) {
+                const double v = animated ? volumeCurve.at(c.toSource(Time::fromSample(s0 + i, sr))) : 1.0;
+                return static_cast<float>(c.volume * tr.volume * v);
+            };
+            constexpr std::int64_t kStep = 32;
+            float g0 = gainAt(0), g1 = animated ? gainAt(std::min(kStep, n)) : g0;
             for (std::int64_t i = 0; i < n; ++i) {
+                if (animated && i % kStep == 0 && i > 0) {
+                    g0 = g1;
+                    g1 = gainAt(std::min(i + kStep, n));
+                }
+                const float gain = animated ? g0 + (g1 - g0) * static_cast<float>(i % kStep) / kStep : g0;
                 float* o = &mix.samples[static_cast<std::size_t>(s0 - startSample + i) * ch];
                 if (unity) {
                     if (i >= inFrames) break;
