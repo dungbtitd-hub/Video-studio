@@ -17,6 +17,11 @@
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/transitions.hpp"
+#include "vstudio/fonts.hpp"
+#include "vstudio/generators.hpp"
+#include "vstudio/motion.hpp"
+#include "vstudio/stickers.hpp"
+#include "vstudio/text.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -785,6 +790,120 @@ int vs_transition_preview(const char* type, const uint8_t* a, const uint8_t* b, 
         fo.allocate(width, height);
         applyTransition(str(type), fa, fb, progress, fo, Time::fromSeconds(progress));
         std::memcpy(out, fo.rgba.data(), n);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+char* vs_fonts_json(void) {
+    Json out = Json::array();
+    for (const auto& f : text::fontCatalog())
+        out.push_back({{"id", f.id}, {"name", f.name}, {"style", f.style}, {"bundled", f.bundled}});
+    return dup(out.dump());
+}
+
+int vs_register_font(const char* id, const char* name, const uint8_t* bytes, int64_t size) {
+    if (!bytes || size <= 0) return -1;
+    try {
+        return text::registerFont(str(id), str(name), std::vector<std::uint8_t>(bytes, bytes + size)) ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
+char* vs_text_animations_json(void) {
+    Json a = Json::array(), l = Json::array();
+    for (const auto& x : motion::animations()) a.push_back({{"id", x.id}, {"name", x.name}, {"per_letter", x.perLetter}});
+    for (const auto& x : motion::loops()) l.push_back({{"id", x.id}, {"name", x.name}, {"per_letter", x.perLetter}});
+    return dup(Json{{"animations", a}, {"loops", l}}.dump());
+}
+
+char* vs_text_presets_json(void) {
+    Json out = Json::array();
+    for (const auto& p : text::textPresets()) out.push_back({{"id", p.id}, {"name", p.name}, {"style", p.style}});
+    return dup(out.dump());
+}
+
+char* vs_stickers_json(void) {
+    Json out = Json::array();
+    for (const auto& s : stickers::stickerCatalog()) out.push_back({{"id", s.id}, {"name", s.name}, {"category", s.category}});
+    return dup(out.dump());
+}
+
+char* vs_default_text_json(const char* t) {
+    try {
+        return dup(text::defaultTextContent(t && *t ? std::string(t) : std::string("Nhập chữ")).dump());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+char* vs_default_sticker_json(const char* id) {
+    if (!stickers::findSticker(str(id))) return nullptr;
+    return dup(stickers::defaultStickerContent(str(id)).dump());
+}
+
+char* vs_add_generated_clip(vs_session* s, const char* content_json, int64_t at, int64_t duration, const char* track_id) {
+    return guardStr(s, [&] {
+        const Json c = Json::parse(str(content_json));
+        const Id id = s->editor->addGeneratedClip(c, Time::fromTicks(at), Time::fromTicks(duration), str(track_id));
+        s->edited();
+        return id;
+    });
+}
+
+int vs_update_clip_content(vs_session* s, const char* clip_id, const char* patch_json) {
+    return guard(s, [&] {
+        s->editor->updateClipContent(clipOrThrow(s, clip_id).id, Json::parse(str(patch_json)));
+        s->edited();
+    });
+}
+
+int vs_generated_rect(vs_session* s, const char* clip_id, int64_t t, double* xywh) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        if (!c.generated()) throw std::runtime_error("not a text or sticker clip");
+        const Project& p = s->editor->project();
+        const auto r = generatedRectOnCanvas(p, c, c.toSource(Time::fromTicks(t)));
+        if (xywh) {
+            xywh[0] = r[0] / p.canvas.width;
+            xywh[1] = r[1] / p.canvas.height;
+            xywh[2] = r[2] / p.canvas.width;
+            xywh[3] = r[3] / p.canvas.height;
+        }
+    });
+}
+
+int vs_sticker_icon(const char* id, double seconds, uint8_t* out, int width, int height) {
+    if (!out || width <= 0 || height <= 0 || !stickers::findSticker(str(id))) return -1;
+    try {
+        VideoFrame f;
+        f.allocate(width, height);
+        stickers::drawStickerIcon(str(id), seconds, f);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_content_preview(const char* content_json, double local, double length, uint8_t* out, int width, int height) {
+    if (!out || width <= 0 || height <= 0) return -1;
+    try {
+        const Json c = Json::parse(str(content_json));
+        const auto gen = generatorFor(nullptr, c.value("kind", std::string{}));
+        if (!gen) return -1;
+        const auto b = gen->bounds(c);
+        const double bw = std::max(1.0, b[2] - b[0]), bh = std::max(1.0, b[3] - b[1]);
+        const double k = std::min(width * 0.9 / bw, height * 0.9 / bh);
+        VideoFrame f;
+        f.allocate(width, height);
+        gen->draw(c, local, length,
+                  vec::Affine::translate(width / 2.0 - (b[0] + b[2]) / 2 * k, height / 2.0 - (b[1] + b[3]) / 2 * k) *
+                      vec::Affine::scale(k),
+                  f);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
         return 0;
     } catch (...) {
         return -1;
