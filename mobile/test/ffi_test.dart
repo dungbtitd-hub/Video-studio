@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:video_studio/core/transfer.dart';
 import 'package:video_studio/core/vstudio.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
 
@@ -133,6 +134,48 @@ void main() {
     addTearDown(again.dispose);
     expect(again.project().tracks.single.clips.length, 2);
     expect(again.missingAssets(), isEmpty);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  test('a desktop project moves to the phone as one .vstudiopkg file', () async {
+    final tmp = Directory.systemTemp.createTempSync('vs_xfer');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    final desk = '${tmp.path}/desktop';
+    final clip = File('$desk/media/clip.mp4')..createSync(recursive: true);
+    File(media!).copySync(clip.path);
+    final vs = VStudio.create('Trip', width: 640, height: 360);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(clip.path));
+    vs.save('$desk/Trip.vstudio');
+    vs.dispose();
+
+    final progress = <double>[];
+    final packed =
+        await packSavedProject('$desk/Trip.vstudio', '${tmp.path}/Trip.vstudiopkg', onProgress: progress.add);
+    expect(packed.ok, isTrue, reason: packed.error);
+    expect(packed.missing, isEmpty);
+    expect(progress.last, 1.0);
+
+    // The phone's store root: projects and media/ side by side.
+    final phone = '${tmp.path}/phone';
+    final opened = await unpackPackage('${tmp.path}/Trip.vstudiopkg', phone);
+    expect(opened.ok, isTrue, reason: opened.error);
+    expect(opened.packageDir, endsWith('Trip.vstudio'));
+    final again = VStudio.open(opened.packageDir);
+    addTearDown(again.dispose);
+    expect(again.project().tracks.single.clips.length, 1);
+    expect(again.missingAssets(), isEmpty);
+    expect(File('$phone/media/clip.mp4').lengthSync(), clip.lengthSync());
+
+    // Cancelling stops at the first progress report and leaves nothing behind.
+    final cancel = TransferCancel()..cancel();
+    addTearDown(cancel.dispose);
+    final stopped = await unpackPackage('${tmp.path}/Trip.vstudiopkg', '${tmp.path}/other', cancel: cancel);
+    expect(stopped.cancelled, isTrue);
+    expect(File('${tmp.path}/other/media/clip.mp4').existsSync(), isFalse);
+
+    final bad = await unpackPackage('${tmp.path}/nope.vstudiopkg', phone);
+    expect(bad.ok, isFalse);
+    expect(bad.error, isNotEmpty);
   }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
 
   test('thumbnails, waveform and relink of a real file', () async {

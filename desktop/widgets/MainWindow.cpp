@@ -11,6 +11,7 @@
 #include <QSettings>
 #include <QTableWidget>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -294,6 +295,22 @@ void MainWindow::buildMenus() {
     file->addSeparator();
     act(file, "Nhập media…", {K("Ctrl+I")}, [this] { importMedia(); });
     act(file, "Xuất video…", {K("Ctrl+E")}, [this] { exportVideo(); });
+    file->addSeparator();
+    // One file with the project and its media, to open on another computer or a phone.
+    act(file, "Đóng gói để chuyển sang máy khác…", {}, [this] {
+        if (editor_->transferring()) return editor_->cancelTransfer();
+        const QString f = QFileDialog::getSaveFileName(this, "Đóng gói dự án", editor_->projectName() + ".vstudiopkg",
+                                                       "Gói Video Studio (*.vstudiopkg)");
+        if (!f.isEmpty()) editor_->packProject(QUrl::fromLocalFile(f));
+    });
+    act(file, "Mở gói dự án…", {}, [this] {
+        if (editor_->transferring() || !confirmDiscard()) return;
+        const QString f = QFileDialog::getOpenFileName(this, "Mở gói dự án", {}, "Gói Video Studio (*.vstudiopkg)");
+        if (f.isEmpty()) return;
+        // Unpacked into a folder chosen by the user (project + media/ side by side).
+        const QString d = QFileDialog::getExistingDirectory(this, "Giải nén vào thư mục", QFileInfo(f).absolutePath());
+        if (!d.isEmpty()) editor_->openPackage(QUrl::fromLocalFile(f), QUrl::fromLocalFile(d));
+    });
     file->addSeparator();
     act(file, "Thoát", {K::Quit, K("Ctrl+Q")}, [this] { close(); });
 

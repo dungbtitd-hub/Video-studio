@@ -143,6 +143,16 @@ VS_API char* vs_missing_assets_json(vs_session* s);                     /* ["ass
 VS_API char* vs_relink_candidates_json(vs_session* s, const char* asset_id, const char* search_dir);
 VS_API int vs_relink_asset(vs_session* s, const char* asset_id, const char* path); /* undoable */
 
+/* ---- moving a project between devices (.vstudiopkg: one file with the project and its media) ----
+ * Both calls block until done: run them off the UI thread. `progress` (may be NULL) gets 0..1 and
+ * returns nonzero to cancel. Result JSON: {"ok","cancelled","error","missing":[asset ids left out],
+ * "package_dir": the new project's .vstudio folder (unpack)}. */
+typedef int (*vs_transfer_progress)(double progress, void* user);
+VS_API char* vs_transfer_pack(vs_session* s, const char* out_file, vs_transfer_progress progress, void* user);
+/* Session-free: unpacks into dest_root/<name>.vstudio (new name if taken) and dest_root/media/. */
+VS_API char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_transfer_progress progress,
+                                void* user);
+
 #ifdef __cplusplus
 }
 #endif

@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'core/project_model.dart';
 import 'core/native_preview.dart';
 import 'core/project_store.dart';
+import 'core/transfer.dart';
 import 'core/vstudio.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
@@ -317,6 +318,41 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     _vs?.seek(_playhead);
   }
 
+  static const _importPackageChoice = '#package';
+  TransferCancel? _transfer;
+
+  /// Opens a project packed on another device: project + media are unpacked
+  /// into the app's store (media reused when already there), then opened.
+  Future<void> _importPackage() async {
+    final store = _store;
+    if (store == null || _transfer != null) return;
+    // Any type: Android pickers do not know the .vstudiopkg extension.
+    final files = await FilePicker.pickFiles(type: FileType.any);
+    final path = files.map((f) => f.path).whereType<String>().firstOrNull;
+    if (path == null || !mounted) return;
+    final cancel = _transfer = TransferCancel();
+    setState(() => _status = 'Đang mở gói dự án…');
+    final r = await unpackPackage(path, store.root.path, cancel: cancel, onProgress: (p) {
+      if (mounted) setState(() => _status = 'Đang mở gói dự án ${(p * 100).floor()}%');
+    });
+    _transfer = null;
+    cancel.dispose();
+    // The picker's temporary copy is no longer needed (it can be gigabytes).
+    final tmp = (await getTemporaryDirectory()).path;
+    if (path.startsWith(tmp)) {
+      try {
+        File(path).deleteSync();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (!r.ok) {
+      setState(() => _status = r.cancelled ? 'Đã hủy mở gói' : 'Không mở được gói: ${r.error}');
+      return;
+    }
+    await _switchProject(path: r.packageDir);
+    if (mounted) setState(() => _status = 'Đã mở dự án từ gói');
+  }
+
   Future<void> _projectsMenu() async {
     final store = _store;
     if (store == null) return;
@@ -335,6 +371,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 leading: const Icon(Icons.add),
                 title: const Text('Dự án mới'),
                 onTap: () => Navigator.pop(context, '')),
+            ListTile(
+                leading: const Icon(Icons.move_to_inbox_outlined),
+                title: const Text('Nhập gói dự án (.vstudiopkg)'),
+                subtitle: const Text('Dự án đóng gói từ máy tính, kèm media', style: TextStyle(fontSize: 11)),
+                onTap: () => Navigator.pop(context, _importPackageChoice)),
             const Divider(height: 1),
             for (final p in projects)
               ListTile(
@@ -348,6 +389,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       ),
     );
     if (choice == null || !mounted) return;
+    if (choice == _importPackageChoice) return _importPackage();
     if (choice.isEmpty) {
       await _switchProject(newName: 'Dự án ${projects.length + 1}');
     } else {

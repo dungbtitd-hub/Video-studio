@@ -26,6 +26,12 @@ typedef struct {
     unsigned char first;
 } SinkState;
 
+static int cancel_at_once(double progress, void* user) {
+    (void)progress;
+    ++*(int*)user;
+    return 1;
+}
+
 static void sink(void* user, const uint8_t* rgba, int w, int h, int stride, int64_t pts) {
     SinkState* st = (SinkState*)user;
     (void)pts;
@@ -128,6 +134,32 @@ int main(void) {
     EXPECT(missing && strcmp(missing, "[]") == 0);
     vs_free(missing);
     EXPECT(vs_relink_asset(s, "nope", "/tmp/x.mp4") != 0);
+
+    /* Transfer package: pack, unpack elsewhere, open; garbage is refused. */
+    char* packed = vs_transfer_pack(s, "capi_test.vstudiopkg", NULL, NULL);
+    EXPECT(packed && strstr(packed, "\"ok\":true") && strstr(packed, "\"missing\":[]"));
+    vs_free(packed);
+    int calls = 0;
+    char* unpacked = vs_transfer_unpack("capi_test.vstudiopkg", "capi_test_unpack", cancel_at_once, &calls);
+    EXPECT(unpacked && strstr(unpacked, "\"ok\":true") && strstr(unpacked, "C test"));
+    EXPECT(calls == 1); /* final 1.0 report only: no media; cancel after success is ignored */
+    const char* dir = strstr(unpacked, "\"package_dir\":\"") + strlen("\"package_dir\":\"");
+    char path[1024] = {0};
+    for (size_t i = 0; *dir && *dir != '"' && i < sizeof path - 1; ++dir, ++i) {
+        if (*dir == '\\') ++dir; /* JSON escape (Windows separators) */
+        path[i] = *dir;
+    }
+    vs_free(unpacked);
+    vs_session* opened = vs_session_open(path);
+    EXPECT(opened != NULL);
+    char* reopened = vs_project_json(opened);
+    EXPECT(reopened && strstr(reopened, "\"V1\""));
+    vs_free(reopened);
+    vs_session_destroy(opened);
+    char* refused = vs_transfer_unpack("/nonexistent.vstudiopkg", "capi_test_unpack", NULL, NULL);
+    EXPECT(refused && strstr(refused, "\"ok\":false"));
+    vs_free(refused);
+    remove("capi_test.vstudiopkg");
 
     vs_free(v);
     vs_session_destroy(s);

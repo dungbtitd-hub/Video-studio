@@ -2,11 +2,15 @@
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QDockWidget>
 #include <QListWidget>
 #include <QSlider>
 #include <QMenuBar>
 #include <QSet>
+#include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QStandardPaths>
 #include <QTest>
 
@@ -55,6 +59,31 @@ private slots:
         bool ripple = false;
         for (const auto& r : rows) ripple |= r[1] == "Xóa và dồn khoảng trống";
         QVERIFY(ripple);
+    }
+
+    void packAndOpenPackageInBackground() {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const auto tracks = ctrl_->project()->tracks.size();
+        QSignalSpy done(ctrl_, &EditorController::transferFinished);
+        ctrl_->packProject(QUrl::fromLocalFile(tmp.filePath("move")));
+        QVERIFY(done.wait(5000));
+        QVERIFY(done.last().at(0).toBool());
+        const QString pkg = done.last().at(1).toString();
+        QVERIFY(pkg.endsWith("move.vstudiopkg") && QFileInfo::exists(pkg));
+        QVERIFY(!ctrl_->transferring());
+
+        QDir(tmp.path()).mkdir("phone");
+        ctrl_->openPackage(QUrl::fromLocalFile(pkg), QUrl::fromLocalFile(tmp.filePath("phone")));
+        QVERIFY(done.wait(5000));
+        QVERIFY2(done.last().at(0).toBool(), qPrintable(done.last().at(2).toString()));
+        QVERIFY(done.last().at(1).toString().startsWith(tmp.filePath("phone")));
+        QCOMPARE(ctrl_->project()->tracks.size(), tracks);
+
+        ctrl_->openPackage(QUrl::fromLocalFile(tmp.filePath("nope.vstudiopkg")));
+        QVERIFY(done.wait(5000));
+        QVERIFY(!done.last().at(0).toBool());
+        QCOMPARE(ctrl_->project()->tracks.size(), tracks);  // the open project is untouched
     }
 
     void keysNavigateEditPoints() {
