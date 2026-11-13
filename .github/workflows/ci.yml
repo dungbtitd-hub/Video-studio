@@ -39,6 +39,11 @@ jobs:
       - name: Desktop smoke test (screenshot)
         run: |
           xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudio a.mp4 b.mp4 --seek 5 --screenshot desktop.png
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudioWidgets a.mp4 b.mp4 --seek 5 --screenshot desktop-widgets.png
+      - name: Timeline smoothness, QML vs Widgets (3000 clips)
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudioWidgets --bench-timeline 3000 | tee timeline-bench.txt
+          xvfb-run -a -s "-screen 0 1440x900x24" ./build/bin/VideoStudio --bench-timeline 3000 | tee -a timeline-bench.txt
       - name: Benchmark (quick)
         run: ./build/bench/vstudio_bench --quick | tee bench.md
       - uses: actions/upload-artifact@v4
@@ -46,6 +51,8 @@ jobs:
           name: linux-results
           path: |
             desktop.png
+            desktop-widgets.png
+            timeline-bench.txt
             bench.md
             out.mp4
 
@@ -74,6 +81,67 @@ jobs:
         run: cmake --build build --config Release
       - name: Tests
         run: ctest --test-dir build -C Release --output-on-failure
+
+  desktop-bench:
+    # Real Windows/macOS machines (no GPU on hosted runners), to compare the
+    # QML and Widgets shells beyond the Linux VM. See docs/benchmarks/qml-vs-widgets.md.
+    name: Desktop QML vs Widgets (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          modules: qtmultimedia
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja nlohmann-json
+      - name: Configure and build
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTUDIO_WITH_FFMPEG=OFF \
+            -DVSTUDIO_BUILD_DESKTOP=ON -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
+          cmake --build build --target VideoStudio VideoStudioWidgets
+      - name: Timeline smoothness (300 and 3000 clips)
+        shell: bash
+        env:
+          QT_FORCE_STDERR_LOGGING: '1'  # GUI-subsystem apps on Windows log to the debugger otherwise
+        run: |
+          set +e
+          if [ "$RUNNER_OS" = macOS ]; then
+            W=build/bin/VideoStudioWidgets.app/Contents/MacOS/VideoStudioWidgets
+            Q=build/bin/VideoStudio.app/Contents/MacOS/VideoStudio
+          else
+            windeployqt --no-translations --qmldir desktop/quick/qml build/bin/VideoStudio.exe > /dev/null
+            windeployqt --no-translations build/bin/VideoStudioWidgets.exe > /dev/null
+            W=build/bin/VideoStudioWidgets.exe
+            Q=build/bin/VideoStudio.exe
+          fi
+          fail=0
+          for n in 300 3000; do
+            for app in "$W:widgets" "$Q:qml"; do
+              exe=${app%:*}; tag=${app##*:}
+              timeout 600 "$exe" --bench-timeline $n --screenshot $tag-$n.png > out.txt 2>&1
+              rc=$?
+              cat out.txt | tee -a timeline-bench.txt
+              if [ $rc -ne 0 ]; then printf '%s %s clips: exit code %d (0x%X)\n' "$tag" "$n" $rc $rc | tee -a timeline-bench.txt; fail=1; fi
+            done
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-bench-${{ matrix.os }}
+          path: |
+            timeline-bench.txt
+            *.png
 
   core-android:
     name: Core + C API (Android arm64)

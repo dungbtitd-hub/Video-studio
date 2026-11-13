@@ -349,11 +349,13 @@ TEST("export: cancel stops quickly") {
 TEST("preview: latest request wins and audio ring feeds the device") {
     Fixture f;
     f.ed.appendClip(f.v1, f.asset);
-    auto backend = std::make_shared<fake::Backend>();
-    PreviewEngine pe(backend, "", PreviewConfig{160, 90, 4, 64ull << 20, 0.25});
+    // Declared before the engine: its threads may still call the frame
+    // callback until ~PreviewEngine has joined them, so these must outlive it.
     std::mutex mu;
     std::condition_variable cv;
     std::vector<int> got;
+    auto backend = std::make_shared<fake::Backend>();
+    PreviewEngine pe(backend, "", PreviewConfig{160, 90, 4, 64ull << 20, 0.25});
     pe.setFrameCallback([&](std::shared_ptr<const VideoFrame> fr) {
         std::lock_guard l(mu);
         got.push_back(fr->rgba[(45 * 160 + 80) * 4]);

@@ -15,6 +15,7 @@ Rectangle {
 
     Flickable {
         id: flick
+        objectName: "timelineFlick"
         anchors.fill: parent
         anchors.leftMargin: root.headerW
         contentWidth: Math.max(width, (editor.duration + 30) * root.pxPerSec)

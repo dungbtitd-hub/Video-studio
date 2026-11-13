@@ -1,9 +1,10 @@
-// Bridges the QML workspace to Video Studio Core.
+// Bridges a desktop UI (QML or Widgets) to Video Studio Core.
 // UI-thread rule: everything here returns immediately. Probing, decoding,
 // audio and export run on core background threads; results come back to the
 // UI thread through queued signals.
 #pragma once
 
+#include <QImage>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
@@ -17,7 +18,6 @@
 #include "vstudio/preview.hpp"
 #include "vstudio/scheduler.hpp"
 
-class PreviewItem;
 class AudioOutput;
 
 class EditorController : public QObject {
@@ -44,7 +44,11 @@ public:
     explicit EditorController(QObject* parent = nullptr);
     ~EditorController() override;
 
-    Q_INVOKABLE void attachPreview(PreviewItem* item);
+    // Preview output: frames arrive on the UI thread through frameReady().
+    Q_INVOKABLE void setPreviewSize(int width, int height);
+    Q_INVOKABLE void refreshPreview();
+    // Builds a timeline-only stress project with `clips` clips (benchmarks).
+    Q_INVOKABLE void loadSyntheticProject(int clips);
     Q_INVOKABLE void newProject(const QString& name, int width, int height, int fps);
     Q_INVOKABLE void openProject(const QUrl& folder);
     Q_INVOKABLE void saveProject(const QUrl& folder);
@@ -63,8 +67,12 @@ public:
     Q_INVOKABLE void cancelExport();
 
     QString projectName() const;
-    QVariantList assets() const { return assets_; }
-    QVariantList tracks() const { return tracks_; }
+    // QVariant models for QML, built lazily on first read after an edit, so a
+    // front-end that reads the snapshot directly (Widgets) never pays for them.
+    QVariantList assets() const;
+    QVariantList tracks() const;
+    // Immutable snapshot of the current project; cheap to hold, safe to read.
+    [[nodiscard]] std::shared_ptr<const vstudio::Project> project() const { return snapshot_; }
     double duration() const;
     bool canUndo() const { return editor_->canUndo(); }
     bool canRedo() const { return editor_->canRedo(); }
@@ -89,13 +97,15 @@ signals:
     void exportChanged();
     void statusChanged();
     void jobsChanged();
+    void frameReady(const QImage& frame);
 
 private:
     template <class F>
     bool edit(F&& f);  // runs an edit, reports EditError in the status bar
-    void published();  // rebuild QML models + hand the new snapshot to the preview
+    void published();  // take a new snapshot, hand it to the preview, invalidate QML models
     void setStatus(const QString& s);
-    void rebuildModels();
+    void buildAssetsModel() const;
+    void buildTracksModel() const;
     void tick();
     void onProbed(const std::optional<vstudio::MediaAsset>& asset, const std::string& err, const std::string& path,
                   bool appendToTimeline);
@@ -107,9 +117,11 @@ private:
     std::unique_ptr<vstudio::JobScheduler> jobs_;
     std::unique_ptr<vstudio::PreviewEngine> preview_;
     std::unique_ptr<AudioOutput> audio_;
-    QPointer<PreviewItem> previewItem_;
+    int previewW_ = 960, previewH_ = 540;
     QString packageDir_;
-    QVariantList assets_, tracks_;
+    std::shared_ptr<const vstudio::Project> snapshot_;
+    mutable QVariantList assets_, tracks_;
+    mutable bool assetsDirty_ = true, tracksDirty_ = true;
     double playhead_ = 0;
     bool wasPlaying_ = false;
     QString selected_;
