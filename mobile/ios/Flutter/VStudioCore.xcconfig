@@ -1,0 +1,13 @@
+// Links the shared C++ core + C API + Apple media module into the Runner app.
+// Build it first:  scripts/build_ios_core.sh   (from the repository root; writes build-ios/)
+// -force_load keeps every vs_* symbol: dart:ffi finds them at run time through
+// DynamicLibrary.process(), so the linker sees no reference to them.
+VSTUDIO_CORE_DIR = $(PROJECT_DIR)/../../build-ios
+VSTUDIO_CORE_FRAMEWORKS = -lc++ -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox -framework AudioToolbox -framework Foundation
+OTHER_LDFLAGS[sdk=iphoneos*] = $(inherited) -force_load $(VSTUDIO_CORE_DIR)/iphoneos/libVStudioCore.a $(VSTUDIO_CORE_FRAMEWORKS)
+OTHER_LDFLAGS[sdk=iphonesimulator*] = $(inherited) -force_load $(VSTUDIO_CORE_DIR)/iphonesimulator/libVStudioCore.a $(VSTUDIO_CORE_FRAMEWORKS)
+// Release builds strip all symbols by default, which would also remove the vs_* entry points
+// that dlsym() looks up; keep global symbols.
+STRIP_STYLE = non-global
+// Nothing in the app references vs_* at link time, so dead-code stripping would drop them.
+DEAD_CODE_STRIPPING = NO

@@ -7,13 +7,17 @@
 
 namespace vstudio {
 
-#if !(defined(_MSC_VER) && !defined(__clang__))
+// 128-bit integers exist on 64-bit GCC/Clang targets, not on MSVC or 32-bit ARM/x86.
+#if defined(__SIZEOF_INT128__)
+#define VSTUDIO_HAS_I128 1
 __extension__ typedef __int128 i128;
+#else
+#define VSTUDIO_HAS_I128 0
 #endif
 
 namespace {
-#if defined(_MSC_VER) && !defined(__clang__)
-// MSVC has no i128; use long double long-division fallback with exact correction.
+#if !VSTUDIO_HAS_I128
+// No i128: split the division so the products stay in 64 bits, with exact correction.
 std::int64_t mulDivImpl(std::int64_t v, std::int64_t n, std::int64_t d, Rounding r) {
     // Split v = q*d + rem to keep products small: v*n/d = q*n + rem*n/d
     const std::int64_t q = v / d;
@@ -98,7 +102,7 @@ bool operator==(const Rational& a, const Rational& b) {
 
 std::strong_ordering operator<=>(const Rational& a, const Rational& b) {
     const Rational x = a.reduced(), y = b.reduced();
-#if defined(_MSC_VER) && !defined(__clang__)
+#if !VSTUDIO_HAS_I128
     const long double l = static_cast<long double>(x.num) * y.den;
     const long double rr = static_cast<long double>(y.num) * x.den;
     if (l < rr) return std::strong_ordering::less;

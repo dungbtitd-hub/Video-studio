@@ -50,8 +50,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       _vs = VStudio.create('Dự án mới', width: 1080, height: 1920);
       _vs!.setPreviewSize(720, 1280);
       _refresh();
+      debugPrint('vstudio: core ${_vs!.version} ready'); // CI smoke test looks for this line
     } catch (e) {
       _error = 'Không nạp được Video Studio Core: $e';
+      debugPrint('vstudio: core failed: $e');
     }
     // Per-frame UI tick: polls the core for a new preview frame / playhead.
     // Nothing here decodes; it only copies a ready frame.
@@ -136,12 +138,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   }
 
   Future<void> _import() async {
-    final res = await FilePicker.platform.pickFiles(allowMultiple: true, type: FileType.media);
-    if (res == null) return;
+    final files = await FilePicker.pickFiles(type: FileType.media);
+    if (files.isEmpty) return;
     _edit((vs) {
       var track = _project?.tracks.where((t) => t.type == 'video').firstOrNull?.id;
       track ??= vs.addTrack(audio: false, name: 'Video 1');
-      for (final f in res.files) {
+      for (final f in files) {
         if (f.path == null) continue;
         final asset = vs.importMedia(f.path!);
         _selected = vs.appendClip(track, asset);
