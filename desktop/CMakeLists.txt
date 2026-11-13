@@ -1,9 +1,7 @@
-# Qt 6 desktop shells (Windows, macOS; Linux for development/CI).
-# Two P0 front-ends share one controller (common/) so they can be compared
-# on equal terms before choosing the desktop UI technology:
-#   quick/   Qt Quick (QML)   -> bin/VideoStudio        (reference only until end of P0)
-#   widgets/ Qt Widgets       -> bin/VideoStudioWidgets (chosen desktop UI, 2026-11-13)
-# See docs/benchmarks/qml-vs-widgets.md.
+# Qt 6 desktop app (Windows, macOS; Linux for development/CI): Qt Widgets
+# (chosen over Qt Quick in P0, see docs/benchmarks/qml-vs-widgets.md).
+#   common/  UI-independent controller: core session, preview, audio
+#   widgets/ the app -> bin/VideoStudio
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Multimedia)
 qt_standard_project_setup()
 
@@ -18,5 +16,4 @@ if(VSTUDIO_WITH_FFMPEG)
   target_link_libraries(vstudio_desktop_common PUBLIC vstudio::ffmpeg)
 endif()
 
-add_subdirectory(quick)
 add_subdirectory(widgets)

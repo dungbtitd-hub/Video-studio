@@ -91,7 +91,8 @@ Nếu chốt Widgets: giữ bản QML đến hết P0 để tham chiếu, rồi 
 ở P1. Lớp `desktop/common/` đã tách sẵn nên việc bỏ không ảnh hưởng gì khác.
 
 Quyết định (13/11/2026): **chốt Qt Widgets** cho desktop. Bản QML (`desktop/quick/`)
-giữ đến hết P0 để tham chiếu, sau đó bỏ.
+đã bỏ khi đóng P0; app Widgets nay là `build/bin/VideoStudio`. Các lệnh và tên file ở
+trên ghi theo thời điểm đo (bản QML có trong lịch sử git trước khi bỏ).
 
 Nên đo thêm trên máy có GPU của nhóm để có số liệu tham khảo: render phần
 mềm trên Xvfb làm QML chậm hơn thực tế, nhưng không đổi được nguyên nhân chính là
