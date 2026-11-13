@@ -29,6 +29,7 @@ constexpr int32_t kColorNV12 = 21;          // COLOR_FormatYUV420SemiPlanar
 constexpr int32_t kColorFlexible = 0x7F420888;
 
 void logE(const std::string& m) { __android_log_print(ANDROID_LOG_ERROR, "vstudio", "%s", m.c_str()); }
+void logI(const std::string& m) { __android_log_print(ANDROID_LOG_INFO, "vstudio", "%s", m.c_str()); }
 
 void setErr(std::string* out, const std::string& m) {
     if (out) *out = m;
@@ -235,6 +236,7 @@ public:
     [[nodiscard]] bool ok() const { return codec_ != nullptr; }
 
     void seek(int64_t us) {
+        logI("decoder seek " + std::to_string(us));
         AMediaExtractor_seekTo(ex_.get(), us, AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
         AMediaCodec_flush(codec_.get());
         inputEos_ = outputEos_ = false;
@@ -537,6 +539,7 @@ public:
                 return fail(error, "this device has no AAC encoder");
         }
         nv12_.resize(static_cast<size_t>(s.width) * s.height * 3 / 2);
+        logI("encoder open " + std::to_string(s.width) + "x" + std::to_string(s.height) + (aenc_ ? " +aac" : ""));
         return true;
     }
 
@@ -569,6 +572,7 @@ public:
     bool finish(std::string* error) override {
         if (finished_) return true;
         finished_ = true;
+        logI("encoder finish after " + std::to_string(videoIndex_) + " frames");
         bool ok = true;
         if (aenc_) {
             const int64_t pts = toUs(Time::fromSample(audioFrames_, s_.sampleRate));
@@ -576,6 +580,7 @@ public:
                        true, error);
         }
         ok = queue(venc_.get(), vTrack_, nullptr, 0, toUs(Time::fromFrame(videoIndex_, s_.fps)), true, error) && ok;
+        logI("encoder drained, stopping muxer");
         if (started_) AMediaMuxer_stop(muxer_);
         else return fail(error, "nothing was encoded");
         return ok;
