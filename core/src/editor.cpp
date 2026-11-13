@@ -31,6 +31,18 @@ Id Editor::addAsset(MediaAsset asset) {
     return id;
 }
 
+void Editor::relinkAsset(const Id& assetId, const std::string& uri, const std::string& fingerprint) {
+    if (!project_.findAsset(assetId)) throw EditError("asset not found");
+    if (uri.empty()) throw EditError("empty uri");
+    run("Relink media", EditCommand::Scope::AllTracksAndAssets, {}, [=](Project& p) {
+        for (auto& a : p.assets) {
+            if (a.id != assetId) continue;
+            a.uri = uri;
+            if (!fingerprint.empty()) a.fingerprint = fingerprint;
+        }
+    });
+}
+
 Id Editor::addTrack(TrackType type, const std::string& name) {
     Track t;
     t.id = newId();

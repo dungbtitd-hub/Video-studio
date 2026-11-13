@@ -419,3 +419,117 @@ TEST("render: uses the best compositor module and falls back to CPU if it fails"
     CHECK_EQ(gpu->calls, 1);  // not retried on every frame by this renderer
     CHECK_EQ(r.warnings().size(), 1u);
 }
+
+// ------------------------------------------------------------------ media library
+
+#include <atomic>
+#include <fstream>
+
+#include "vstudio/media_library.hpp"
+
+TEST("media library: thumbnails and waveform in the background, cached on disk") {
+    auto backend = std::make_shared<fake::Backend>();
+    const auto cache = fs::temp_directory_path() / ("vstudio_lib_" + newId());
+    MediaAsset a = syntheticAsset("A", 10);  // 64x36, 30 fps, sawtooth audio peaking at 0.25
+    a.fingerprint = "123:abc";
+    JobScheduler jobs(2);
+    std::atomic<int> ready{0};
+    {
+        MediaLibrary lib(backend, jobs, cache.string());
+        lib.setListener([&](const Id& id, MediaLibrary::Kind, bool ok) {
+            CHECK_EQ(id, std::string("A"));
+            CHECK(ok);
+            ++ready;
+        });
+        lib.requestThumbnails(a, a.uri, 5, 18);
+        lib.requestThumbnails(a, a.uri, 5, 18);  // de-duplicated
+        lib.requestWaveform(a, a.uri, 50);
+        jobs.waitIdle();
+        CHECK_EQ(ready.load(), 2);
+        auto t = lib.thumbnails("A");
+        CHECK(t != nullptr);
+        CHECK_EQ(t->count(), 5);
+        CHECK_EQ(t->width, 32);  // 16:9 at height 18
+        CHECK_EQ(t->height, 18);
+        // Slice centres: 1 s, 3 s, ... -> frame 30, 90, ... (red channel = frame index % 256)
+        CHECK_EQ(int(t->frame(0)[0]), 30);
+        CHECK_EQ(int(t->frame(1)[0]), 90);
+        CHECK_EQ(t->times[4], sec(9));
+        auto w = lib.waveform("A");
+        CHECK(w != nullptr);
+        CHECK_EQ(w->buckets(), std::size_t(500));
+        CHECK_EQ(int(w->peaks[0]), 0);  // min of the sawtooth
+        CHECK(w->peaks[1] >= 30 && w->peaks[1] <= 32);  // max ~0.245 * 127
+    }
+    // A new library (next session) reads both from the disk cache without decoding.
+    const int decodes = fake::decodes.load();
+    MediaLibrary lib2(backend, jobs, cache.string());
+    MediaAsset moved = a;
+    moved.uri = "synthetic-file-is-gone";  // the cache is keyed by fingerprint, not path
+    lib2.requestThumbnails(moved, moved.uri, 5, 18);
+    lib2.requestWaveform(moved, moved.uri, 50);
+    jobs.waitIdle();
+    CHECK_EQ(fake::decodes.load(), decodes);
+    CHECK(lib2.thumbnails("A") != nullptr);
+    CHECK_EQ(int(lib2.thumbnails("A")->frame(1)[0]), 90);
+    CHECK_EQ(lib2.waveform("A")->buckets(), std::size_t(500));
+    // Unreadable media reports failure instead of hanging or throwing.
+    MediaAsset bad = a;
+    bad.id = "B";
+    bad.fingerprint.clear();
+    std::atomic<int> failed{0};
+    lib2.setListener([&](const Id&, MediaLibrary::Kind, bool ok) { failed += ok ? 0 : 1; });
+    lib2.requestThumbnails(bad, "not-a-file", 5, 18);
+    jobs.waitIdle();
+    CHECK_EQ(failed.load(), 1);
+    CHECK(lib2.thumbnails("B") == nullptr);
+    fs::remove_all(cache);
+}
+
+TEST("media library: destroying the library cancels pending work") {
+    auto backend = std::make_shared<fake::Backend>();
+    JobScheduler jobs(1);
+    std::atomic<int> calls{0};
+    {
+        MediaLibrary lib(backend, jobs);
+        lib.setListener([&](const Id&, MediaLibrary::Kind, bool) { ++calls; });
+        for (int i = 0; i < 20; ++i) {
+            MediaAsset a = syntheticAsset("A" + std::to_string(i), 600);
+            lib.requestWaveform(a, a.uri, 100);
+        }
+    }
+    jobs.waitIdle();
+    CHECK(calls.load() < 20);  // no callbacks after destruction
+}
+
+TEST("relink: missing media found by fingerprint, undoable") {
+    const auto dir = fs::temp_directory_path() / ("vstudio_relink_" + newId());
+    fs::create_directories(dir / "old");
+    fs::create_directories(dir / "new" / "deep");
+    auto write = [](const fs::path& p, const std::string& s) { std::ofstream(p, std::ios::binary) << s; };
+    write(dir / "old" / "clip.mp4", std::string(100000, 'x') + "tail-1");
+    Fixture f;
+    MediaAsset a = syntheticAsset("M", 5);
+    a.uri = "old/clip.mp4";
+    a.fingerprint = fingerprintFile((dir / "old" / "clip.mp4").string());
+    f.ed.addAsset(a);
+    const std::string base = dir.string();
+    CHECK(missingAssets(f.ed.project(), base).empty());
+    // The user moves and renames the file; another file keeps the old name.
+    fs::rename(dir / "old" / "clip.mp4", dir / "new" / "deep" / "renamed.mp4");
+    write(dir / "new" / "clip.mp4", std::string(100000, 'y') + "other!");
+    auto missing = missingAssets(f.ed.project(), base);
+    CHECK_EQ(missing.size(), 1u);
+    CHECK_EQ(missing[0], std::string("M"));
+    auto c = findRelinkCandidates(*f.ed.project().findAsset("M"), base);
+    CHECK_EQ(c.size(), 2u);
+    CHECK(c[0].fingerprintMatch);  // same content, new name: first
+    CHECK(c[0].path.find("renamed.mp4") != std::string::npos);
+    CHECK(!c[1].fingerprintMatch);  // same name only
+    f.ed.relinkAsset("M", makeUri(c[0].path, (dir / "p.vstudio").string()));
+    CHECK(missingAssets(f.ed.project(), base).empty());
+    CHECK(f.ed.undo());
+    CHECK_EQ(missingAssets(f.ed.project(), base).size(), 1u);
+    CHECK_THROWS(f.ed.relinkAsset("nope", "x"));
+    fs::remove_all(dir);
+}
