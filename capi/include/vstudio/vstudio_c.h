@@ -84,6 +84,13 @@ VS_API int64_t vs_playhead(vs_session* s);
  * -1 if dst_capacity is too small (w and h are set to the needed size). */
 VS_API int vs_preview_take_frame(vs_session* s, uint8_t* dst, int64_t dst_capacity, int64_t* serial, int* w, int* h,
                                  int64_t* pts);
+/* Frame sink for native preview surfaces (Android Surface, iOS CVPixelBuffer): called on the
+ * core's video thread with each new frame (RGBA8, rows of stride bytes), so the frame goes to the
+ * screen without passing through Dart. Must return quickly. Pass NULL to remove; once
+ * vs_preview_set_sink returns, the previous sink is never called again. The newest frame is also
+ * delivered at once to a newly set sink. */
+typedef void (*vs_frame_sink)(void* user, const uint8_t* rgba, int width, int height, int stride, int64_t pts);
+VS_API void vs_preview_set_sink(vs_session* s, vs_frame_sink sink, void* user);
 /* Called from the audio device thread. Interleaved float, project rate/channels. */
 VS_API void vs_pull_audio(vs_session* s, float* out, int64_t frames);
 VS_API int vs_audio_format(vs_session* s, int* sample_rate, int* channels);

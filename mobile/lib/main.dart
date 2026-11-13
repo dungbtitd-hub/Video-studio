@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'core/project_model.dart';
+import 'core/native_preview.dart';
 import 'core/vstudio.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
@@ -34,6 +35,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   ProjectView? _project;
   int _revision = -1;
   ui.Image? _frame;
+  int? _textureId; // native preview texture (Android); null = poll frames through FFI
   bool _decoding = false;
   double _playhead = 0;
   bool _playing = false;
@@ -51,6 +53,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       _vs!.setPreviewSize(720, 1280);
       _refresh();
       debugPrint('vstudio: core ${_vs!.version} ready'); // CI smoke test looks for this line
+      _attachNativePreview();
     } catch (e) {
       _error = 'Không nạp được Video Studio Core: $e';
       debugPrint('vstudio: core failed: $e');
@@ -65,11 +68,31 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     });
   }
 
+  Future<void> _attachNativePreview() async {
+    final vs = _vs;
+    if (vs == null || !NativePreview.supported) return;
+    try {
+      final id = await NativePreview.create(vs, 720, 1280);
+      if (!mounted || id == null) return;
+      setState(() => _textureId = id);
+      vs.seek(_playhead); // first frame
+      debugPrint('vstudio: native preview texture $id');
+    } catch (e) {
+      debugPrint('vstudio: native preview unavailable, polling frames: $e');
+    }
+  }
+
   @override
   void dispose() {
     _ticker.dispose();
     _autosave?.cancel();
-    _vs?.dispose();
+    final vs = _vs;
+    // The surface must be detached before the session it renders from is destroyed.
+    if (_textureId != null) {
+      NativePreview.dispose().whenComplete(() => vs?.dispose());
+    } else {
+      vs?.dispose();
+    }
     super.dispose();
   }
 
@@ -96,7 +119,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         _playhead = ph;
       }
     }
-    if (!_decoding) {
+    if (_textureId == null && !_decoding) {
       final f = vs.takeFrame();
       if (f != null) {
         _decoding = true;
@@ -202,9 +225,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             child: Container(
               color: Colors.black,
               alignment: Alignment.center,
-              child: _frame == null
-                  ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
-                  : RawImage(image: _frame, fit: BoxFit.contain),
+              child: _textureId != null && (_project?.duration ?? 0) > 0
+                  ? AspectRatio(aspectRatio: 720 / 1280, child: Texture(textureId: _textureId!))
+                  : _frame == null
+                      ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
+                      : RawImage(image: _frame, fit: BoxFit.contain),
             ),
           ),
           Container(

@@ -3,8 +3,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+static void sleep_ms(int ms) { Sleep((DWORD)ms); }
+static long atomic_inc(volatile long* v) { return InterlockedIncrement(v); }
+static long atomic_get(volatile long* v) { return InterlockedCompareExchange(v, 0, 0); }
+#else
+#include <time.h>
+static void sleep_ms(int ms) {
+    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+}
+static long atomic_inc(volatile long* v) { return __atomic_add_fetch(v, 1, __ATOMIC_SEQ_CST); }
+static long atomic_get(volatile long* v) { return __atomic_load_n(v, __ATOMIC_SEQ_CST); }
+#endif
 
 #include "vstudio/vstudio_c.h"
+
+typedef struct {
+    volatile long calls;
+    int w, h, stride;
+    unsigned char first;
+} SinkState;
+
+static void sink(void* user, const uint8_t* rgba, int w, int h, int stride, int64_t pts) {
+    SinkState* st = (SinkState*)user;
+    (void)pts;
+    st->w = w;
+    st->h = h;
+    st->stride = stride;
+    st->first = rgba[3];
+    atomic_inc(&st->calls);
+}
 
 #define EXPECT(c)                                                       \
     do {                                                                \
@@ -40,6 +70,21 @@ int main(void) {
     char* mods = vs_modules_json(s);
     EXPECT(mods && strstr(mods, "builtin.color_adjust"));
     vs_free(mods);
+
+    /* Native preview sink: frames arrive on the core's thread without polling. */
+    SinkState st = {0, 0, 0, 0, 0};
+    vs_preview_set_size(s, 64, 36);
+    vs_preview_set_sink(s, sink, &st);
+    vs_preview_seek(s, 0);
+    for (int i = 0; i < 200 && atomic_get(&st.calls) == 0; ++i) sleep_ms(10);
+    EXPECT(st.calls > 0);
+    EXPECT(st.w == 64 && st.h == 36 && st.stride == 64 * 4);
+    EXPECT(st.first == 255); /* opaque canvas */
+    vs_preview_set_sink(s, NULL, NULL);
+    const long after = atomic_get(&st.calls);
+    vs_preview_seek(s, vs_ticks_per_second());
+    sleep_ms(100);
+    EXPECT(atomic_get(&st.calls) == after);
 
     vs_free(v);
     vs_session_destroy(s);
