@@ -626,3 +626,72 @@ void EditorController::relinkFromFolder(const QString& assetId, const QUrl& fold
         }, Qt::QueuedConnection);
     });
 }
+
+// ---- transfer package ----
+
+void EditorController::runTransfer(
+    const QString& what,
+    std::function<TransferResult(const TransferProgress&, const std::atomic<bool>*)> work,
+    std::function<void(const TransferResult&)> done) {
+    transferring_ = true;
+    transferCancel_ = CancelToken{};
+    ++pendingJobs_;
+    emit jobsChanged();
+    setStatus(what);
+    const CancelToken token = transferCancel_;
+    jobs_->submit("transfer", JobPriority::Normal, [this, what, work = std::move(work), done = std::move(done), token](const CancelToken&) {
+        auto lastPercent = std::make_shared<int>(-1);
+        const TransferProgress progress = [this, what, lastPercent](double p) {
+            const int pct = static_cast<int>(p * 100);
+            if (pct == *lastPercent) return;  // at most 100 UI updates
+            *lastPercent = pct;
+            QMetaObject::invokeMethod(this, [this, what, pct] { setStatus(QStringLiteral("%1 %2%").arg(what).arg(pct)); },
+                                      Qt::QueuedConnection);
+        };
+        const TransferResult r = work(progress, token.flag());
+        QMetaObject::invokeMethod(this, [this, r, done] {
+            transferring_ = false;
+            --pendingJobs_;
+            emit jobsChanged();
+            done(r);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void EditorController::packProject(const QUrl& file) {
+    if (transferring_) return;
+    QString out = file.toLocalFile();
+    if (!out.endsWith(".vstudiopkg")) out += ".vstudiopkg";
+    const Project project = editor_->project();  // a copy: editing goes on while packing
+    const std::string base = mediaBaseDir(s(packageDir_));
+    runTransfer(tr("Packing project…"), [project, base, out](const TransferProgress& p, const std::atomic<bool>* c) {
+        return vstudio::packProject(project, base, s(out), p, c);
+    }, [this, out](const TransferResult& r) {
+        QString msg;
+        if (r.cancelled) msg = tr("Packing cancelled");
+        else if (!r.ok) msg = tr("Packing failed: %1").arg(q(r.error));
+        else if (!r.missingAssets.empty())
+            msg = tr("Packed %1 (%2 missing media left out)").arg(QFileInfo(out).fileName()).arg(r.missingAssets.size());
+        else msg = tr("Packed %1").arg(QFileInfo(out).fileName());
+        setStatus(msg);
+        emit transferFinished(r.ok, out, msg);
+    });
+}
+
+void EditorController::openPackage(const QUrl& file, const QUrl& destRoot) {
+    if (transferring_) return;
+    const QString in = file.toLocalFile();
+    const QString root = destRoot.isEmpty() ? QFileInfo(in).absolutePath() : destRoot.toLocalFile();
+    runTransfer(tr("Opening package…"), [in, root](const TransferProgress& p, const std::atomic<bool>* c) {
+        return unpackProject(s(in), s(root), p, c);
+    }, [this](const TransferResult& r) {
+        if (!r.ok) {
+            const QString msg = r.cancelled ? tr("Opening cancelled") : tr("Cannot open package: %1").arg(q(r.error));
+            setStatus(msg);
+            emit transferFinished(false, {}, msg);
+            return;
+        }
+        openProject(QUrl::fromLocalFile(q(r.packageDir)));
+        emit transferFinished(true, q(r.packageDir), status_);
+    });
+}

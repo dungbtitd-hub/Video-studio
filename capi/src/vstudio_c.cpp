@@ -11,6 +11,7 @@
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/transfer.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -691,4 +692,53 @@ int vs_relink_asset(vs_session* s, const char* asset_id, const char* path) {
         s->preview.reset();
         s->edited();
     });
+}
+
+namespace {
+
+char* transferJson(const TransferResult& r) {
+    return dup(Json{{"ok", r.ok},
+                    {"cancelled", r.cancelled},
+                    {"error", r.error},
+                    {"missing", r.missingAssets},
+                    {"package_dir", r.packageDir}}
+                   .dump());
+}
+
+struct ProgressBridge {
+    vs_transfer_progress fn;
+    void* user;
+    std::atomic<bool> cancel{false};
+    TransferProgress callback() {
+        if (!fn) return {};
+        return [this](double p) {
+            if (fn(p, user)) cancel = true;
+        };
+    }
+};
+
+}  // namespace
+
+char* vs_transfer_pack(vs_session* s, const char* out_file, vs_transfer_progress progress, void* user) {
+    if (!s || !s->editor) return nullptr;
+    try {
+        ProgressBridge b{progress, user};
+        return transferJson(
+            packProject(s->editor->project(), mediaBaseDir(s->packageDir), str(out_file), b.callback(), &b.cancel));
+    } catch (const std::exception& e) {
+        TransferResult r;
+        r.error = e.what();
+        return transferJson(r);
+    }
+}
+
+char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_transfer_progress progress, void* user) {
+    try {
+        ProgressBridge b{progress, user};
+        return transferJson(unpackProject(str(package_file), str(dest_root), b.callback(), &b.cancel));
+    } catch (const std::exception& e) {
+        TransferResult r;
+        r.error = e.what();
+        return transferJson(r);
+    }
 }

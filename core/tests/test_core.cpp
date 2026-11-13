@@ -1,4 +1,7 @@
 #include <chrono>
+#include <atomic>
+#include <cstring>
+#include <fstream>
 #include <filesystem>
 #include <thread>
 
@@ -6,12 +9,14 @@
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/media_library.hpp"
 #include "vstudio/frame_cache.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
+#include "vstudio/transfer.hpp"
 #include "vtest.hpp"
 
 using namespace vstudio;
@@ -735,4 +740,158 @@ TEST("snap: thousands of clips stay fast") {
     std::printf("       snapTime over 3000 clips: %.2f us/call\n", us);
     CHECK(snapped > 0);
     CHECK(us < 50);
+}
+
+// ------------------------------------------------------------------ transfer package
+
+namespace {
+
+void writeFile(const fs::path& p, const std::string& s) { std::ofstream(p, std::ios::binary) << s; }
+
+std::string readFile(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), {}};
+}
+
+// Minimal ustar writer to build hostile packages by hand.
+void tarEntry(std::string& out, const std::string& name, const std::string& data) {
+    char h[512] = {};
+    std::memcpy(h, name.data(), name.size());
+    std::snprintf(h + 100, 8, "%07o", 0644);
+    std::snprintf(h + 124, 12, "%011llo", static_cast<unsigned long long>(data.size()));
+    h[156] = '0';
+    std::memcpy(h + 257, "ustar", 6);
+    std::memset(h + 148, ' ', 8);
+    unsigned sum = 0;
+    for (char c : h) sum += static_cast<unsigned char>(c);
+    std::snprintf(h + 148, 8, "%06o", sum);
+    out.append(h, 512);
+    out += data;
+    out.append((512 - data.size() % 512) % 512, '\0');
+}
+
+bool hasPartFiles(const fs::path& dir) {
+    for (const auto& e : fs::recursive_directory_iterator(dir))
+        if (e.path().extension() == ".part") return true;
+    return false;
+}
+
+}  // namespace
+
+TEST("transfer: pack and unpack move a project with its media to another folder") {
+    const auto dir = fs::temp_directory_path() / ("vstudio_xfer_" + newId());
+    fs::create_directories(dir / "pc" / "media");
+    fs::create_directories(dir / "phone");
+    const std::string video = std::string(3 << 20, 'v') + "end", music = "music-bytes";
+    writeFile(dir / "pc" / "media" / "clip.mp4", video);
+    writeFile(dir / "pc" / "song.m4a", music);
+    Fixture f;
+    MediaAsset a = syntheticAsset("V", 5), b = syntheticAsset("S", 5), gone = syntheticAsset("G", 5), twin = syntheticAsset("T", 5);
+    a.uri = "media/clip.mp4";
+    b.uri = (dir / "pc" / "song.m4a").string();  // absolute
+    gone.uri = "media/missing.mp4";
+    twin.uri = "media/clip.mp4";  // same file twice: stored once
+    for (const auto& x : {a, b, gone, twin}) f.ed.addAsset(x);
+    f.ed.insertClip(f.v1, "V", sec(0), sec(0), sec(2));
+    const auto pkgFile = dir / "My.vstudiopkg";
+    std::vector<double> prog;
+    auto r = packProject(f.ed.project(), (dir / "pc").string(), pkgFile.string(), [&](double p) { prog.push_back(p); });
+    CHECK(r.ok);
+    CHECK_EQ(r.missingAssets.size(), 1u);
+    CHECK_EQ(r.missingAssets[0], std::string("G"));
+    CHECK(!prog.empty() && prog.back() == 1.0);
+    CHECK(fs::file_size(pkgFile) < video.size() + music.size() + 16 * 1024);  // the clip is stored once
+    CHECK(!hasPartFiles(dir));
+
+    // A same-named different file already on the phone gets kept; an identical one is reused.
+    fs::create_directories(dir / "phone" / "media");
+    writeFile(dir / "phone" / "media" / "clip.mp4", "someone else's clip");
+    writeFile(dir / "phone" / "media" / "clip (2).mp4", std::string(3 << 20, 'w') + "end");  // same size, other content
+    writeFile(dir / "phone" / "media" / "song.m4a", music);
+    auto u = unpackProject(pkgFile.string(), (dir / "phone").string());
+    CHECK(u.ok);
+    CHECK_EQ(fs::path(u.packageDir).parent_path(), dir / "phone");
+    CHECK_EQ(readFile(dir / "phone" / "media" / "clip.mp4"), std::string("someone else's clip"));
+    CHECK_EQ(readFile(dir / "phone" / "media" / "clip (3).mp4"), video);
+    auto p = loadProject(u.packageDir);
+    CHECK_EQ(p.findAsset("V")->uri, std::string("media/clip (3).mp4"));
+    CHECK_EQ(p.findAsset("T")->uri, std::string("media/clip (3).mp4"));
+    CHECK_EQ(p.findAsset("S")->uri, std::string("media/song.m4a"));
+    CHECK_EQ(p.findAsset("G")->uri, std::string("media/missing.mp4"));  // still missing: relink later
+    CHECK_EQ(missingAssets(p, (dir / "phone").string()).size(), 1u);
+    CHECK_EQ(p.tracks.size(), f.ed.project().tracks.size());
+
+    // Unpacking twice makes a second project, not an overwrite, and reuses the media.
+    auto u2 = unpackProject(pkgFile.string(), (dir / "phone").string());
+    CHECK(u2.ok);
+    CHECK(u2.packageDir != u.packageDir);
+    CHECK(!fs::exists(dir / "phone" / "media" / "clip (4).mp4"));
+    CHECK(!hasPartFiles(dir));
+    fs::remove_all(dir);
+}
+
+TEST("transfer: hostile or foreign files are refused and leave nothing behind") {
+    const auto dir = fs::temp_directory_path() / ("vstudio_xfer_bad_" + newId());
+    fs::create_directories(dir / "out");
+    auto tryUnpack = [&](const std::string& bytes) {
+        writeFile(dir / "x.vstudiopkg", bytes);
+        return unpackProject((dir / "x.vstudiopkg").string(), (dir / "out").string());
+    };
+    std::string marker;
+    tarEntry(marker, "vstudiopkg.json", R"({"format":1,"name":"x"})");
+    for (const char* bad : {"../evil.txt", "media/../evil.txt", "/tmp/evil.txt", "media/a/b.mp4", "other/x.mp4"}) {
+        std::string t = marker;
+        tarEntry(t, bad, "payload");
+        t.append(1024, '\0');
+        auto r = tryUnpack(t);
+        CHECK(!r.ok);
+        CHECK(r.error.find("unsafe") != std::string::npos);
+    }
+    CHECK(!fs::exists(dir / "evil.txt"));
+    {
+        std::string t;
+        tarEntry(t, "project.json", "{}");  // no marker first
+        CHECK(!tryUnpack(t).ok);
+    }
+    {
+        std::string t;
+        tarEntry(t, "vstudiopkg.json", R"({"format":9})");
+        CHECK(tryUnpack(t).error.find("version") != std::string::npos);
+    }
+    CHECK(!tryUnpack("just a text file, not a tar archive at all").ok);
+    {
+        std::string t = marker;
+        tarEntry(t, "media/half.mp4", std::string(5000, 'h'));
+        t.resize(t.size() - 3000);  // truncated download
+        auto r = tryUnpack(t);
+        CHECK(!r.ok);
+        CHECK(!fs::exists(dir / "out" / "media" / "half.mp4"));
+    }
+    CHECK(!hasPartFiles(dir));
+    fs::remove_all(dir);
+}
+
+TEST("transfer: cancel stops pack and unpack without partial files") {
+    const auto dir = fs::temp_directory_path() / ("vstudio_xfer_cancel_" + newId());
+    fs::create_directories(dir / "media");
+    writeFile(dir / "media" / "big.mp4", std::string(4 << 20, 'b'));
+    Fixture f;
+    MediaAsset a = syntheticAsset("B", 5);
+    a.uri = "media/big.mp4";
+    f.ed.addAsset(a);
+    std::atomic<bool> cancel{false};
+    auto stopHalfway = [&](double p) {
+        if (p > 0.2) cancel = true;
+    };
+    auto r = packProject(f.ed.project(), dir.string(), (dir / "c.vstudiopkg").string(), stopHalfway, &cancel);
+    CHECK(r.cancelled && !r.ok);
+    CHECK(!fs::exists(dir / "c.vstudiopkg"));
+    cancel = false;
+    CHECK(packProject(f.ed.project(), dir.string(), (dir / "c.vstudiopkg").string()).ok);
+    fs::create_directories(dir / "dest");
+    auto u = unpackProject((dir / "c.vstudiopkg").string(), (dir / "dest").string(), stopHalfway, &cancel);
+    CHECK(u.cancelled && !u.ok);
+    CHECK(!fs::exists(dir / "dest" / "media" / "big.mp4"));
+    CHECK(!hasPartFiles(dir));
+    fs::remove_all(dir);
 }

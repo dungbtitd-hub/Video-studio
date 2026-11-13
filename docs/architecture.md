@@ -96,6 +96,17 @@ MyFilm.vstudio/
 - Trường không biết được giữ nguyên khi đọc rồi ghi lại (round-trip), đúng nguyên tắc 4.3 của đề án.
 - Project có schema mới hơn bản đang chạy bị từ chối mở, không đọc sai.
 
+### Gói chuyển máy `.vstudiopkg` (desktop ⇄ mobile)
+
+Một file duy nhất (tar ustar, file > 8 GiB dùng kích thước base-256 của GNU), theo thứ tự:
+`vstudiopkg.json` (`{"format":1,"name"}`), `project.json` (mọi URI media đổi thành `media/<tên>`), rồi các file media giữ nguyên (đã nén sẵn).
+
+- Đọc/ghi theo luồng từng khối 1 MiB, không nạp cả video vào RAM; ghi qua file `.part` rồi đổi tên, nên file dở dang không bao giờ trông như đã xong; hủy hoặc lỗi thì dọn sạch.
+- Khi giải nén, chỉ chấp nhận mục `media/<tên file>`: gói cố ý chứa `../` hay đường dẫn tuyệt đối bị từ chối.
+- Media đã có sẵn ở máy nhận (cùng kích thước và fingerprint) được dùng lại, không chép lần hai; trùng tên khác nội dung thì đặt tên mới và cập nhật project.
+- Media bị thiếu lúc đóng gói được bỏ qua và báo lại; ở máy nhận nó hiện là "thiếu file" và relink như thường.
+- Lõi: `vstudio/transfer.hpp`; C API: `vs_transfer_pack`, `vs_transfer_unpack` (chặn đến khi xong, chạy ngoài luồng UI, callback tiến độ trả về khác 0 để hủy).
+
 ## 6. Thư mục mã nguồn
 
 | Thư mục | Nội dung |

@@ -10,6 +10,9 @@
 #include <QSet>
 #include <QTimer>
 #include <QUrl>
+#include <functional>
+
+#include "vstudio/transfer.hpp"
 #include <QVariantList>
 #include <memory>
 #include <optional>
@@ -123,6 +126,14 @@ public:
     Q_INVOKABLE void relinkFromFolder(const QString& assetId, const QUrl& folder);
     Q_INVOKABLE void relinkToFile(const QString& assetId, const QUrl& file);
 
+    // ---- moving a project to another device (.vstudiopkg, vstudio/transfer.hpp) ----
+    // Both run in the background; progress goes to the status bar, the end to transferFinished.
+    Q_INVOKABLE void packProject(const QUrl& file);
+    // Unpacks next to the package (or into `destRoot`) and opens the new project.
+    Q_INVOKABLE void openPackage(const QUrl& file, const QUrl& destRoot = {});
+    [[nodiscard]] bool transferring() const { return transferring_; }
+    void cancelTransfer() { transferCancel_.cancel(); }
+
 signals:
     void projectChanged();
     void playheadChanged();
@@ -133,6 +144,8 @@ signals:
     void jobsChanged();
     void frameReady(const QImage& frame);
     void mediaLibraryChanged(const QString& assetId);  // a thumbnail strip or waveform is ready
+    // ok: packed / unpacked and opened; `path` is the package file or the opened project folder.
+    void transferFinished(bool ok, const QString& path, const QString& message);
 
 private:
     template <class F>
@@ -172,5 +185,10 @@ private:
     vstudio::CancelToken exportCancel_;
     QString status_;
     int pendingJobs_ = 0;
+    bool transferring_ = false;
+    vstudio::CancelToken transferCancel_;
+    void runTransfer(const QString& what, std::function<vstudio::TransferResult(const vstudio::TransferProgress&,
+                                                                                 const std::atomic<bool>*)> work,
+                     std::function<void(const vstudio::TransferResult&)> done);
     QTimer timer_;
 };
