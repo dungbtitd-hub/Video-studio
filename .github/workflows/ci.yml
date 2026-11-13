@@ -71,12 +71,25 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   core-windows:
-    name: Core (Windows, MSVC)
     runs-on: windows-2022
+    name: Core + FFmpeg (Windows, MSVC)
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
       - uses: actions/checkout@v4
+      # FFmpeg from vcpkg.json (LGPL build), compiled once and kept in the cache.
+      - uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-windows-
       - name: Configure
-        run: cmake -S . -B build -DVSTUDIO_WITH_FFMPEG=OFF
+        shell: bash
+        run: |
+          mkdir -p vcpkg-cache
+          cmake -S . -B build -DVCPKG_TARGET_TRIPLET=x64-windows \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          test -d build/adapters/ffmpeg  # fail here if FFmpeg was not found
       - name: Build
         run: cmake --build build --config Release
       - name: Tests

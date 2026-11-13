@@ -94,6 +94,7 @@ public:
     virtual bool writeVideo(const VideoFrame& frame, std::string* error) = 0;
     // Audio arrives contiguous from t = 0.
     virtual bool writeAudio(const AudioBuffer& audio, std::string* error) = 0;
+    // Flushes and finalizes the file; when it returns the file is complete and closed.
     virtual bool finish(std::string* error) = 0;
 };
 

@@ -581,8 +581,12 @@ public:
         }
         ok = queue(venc_.get(), vTrack_, nullptr, 0, toUs(Time::fromFrame(videoIndex_, s_.fps)), true, error) && ok;
         logI("encoder drained, stopping muxer");
-        if (started_) AMediaMuxer_stop(muxer_);
-        else return fail(error, "nothing was encoded");
+        if (!started_) return fail(error, "nothing was encoded");
+        AMediaMuxer_stop(muxer_);
+        AMediaMuxer_delete(muxer_);  // the file is complete and closed when finish() returns
+        muxer_ = nullptr;
+        ::close(fd_);
+        fd_ = -1;
         return ok;
     }
 

@@ -389,29 +389,41 @@ public:
         int e = avformat_alloc_output_context2(&fmt_, nullptr, s.container.c_str(), path.c_str());
         if (e < 0 || !fmt_) return fail(error, "cannot create output: " + avErr(e));
 
-        // Video
-        const AVCodec* vc = nullptr;
+        // Video. H.264 encoders in order of preference: x264 where the FFmpeg build has it,
+        // then the OS encoder (Media Foundation on Windows, VideoToolbox on macOS), then
+        // OpenH264. Hardware encoders can be listed but fail to open (no GPU, driver),
+        // so each is opened in turn; MPEG-4 Part 2 is the last resort.
+        std::vector<const AVCodec*> candidates;
         if (s.videoCodec == "h264") {
-            vc = avcodec_find_encoder_by_name("libx264");
-            if (!vc) vc = avcodec_find_encoder(AV_CODEC_ID_H264);
+            for (const char* n : {"libx264", "h264_mf", "h264_videotoolbox", "libopenh264"})
+                if (const AVCodec* c = avcodec_find_encoder_by_name(n)) candidates.push_back(c);
+            if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_H264)) candidates.push_back(c);
         }
-        if (!vc) vc = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
-        if (!vc) return fail(error, "no video encoder available");
+        if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_MPEG4)) candidates.push_back(c);
+        if (candidates.empty()) return fail(error, "no video encoder available");
+        std::string lastErr;
+        for (const AVCodec* vc : candidates) {
+            vctx_.reset(avcodec_alloc_context3(vc));
+            vctx_->width = s.width;
+            vctx_->height = s.height;
+            vctx_->pix_fmt = AV_PIX_FMT_YUV420P;  // every candidate above accepts it
+            vctx_->time_base = AVRational{static_cast<int>(s.fps.den), static_cast<int>(s.fps.num)};
+            vctx_->framerate = AVRational{static_cast<int>(s.fps.num), static_cast<int>(s.fps.den)};
+            vctx_->bit_rate = s.videoBitrate;
+            vctx_->thread_count = 0;
+            if (s.gopSize > 0) vctx_->gop_size = s.gopSize;
+            if (std::strcmp(vc->name, "libx264") == 0) {
+                av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "veryfast", 0);
+            } else if (std::strcmp(vc->name, "h264_mf") == 0) {
+                av_opt_set(vctx_->priv_data, "rate_control", "cbr", 0);  // honour bit_rate
+            }
+            if (fmt_->oformat->flags & AVFMT_GLOBALHEADER) vctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+            if ((e = avcodec_open2(vctx_.get(), vc, nullptr)) >= 0) break;
+            lastErr = std::string(vc->name) + ": " + avErr(e);
+            vctx_.reset();
+        }
+        if (!vctx_) return fail(error, "cannot open video encoder: " + lastErr);
         vst_ = avformat_new_stream(fmt_, nullptr);
-        vctx_.reset(avcodec_alloc_context3(vc));
-        vctx_->width = s.width;
-        vctx_->height = s.height;
-        vctx_->pix_fmt = AV_PIX_FMT_YUV420P;
-        vctx_->time_base = AVRational{static_cast<int>(s.fps.den), static_cast<int>(s.fps.num)};
-        vctx_->framerate = AVRational{static_cast<int>(s.fps.num), static_cast<int>(s.fps.den)};
-        vctx_->bit_rate = s.videoBitrate;
-        vctx_->thread_count = 0;
-        if (s.gopSize > 0) vctx_->gop_size = s.gopSize;
-        if (std::strcmp(vc->name, "libx264") == 0) {
-            av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "veryfast", 0);
-        }
-        if (fmt_->oformat->flags & AVFMT_GLOBALHEADER) vctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-        if ((e = avcodec_open2(vctx_.get(), vc, nullptr)) < 0) return fail(error, "cannot open video encoder: " + avErr(e));
         avcodec_parameters_from_context(vst_->codecpar, vctx_.get());
         vst_->time_base = vctx_->time_base;
         vst_->avg_frame_rate = vctx_->framerate;
@@ -472,6 +484,8 @@ public:
         if (actx_) ok = drainAudio(true, error) && encode(actx_.get(), ast_, nullptr, error);
         ok = encode(vctx_.get(), vst_, nullptr, error) && ok;
         const int e = av_write_trailer(fmt_);
+        // Close now, not in the destructor: on Windows an open file cannot be renamed.
+        if (!(fmt_->oformat->flags & AVFMT_NOFILE) && fmt_->pb) avio_closep(&fmt_->pb);
         if (e < 0) return fail(error, "cannot finalize file: " + avErr(e));
         return ok;
     }
