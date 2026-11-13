@@ -9,6 +9,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <utility>
 #include <optional>
 #include <string>
 #include <thread>
@@ -341,6 +343,7 @@ private:
 class Encoder final : public IMediaEncoder {
 public:
     ~Encoder() override {
+        clearQueues();
         if (writer_ && !finished_) [writer_ cancelWriting];
         if (afmt_) CFRelease(afmt_);
     }
@@ -412,7 +415,6 @@ public:
     bool writeVideo(const VideoFrame& f, std::string* error) override {
         if (f.width != s_.width || f.height != s_.height) return fail(error, "frame size mismatch");
         @autoreleasepool {
-            if (!waitReady(vin_, error)) return false;
             CVPixelBufferRef px = nullptr;
             if (CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, adaptor_.pixelBufferPool, &px) != kCVReturnSuccess)
                 return fail(error, "cannot allocate a pixel buffer");
@@ -431,10 +433,9 @@ public:
             }
             CVPixelBufferUnlockBaseAddress(px, 0);
             const CMTime pts = CMTimeMake(videoIndex_ * s_.fps.den, static_cast<int32_t>(s_.fps.num));
-            const BOOL ok = [adaptor_ appendPixelBuffer:px withPresentationTime:pts];
-            CVPixelBufferRelease(px);
             ++videoIndex_;
-            return ok ? true : fail(error, "video encode failed: " + str(writer_.error));
+            vq_.push_back({px, pts});
+            return pump(false, error);
         }
     }
 
@@ -455,10 +456,8 @@ public:
             CFRelease(block);
             if (st != noErr) return fail(error, "cannot wrap audio samples");
             audioFrames_ += frames;
-            const bool ready = waitReady(ain_, error);
-            const BOOL ok = ready && [ain_ appendSampleBuffer:sb];
-            CFRelease(sb);
-            return ok ? true : (ready ? fail(error, "audio encode failed: " + str(writer_.error)) : false);
+            aq_.push_back(sb);
+            return pump(false, error);
         }
     }
 
@@ -466,6 +465,7 @@ public:
         if (finished_) return true;
         finished_ = true;
         @autoreleasepool {
+            if (!pump(true, error)) return false;
             [vin_ markAsFinished];
             [ain_ markAsFinished];
             dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -484,16 +484,47 @@ private:
         return false;
     }
 
-    // Offline encode: wait for the input instead of dropping data. The writer
-    // interleaves tracks, so an input can be "not ready" while it waits for the other one.
-    bool waitReady(AVAssetWriterInput* in, std::string* error) {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (!in.readyForMoreMediaData) {
+    // AVAssetWriter interleaves tracks: an input reports "not ready" while it
+    // waits for the other track to catch up. So samples are queued per track
+    // and handed over whenever their input is ready; the caller only blocks
+    // when a queue is long (bounded memory) or when flushing at the end.
+    bool pump(bool flush, std::string* error) {
+        constexpr size_t kMaxQueued = 32;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        for (;;) {
+            bool progressed = false;
+            while (!vq_.empty() && vin_.readyForMoreMediaData) {
+                const auto [px, pts] = vq_.front();
+                vq_.pop_front();
+                const BOOL ok = [adaptor_ appendPixelBuffer:px withPresentationTime:pts];
+                CVPixelBufferRelease(px);
+                if (!ok) return fail(error, "video encode failed: " + str(writer_.error));
+                progressed = true;
+            }
+            while (!aq_.empty() && ain_.readyForMoreMediaData) {
+                CMSampleBufferRef sb = aq_.front();
+                aq_.pop_front();
+                const BOOL ok = [ain_ appendSampleBuffer:sb];
+                CFRelease(sb);
+                if (!ok) return fail(error, "audio encode failed: " + str(writer_.error));
+                progressed = true;
+            }
             if (writer_.status == AVAssetWriterStatusFailed) return fail(error, "encoder failed: " + str(writer_.error));
-            if (std::chrono::steady_clock::now() > deadline) return fail(error, "encoder stalled");
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const bool done = flush ? (vq_.empty() && aq_.empty()) : (vq_.size() < kMaxQueued && aq_.size() < kMaxQueued);
+            if (done) return true;
+            if (progressed) deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+            else if (std::chrono::steady_clock::now() > deadline)
+                return fail(error, "encoder stalled (queued video " + std::to_string(vq_.size()) + ", audio " +
+                                       std::to_string(aq_.size()) + ", status " + std::to_string(static_cast<int>(writer_.status)) + ")");
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
-        return true;
+    }
+
+    void clearQueues() {
+        for (auto& v : vq_) CVPixelBufferRelease(v.first);
+        for (auto* a : aq_) CFRelease(a);
+        vq_.clear();
+        aq_.clear();
     }
 
     ExportSettings s_;
@@ -502,6 +533,8 @@ private:
     AVAssetWriterInput* ain_ = nil;
     AVAssetWriterInputPixelBufferAdaptor* adaptor_ = nil;
     CMAudioFormatDescriptionRef afmt_ = nullptr;
+    std::deque<std::pair<CVPixelBufferRef, CMTime>> vq_;
+    std::deque<CMSampleBufferRef> aq_;
     std::int64_t videoIndex_ = 0, audioFrames_ = 0;
     bool finished_ = false;
 };
