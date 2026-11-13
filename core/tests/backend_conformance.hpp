@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -196,6 +197,7 @@ private:
         s.fps = {30, 1};
         const std::string out = (workDir() / ("out_" + clip)).string();
         auto res = exportProject(loaded, pool, *enc, out, s);
+        if (!res.ok) std::printf("       export error: %s\n", res.error.c_str());
         CHECK(res.ok);
         CHECK_EQ(res.framesWritten, 90);
         auto op = b->probe(out, &err);

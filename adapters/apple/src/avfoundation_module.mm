@@ -362,6 +362,12 @@ public:
                 AVVideoCodecKey : AVVideoCodecTypeH264,
                 AVVideoWidthKey : @(s.width),
                 AVVideoHeightKey : @(s.height),
+                // Tag the colour space so every decoder converts back with the same matrix.
+                AVVideoColorPropertiesKey : @{
+                    AVVideoColorPrimariesKey : AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey : AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey : AVVideoYCbCrMatrix_ITU_R_709_2,
+                },
                 AVVideoCompressionPropertiesKey : @{
                     AVVideoAverageBitRateKey : @(s.videoBitrate),
                     AVVideoMaxKeyFrameIntervalKey : @(s.gopSize > 0 ? s.gopSize : static_cast<int>(std::lround(fps * 2))),
