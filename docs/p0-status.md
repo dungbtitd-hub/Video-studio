@@ -13,11 +13,11 @@
 | Preview nền + đồng bộ A/V | Xong | luồng video, luồng audio, đồng hồ theo mẫu âm thanh |
 | Cache khung hình + proxy | Xong | xem `docs/benchmarks/` |
 | Export MP4 H.264/AAC | Xong (FFmpeg) | chạy nền, có tiến độ và hủy |
-| Desktop Qt shell | Xong (QML) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
-| Desktop Qt Widgets prototype | Chưa | đề án yêu cầu so sánh QML và Widgets trước khi chốt |
+| Desktop Qt shell | Xong (QML và Widgets) | nhập, preview, phát, tách, kéo, trim, undo, lưu/mở, export |
+| Desktop Qt Widgets prototype | Xong, chờ chốt | so sánh trong `docs/benchmarks/qml-vs-widgets.md`; đề xuất chọn Widgets, chờ đo trên máy Windows/macOS thật |
 | Module FFmpeg (Windows) | Code xong | CI Windows hiện build core không FFmpeg; cần thêm FFmpeg qua vcpkg |
 | Module Apple (macOS/iOS) | Chưa | AVFoundation/VideoToolbox, dùng chung macOS và iOS |
-| Module MediaCodec (Android) | Chưa | |
+| Module MediaCodec (Android) | Đang làm | nhánh `p0/android-mediacodec`, chưa build |
 | Flutter shell + FFI | Xong (chạy trên Linux) | FFI đã test end-to-end với core thật; chưa chạy trên điện thoại |
 | Preview mobile qua native texture | Chưa | hiện copy khung RGBA qua FFI |
 | CI 4 hệ điều hành | Xong (cấu hình) | Linux, macOS, Windows, Android, iOS, Flutter |
@@ -32,6 +32,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 
 ./build/tools/vstudio-cli/vstudio-cli demo out.mp4 clip1.mp4 clip2.mp4   # luồng P0 không giao diện
-./build/bin/VideoStudio clip1.mp4 clip2.mp4                              # ứng dụng desktop
+./build/bin/VideoStudio clip1.mp4 clip2.mp4                              # desktop bản QML
+./build/bin/VideoStudioWidgets clip1.mp4 clip2.mp4                       # desktop bản Widgets
+./build/bin/VideoStudioWidgets --bench-timeline 3000                     # đo độ mượt timeline (cả bản QML)
 ./build/bench/vstudio_bench                                              # benchmark
 ```

@@ -2,12 +2,11 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QImage>
 #include <QMetaObject>
-#include <QQuickWindow>
 
 #include "AudioOutput.h"
-#include "PreviewItem.h"
 #include "vstudio/project_io.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
@@ -55,6 +54,8 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
     editor_->markSaved();
     packageDir_ = packageDir;
     PreviewConfig cfg;
+    cfg.width = previewW_;
+    cfg.height = previewH_;
     preview_ = std::make_unique<PreviewEngine>(backend_, mediaBaseDir(s(packageDir)), cfg, &modules_);
     preview_->setFrameCallback([this](std::shared_ptr<const VideoFrame> f) {
         // Render thread -> UI thread. Wrap without copying; QImage keeps the frame alive.
@@ -62,9 +63,7 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
         QImage img((*holder)->rgba.data(), (*holder)->width, (*holder)->height, (*holder)->width * 4,
                    QImage::Format_RGBA8888, [](void* h) { delete static_cast<std::shared_ptr<const VideoFrame>*>(h); },
                    holder);
-        QMetaObject::invokeMethod(this, [this, img] {
-            if (previewItem_) previewItem_->setFrame(img);
-        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, img] { emit frameReady(img); }, Qt::QueuedConnection);
     });
     audio_ = std::make_unique<AudioOutput>(preview_.get(), editor_->project().sampleRate, editor_->project().audioChannels);
     selected_.clear();
@@ -74,16 +73,42 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
     emit playheadChanged();
 }
 
-void EditorController::attachPreview(PreviewItem* item) {
-    previewItem_ = item;
-    if (item) {
-        connect(item, &PreviewItem::sizeHintChanged, this, [this, item] {
-            preview_->setPreviewSize(std::max(16, int(item->width() * item->window()->devicePixelRatio())),
-                                     std::max(16, int(item->height() * item->window()->devicePixelRatio())));
-            preview_->requestFrame(fromSecs(playhead_));
-        });
-    }
+void EditorController::setPreviewSize(int w, int h) {
+    previewW_ = std::max(16, w);
+    previewH_ = std::max(16, h);
+    preview_->setPreviewSize(previewW_, previewH_);
     preview_->requestFrame(fromSecs(playhead_));
+}
+
+void EditorController::refreshPreview() { preview_->requestFrame(fromSecs(playhead_)); }
+
+void EditorController::loadSyntheticProject(int clips) {
+    // Timeline-only stress project: assets point at files that do not exist,
+    // which is fine because edits and timeline drawing never touch media.
+    Project p = Editor::newProject("Stress " + std::to_string(clips), 1920, 1080, {30, 1}, ModuleRegistry::currentPlatform());
+    resetSession(std::move(p), {});
+    std::vector<Id> assets;
+    for (int i = 0; i < 40; ++i) {
+        MediaAsset a;
+        a.uri = "synthetic/clip" + std::to_string(i) + ".mp4";
+        a.duration = Time::fromSeconds(600);
+        a.width = 1920;
+        a.height = 1080;
+        a.fps = {30, 1};
+        a.hasVideo = true;
+        a.audio = AudioInfo{48000, 2, "aac"};
+        assets.push_back(editor_->addAsset(a));
+    }
+    const Id v2 = editor_->addTrack(TrackType::Video, "Video 2");
+    const Id v1 = editor_->addTrack(TrackType::Video, "Video 1");
+    const Id a1 = editor_->addTrack(TrackType::Audio, "Audio 1");
+    for (int i = 0; i < clips; ++i) {
+        const Id& asset = assets[i % assets.size()];
+        const Id track = i % 3 == 0 ? v2 : (i % 3 == 1 ? v1 : a1);
+        editor_->appendClip(track, asset, Time::fromSeconds(1), Time::fromSeconds(1 + 2 + (i % 5)));
+    }
+    editor_->markSaved();
+    published();
 }
 
 void EditorController::newProject(const QString& name, int w, int h, int fps) {
@@ -195,8 +220,9 @@ bool EditorController::edit(F&& f) {
 }
 
 void EditorController::published() {
-    preview_->setProject(editor_->snapshot());
-    rebuildModels();
+    snapshot_ = editor_->snapshot();
+    preview_->setProject(snapshot_);
+    assetsDirty_ = tracksDirty_ = true;
     emit projectChanged();
 }
 
@@ -344,8 +370,19 @@ void EditorController::tick() {
     }
 }
 
-void EditorController::rebuildModels() {
-    const Project& p = editor_->project();
+QVariantList EditorController::assets() const {
+    if (assetsDirty_) buildAssetsModel();
+    return assets_;
+}
+
+QVariantList EditorController::tracks() const {
+    if (tracksDirty_) buildTracksModel();
+    return tracks_;
+}
+
+void EditorController::buildAssetsModel() const {
+    assetsDirty_ = false;
+    const Project& p = *snapshot_;
     assets_.clear();
     for (const auto& a : p.assets) {
         QVariantMap m;
@@ -356,7 +393,14 @@ void EditorController::rebuildModels() {
         m["resolution"] = a.width ? QString("%1×%2").arg(a.width).arg(a.height) : QString();
         assets_.push_back(m);
     }
+}
+
+void EditorController::buildTracksModel() const {
+    tracksDirty_ = false;
+    const Project& p = *snapshot_;
     tracks_.clear();
+    QHash<QString, QString> names;  // asset id -> file name, once per asset
+    for (const auto& a : p.assets) names.insert(q(a.id), QFileInfo(q(a.uri)).fileName());
     // Top video track first, like the prototype; audio tracks below.
     std::vector<const Track*> order;
     for (auto it = p.tracks.rbegin(); it != p.tracks.rend(); ++it)
@@ -372,12 +416,11 @@ void EditorController::rebuildModels() {
         tm["locked"] = t->locked;
         QVariantList clips;
         for (const auto& c : t->clips) {
-            const MediaAsset* a = p.findAsset(c.assetId);
             QVariantMap cm;
             cm["id"] = q(c.id);
             cm["start"] = secs(c.timelineIn);
             cm["duration"] = secs(c.duration());
-            cm["name"] = a ? QFileInfo(q(a->uri)).fileName() : QString("?");
+            cm["name"] = names.value(q(c.assetId), QStringLiteral("?"));
             cm["hasFx"] = c.effects.is_array() && !c.effects.empty();
             clips.push_back(cm);
         }

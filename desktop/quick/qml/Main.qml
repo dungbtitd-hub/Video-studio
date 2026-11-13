@@ -154,8 +154,8 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 10; spacing: 8
                         PreviewItem {
                             id: preview
+                            objectName: "preview"   // wired to the controller in main.cpp
                             Layout.fillWidth: true; Layout.fillHeight: true
-                            Component.onCompleted: editor.attachPreview(preview)
                         }
                         RowLayout {
                             Layout.fillWidth: true; spacing: 6

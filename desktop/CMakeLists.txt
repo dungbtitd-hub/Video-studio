@@ -1,27 +1,22 @@
-# Qt 6 desktop shell (Windows, macOS; Linux for development/CI).
-# P0 builds the Qt Quick (QML) variant; the plan also asks for a Widgets
-# prototype before choosing - see docs/p0-status.md.
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Multimedia)
+# Qt 6 desktop shells (Windows, macOS; Linux for development/CI).
+# Two P0 front-ends share one controller (common/) so they can be compared
+# on equal terms before choosing the desktop UI technology:
+#   quick/   Qt Quick (QML)   -> bin/VideoStudio
+#   widgets/ Qt Widgets       -> bin/VideoStudioWidgets
+# See docs/benchmarks/qml-vs-widgets.md.
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Multimedia)
 qt_standard_project_setup()
 
-qt_add_executable(VideoStudio
-  src/main.cpp
-  src/EditorController.cpp src/EditorController.h
-  src/PreviewItem.cpp src/PreviewItem.h
-  src/AudioOutput.cpp src/AudioOutput.h
+# UI-independent glue: owns the core session, preview engine and audio output.
+qt_add_library(vstudio_desktop_common STATIC
+  common/EditorController.cpp common/EditorController.h
+  common/AudioOutput.cpp common/AudioOutput.h
 )
-# Must be set before qt_add_qml_module.
-set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
-qt_add_qml_module(VideoStudio
-  URI VideoStudio
-  VERSION 1.0
-  QML_FILES qml/Main.qml qml/Theme.qml qml/TimelineView.qml
-)
-target_include_directories(VideoStudio PRIVATE src)
-target_link_libraries(VideoStudio PRIVATE Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia vstudio::core)
+target_include_directories(vstudio_desktop_common PUBLIC common)
+target_link_libraries(vstudio_desktop_common PUBLIC Qt6::Core Qt6::Gui Qt6::Multimedia vstudio::core)
 if(VSTUDIO_WITH_FFMPEG)
-  target_link_libraries(VideoStudio PRIVATE vstudio::ffmpeg)
+  target_link_libraries(vstudio_desktop_common PUBLIC vstudio::ffmpeg)
 endif()
-# The QML module folder is also called VideoStudio, so the binary goes to bin/.
-set_target_properties(VideoStudio PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON
-  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+add_subdirectory(quick)
+add_subdirectory(widgets)
