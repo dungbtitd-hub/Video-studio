@@ -211,6 +211,15 @@ public:
     // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated);
     // an overlay's region takes the box `to` exactly (any shape).
     void setObjectCanvasRect(const QRectF& from, const QRectF& to);
+    // Live preview while a gesture runs (corner drag, slider): the picture follows at once, nothing is
+    // edited until the gesture ends with setObjectCanvasRect / updateContent; endLive() drops it.
+    void previewObjectCanvasRect(const QRectF& from, const QRectF& to);
+    void previewContent(const vstudio::Json& patch);
+    void endLive();
+    // Effective size of the selected sticker at the playhead: content "size" x transform scale (canvas px).
+    [[nodiscard]] double stickerDisplaySize() const;
+    // Sets the effective size: content "size" = px / scale at the playhead (live: preview only).
+    void setStickerDisplaySize(double px, bool live);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }
@@ -277,6 +286,9 @@ private:
     int previewW_ = 960, previewH_ = 540;
     QString packageDir_;
     QString recentFile_;
+    bool live_ = false;  // the preview shows a gesture's live result, not snapshot_
+    [[nodiscard]] std::function<void(vstudio::Editor&)> objectRectEdit(const QRectF& from, const QRectF& to) const;
+    void showLive(const std::function<void(vstudio::Editor&)>& fn);
     std::shared_ptr<const vstudio::VideoFrame> lastFrame_;  // poster for the project's card at save
     std::shared_ptr<const vstudio::Project> snapshot_;
     mutable QVariantList assets_, tracks_;

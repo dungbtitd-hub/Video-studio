@@ -270,6 +270,8 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
         d->raise();
     });
     connect(preview_, &PreviewWidget::objectRectChanged, editor_, &EditorController::setObjectCanvasRect);
+    connect(preview_, &PreviewWidget::objectRectChanging, editor_, &EditorController::previewObjectCanvasRect);
+    connect(preview_, &PreviewWidget::objectRectCancelled, editor_, &EditorController::endLive);
     // Region on the preview follows the active cover; dragging it there edits the cover.
     connect(editor_, &EditorController::coversChanged, this, &MainWindow::refreshCoverOverlay);
     connect(preview_, &PreviewWidget::coverRectChanged, editor_, &EditorController::setCoverCanvasRect);

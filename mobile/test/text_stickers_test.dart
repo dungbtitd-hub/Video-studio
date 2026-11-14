@@ -68,8 +68,10 @@ void main() {
   });
 
   group('box on the preview', () {
+    final live = <Rect>[];
     Future<List<(Rect, Rect)>> pumpOverlay(WidgetTester tester, {bool freeShape = false}) async {
       final changes = <(Rect, Rect)>[];
+      live.clear();
       await tester.pumpWidget(MaterialApp(
         home: Center(
           child: SizedBox(
@@ -79,6 +81,7 @@ void main() {
               canvasSize: const Size(1920, 1080),
               rect: const Rect.fromLTWH(0.25, 0.2, 0.5, 0.4),
               onChanged: (a, b) => changes.add((a, b)),
+              onChanging: (_, b) => live.add(b),
               freeShape: freeShape,
             ),
           ),
@@ -95,10 +98,12 @@ void main() {
         await g.moveBy(const Offset(10, 5.625));
         await tester.pump();
       }
-      expect(changes, isEmpty);
+      expect(changes, isEmpty); // nothing edited while the finger moves...
+      expect(live.length, greaterThanOrEqualTo(3)); // ...but the picture follows it live
       await g.up();
       await tester.pump();
       final (from, to) = changes.single;
+      expect(live.last, to);
       expect(from, const Rect.fromLTWH(0.25, 0.2, 0.5, 0.4));
       expect(to.left, closeTo(0.35, 0.02));
       expect(to.top, closeTo(0.3, 0.02));
@@ -262,7 +267,7 @@ void main() {
     final vs = VStudio.create('ffi-sticker-sheet', width: 640, height: 360);
     addTearDown(vs.dispose);
     final picked = <String>[];
-    final patches = <Map<String, dynamic>>[];
+    final patches = <Map<String, dynamic>>[], lives = <Map<String, dynamic>>[];
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: Align(
@@ -277,6 +282,8 @@ void main() {
                 return vs.defaultSticker(id);
               },
               onPatch: patches.add,
+              onLive: lives.add,
+              scale: () => 2, // pinched to twice the size
             ),
           ),
         ),
@@ -298,6 +305,11 @@ void main() {
     await tester.pump();
     expect(patches[0], {'flip': true});
     expect(patches[1]['size'], isA<double>());
+    expect(lives, isNotEmpty); // the sticker grew while the slider moved
+    expect(lives.last['size'], patches[1]['size']);
+    // The slider shows the size as seen (content size x scale): 320 x 2 = 640 px, then a bit more.
+    final shown = tester.widget<Slider>(find.byKey(const Key('sticker-size'))).value;
+    expect(shown, closeTo((patches[1]['size'] as double) * 2, 2));
     await tester.tap(find.text('Lặp lại'));
     await tester.pump();
     await tester.ensureVisible(find.byKey(const Key('anim-loop-pulse')));

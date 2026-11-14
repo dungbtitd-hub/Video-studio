@@ -324,6 +324,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       });
       _scheduleSave();
     } on VStudioException catch (e) {
+      vs.liveEnd(); // a refused edit drops any live preview of it
       setState(() => _status = e.message);
     }
   }
@@ -628,8 +629,32 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         onPatch: (p) {
           if (target != null) _patchObject(target!, p);
         },
+        onLive: (p) {
+          if (target != null) _live((vs) => vs.liveClipContent(target!, p));
+        },
+        scale: () {
+          final id = target;
+          if (id == null) return 1.0;
+          try {
+            final st = vs.clipStateAt(id, _playhead);
+            return st.inside ? st.scale : 1.0;
+          } on VStudioException {
+            return 1.0;
+          }
+        },
       ),
     );
+  }
+
+  /// A gesture's live preview: the picture follows at once, nothing is edited or saved.
+  void _live(void Function(VStudio vs) f) {
+    final vs = _vs;
+    if (vs == null) return;
+    try {
+      f(vs);
+    } on VStudioException {
+      // refused (e.g. too small): the preview keeps the last good one
+    }
   }
 
   /// "Lớp phủ": overlay effects; picking one lays it over the whole frame from the playhead.
@@ -665,6 +690,20 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   }
 
   /// The object's box was dragged / pinched on the preview: one edit (a key when it is animated).
+  /// The selected text/sticker/overlay follows the fingers live (one edit when they lift).
+  void _previewObject(Rect from, Rect to) {
+    final clip = _selectedObject, project = _project;
+    if (clip == null || project == null) return;
+    _live((vs) {
+      if (clip.kind == 'overlay') return vs.liveOverlayRegion(clip.id, _playhead, to.left, to.top, to.width, to.height);
+      final st = vs.clipStateAt(clip.id, _playhead);
+      if (!st.inside) return;
+      final t = objectTransform(
+          Size(project.canvasWidth.toDouble(), project.canvasHeight.toDouble()), from, to, st.x, st.y, st.scale);
+      vs.livePropertyAt(clip.id, _playhead, {'scale': t.scale, 'x': t.x, 'y': t.y});
+    });
+  }
+
   void _commitObject(Rect from, Rect to) {
     final vs = _vs, clip = _selectedObject, project = _project;
     if (vs == null || clip == null || project == null) return;
@@ -699,6 +738,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
         rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
         onChanged: _commitObject,
+        onChanging: _previewObject,
         onDoubleTap: switch (clip.kind) { 'text' => _text, 'overlay' => _overlays, _ => _stickers },
         freeShape: clip.kind == 'overlay',
       ),

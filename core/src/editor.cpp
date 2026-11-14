@@ -693,6 +693,16 @@ void Editor::setClipLut(const std::vector<Id>& clipIds, const std::string& path,
 bool Editor::undo() { return history_.undo(project_); }
 bool Editor::redo() { return history_.redo(project_); }
 
+std::shared_ptr<const Project> Editor::preview(const std::function<void(Editor&)>& edit) const {
+    Editor scratch(project_);
+    try {
+        edit(scratch);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+    return std::make_shared<const Project>(std::move(scratch.project_));
+}
+
 std::shared_ptr<const Project> Editor::snapshot() {
     if (!snapshot_ || snapshotRevision_ != history_.revision()) {
         snapshot_ = std::make_shared<const Project>(project_);

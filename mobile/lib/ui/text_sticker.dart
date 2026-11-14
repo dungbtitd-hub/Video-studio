@@ -512,11 +512,24 @@ class _SheetFrame extends StatelessWidget {
 
 /// The sticker tool: pick from the library (adds one at the playhead), then size and animate it.
 class StickerSheet extends StatefulWidget {
-  const StickerSheet({super.key, required this.vs, required this.content, required this.onPick, required this.onPatch});
+  const StickerSheet(
+      {super.key,
+      required this.vs,
+      required this.content,
+      required this.onPick,
+      required this.onPatch,
+      this.onLive,
+      this.scale});
   final VStudio vs;
   final Map<String, dynamic>? content; // the selected sticker, if any
   final Map<String, dynamic>? Function(String stickerId) onPick; // returns the new sticker's content
   final ValueChanged<Map<String, dynamic>> onPatch;
+
+  /// While the size slider moves: the sticker follows live (committed with [onPatch] on release).
+  final ValueChanged<Map<String, dynamic>>? onLive;
+
+  /// The sticker's scale at the playhead (pinch / corner drag), so "Cỡ" shows the size as seen.
+  final double Function()? scale;
 
   @override
   State<StickerSheet> createState() => _StickerSheetState();
@@ -599,7 +612,8 @@ class _StickerSheetState extends State<StickerSheet> {
       return const Center(
           child: Text('Chọn một sticker để chỉnh cỡ và hiệu ứng', style: TextStyle(color: VsColors.fg3)));
     }
-    final size = _size ?? ((c['size'] ?? 320) as num).toDouble();
+    final scale = math.max(0.05, widget.scale?.call() ?? 1.0);
+    final size = _size ?? ((c['size'] ?? 320) as num).toDouble() * scale;
     return SingleChildScrollView(
       child: Column(children: [
         Row(children: [
@@ -607,16 +621,21 @@ class _StickerSheetState extends State<StickerSheet> {
           Expanded(
             child: Slider(
               key: const Key('sticker-size'),
-              min: 40,
-              max: 1000,
-              value: size.clamp(40, 1000).toDouble(),
-              onChanged: (v) => setState(() => _size = v),
+              min: 20,
+              max: 2000,
+              value: size.clamp(20, 2000).toDouble(),
+              onChanged: (v) {
+                setState(() => _size = v);
+                widget.onLive?.call({'size': (v / scale).roundToDouble()});
+              },
               onChangeEnd: (v) {
                 _size = null;
-                _patch({'size': v.roundToDouble()});
+                _patch({'size': (v / scale).roundToDouble()});
               },
             ),
           ),
+          SizedBox(
+              width: 56, child: Text('${size.round()} px', style: const TextStyle(fontSize: 12, color: VsColors.fg2))),
         ]),
         Wrap(spacing: 8, children: [
           FilterChip(
@@ -849,6 +868,7 @@ class ObjectOverlay extends StatefulWidget {
       required this.rect,
       required this.onChanged,
       this.onDoubleTap,
+      this.onChanging,
       this.freeShape = false});
   final Size canvasSize;
   final Rect rect;
@@ -856,6 +876,9 @@ class ObjectOverlay extends StatefulWidget {
   /// The corner resizes freely (an overlay's region) instead of scaling with the shape kept.
   final bool freeShape;
   final void Function(Rect from, Rect to) onChanged;
+
+  /// While the fingers move: the object follows live (nothing is edited until [onChanged]).
+  final void Function(Rect from, Rect to)? onChanging;
   final VoidCallback? onDoubleTap;
 
   @override
@@ -868,6 +891,11 @@ class _ObjectOverlayState extends State<ObjectOverlay> {
   Offset _from = Offset.zero;
   Rect _start = Rect.zero;
   static const handle = 28.0;
+
+  void _setLive(Rect n) {
+    setState(() => _live = n);
+    widget.onChanging?.call(widget.rect, n);
+  }
 
   Rect _canvas(Size box) {
     final c = widget.canvasSize;
@@ -899,7 +927,7 @@ class _ObjectOverlayState extends State<ObjectOverlay> {
               // The top-left stays, the bottom-right corner follows the finger.
               final br = _start.bottomRight + delta;
               if (br.dx - _start.left < 16 || br.dy - _start.top < 16) return;
-              setState(() => _live = toNorm(Rect.fromPoints(_start.topLeft, br)));
+              _setLive(toNorm(Rect.fromPoints(_start.topLeft, br)));
               return;
             }
             if (_corner) {
@@ -914,7 +942,7 @@ class _ObjectOverlayState extends State<ObjectOverlay> {
             }
             if (_start.shortestSide * k < 10) return;
             final n = Rect.fromCenter(center: centre, width: _start.width * k, height: _start.height * k);
-            setState(() => _live = toNorm(n));
+            _setLive(toNorm(n));
           },
           onScaleEnd: (_) {
             final live = _live;

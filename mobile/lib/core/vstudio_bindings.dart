@@ -189,6 +189,15 @@ class VStudioBindings {
         stickerIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_sticker_icon'),
         overlaysJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_overlays_json'),
+        livePropertyAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64, CStr),
+            int Function(Pointer<VsSession>, CStr, int, CStr)>('vs_live_property_at'),
+        liveOverlayRegion = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Int64, Double, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_live_overlay_region'),
+        liveClipContent = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_live_clip_content'),
+        liveEnd =
+            lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_live_end'),
         recentProjectsJson = lib.lookupFunction<CStr Function(CStr, CStr, Int32, Int32, CStr),
             CStr Function(CStr, CStr, int, int, CStr)>('vs_recent_projects_json'),
         projectPoster = lib.lookupFunction<Int32 Function(CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>),
@@ -314,6 +323,10 @@ class VStudioBindings {
   final int Function(CStr, double, double, Pointer<Uint8>, int, int) contentPreview;
   final CStr Function() overlaysJson;
   final CStr Function(CStr, CStr, int, int, CStr) recentProjectsJson;
+  final int Function(Pointer<VsSession>, CStr, int, CStr) livePropertyAt;
+  final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) liveOverlayRegion;
+  final int Function(Pointer<VsSession>, CStr, CStr) liveClipContent;
+  final void Function(Pointer<VsSession>) liveEnd;
   final int Function(CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>) projectPoster;
   final CStr Function(CStr) defaultOverlayJson;
   final int Function(CStr, double, Pointer<Uint8>, int, int) overlayIcon;

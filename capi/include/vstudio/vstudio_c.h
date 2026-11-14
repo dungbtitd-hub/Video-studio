@@ -268,6 +268,17 @@ VS_API char* vs_transfer_pack(vs_session* s, const char* out_file, vs_transfer_p
 VS_API char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_transfer_progress progress,
                                 void* user);
 
+/* ---- live preview during a gesture (corner drag, pinch, slider) ----
+ * Each vs_live_* call shows the result of the matching edit (vs_set_property_at, vs_set_overlay_region,
+ * vs_update_clip_content) on the preview right away, without changing the project or the undo
+ * history. At the end of the gesture make the real edit (one undo step), or call vs_live_end to drop
+ * the preview (cancelled gesture). Any real edit replaces the live preview. */
+VS_API int vs_live_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json);
+VS_API int vs_live_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w,
+                                  double h);
+VS_API int vs_live_clip_content(vs_session* s, const char* clip_id, const char* patch_json);
+VS_API void vs_live_end(vs_session* s);
+
 /* ---- recent projects (the start screen's "continue" strip) ----
  * vs_save also writes a small card (name, length, clips) and a poster of the current preview frame into
  * the package, and a successful export marks the exported content, so these calls are instant: they read

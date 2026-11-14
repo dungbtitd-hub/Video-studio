@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 
 #include <memory>
@@ -127,6 +128,12 @@ public:
     [[nodiscard]] bool canRedo() const { return history_.canRedo(); }
     [[nodiscard]] std::string undoLabel() const { return history_.undoLabel(); }
     [[nodiscard]] std::string redoLabel() const { return history_.redoLabel(); }
+
+    // Live preview during a gesture (dragging a corner, pinching, moving a slider): runs `edit` on a
+    // scratch copy and returns the result for the preview engine. The project and the undo history
+    // are untouched; the gesture's end commits with the normal edit (one undo step). Returns nullptr
+    // when the edit is refused.
+    [[nodiscard]] std::shared_ptr<const Project> preview(const std::function<void(Editor&)>& edit) const;
 
     [[nodiscard]] const Project& project() const { return project_; }
     // Immutable copy for render threads; re-created only when the revision changed.

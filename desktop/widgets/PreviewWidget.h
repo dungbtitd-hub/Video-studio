@@ -32,6 +32,9 @@ signals:
     void regionSelected(const QRectF& normalized);  // 0..1 of the frame, frame aspect
     void coverRectChanged(const QRectF& normalized);  // cover moved/resized/drawn (on release)
     void objectRectChanged(const QRectF& from, const QRectF& to);  // text/sticker moved or scaled (on release)
+    // While dragging: the object follows the mouse live (no edit); cancelled = Esc or no move.
+    void objectRectChanging(const QRectF& from, const QRectF& to);
+    void objectRectCancelled();
 
 protected:
     void paintEvent(QPaintEvent*) override;

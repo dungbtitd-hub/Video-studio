@@ -546,4 +546,21 @@ void main() {
     expect(agoText(DateTime(2026, 1, 1, 10), now: DateTime(2026, 1, 1, 12)), '2 giờ trước');
     expect(lengthText(83), '1:23');
   }, skip: skip != null);
+
+  test('live preview of a gesture: nothing edited, no undo step', () {
+    final vs = VStudio.create('ffi-live', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final clip = vs.addGeneratedClip(vs.defaultSticker('heart_red'), 0, 3);
+    final before = vs.project().tracks.last.clips.single.content;
+    vs.livePropertyAt(clip, 0, {'scale': 2});
+    vs.liveClipContent(clip, {'size': 200});
+    expect(vs.project().tracks.last.clips.single.content, before);
+    expect(vs.clipStateAt(clip, 0).scale, 1);
+    expect(() => vs.livePropertyAt(clip, 0, {'nope': 1}), throwsA(isA<VStudioException>()));
+    vs.liveEnd();
+    vs.setPropertyAt(clip, 0, {'scale': 2}); // the gesture's end: one undo step
+    expect(vs.clipStateAt(clip, 0).scale, 2);
+    expect(vs.undo(), isTrue);
+    expect(vs.clipStateAt(clip, 0).scale, 1);
+  }, skip: skip);
 }

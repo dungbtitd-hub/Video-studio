@@ -103,7 +103,8 @@ nhật, Giáng sinh, Ngày lễ trong năm. The groups follow what video apps co
   - Font, size, colour, alignment, outline, shadow and label sliders, and the preset grid.
   - Sticker panel: pick a group, hover an icon to see it move, click to add. Size, flip and "alive".
   - Both panels have the animation box: in, out and loop, the two lengths, and a preview that plays in → rest → out.
-  - On the preview, drag the selected text or sticker to move it, or pull a corner to scale it about its centre.
+  - On the preview, drag the selected text or sticker to move it, or pull a corner to scale it about its centre;
+    it follows the mouse live (see below).
 - **Mobile:** the "Chữ" and "Sticker" tools in the bottom bar.
   - "Chữ" edits the selected text, or adds one. The sheet has three tabs: Chữ (text, font, size, alignment), Kiểu
     (presets, colours, outline, shadow, label) and Hiệu ứng (in, out, loop with a playing preview).
@@ -111,6 +112,17 @@ nhật, Giáng sinh, Ngày lễ trong năm. The groups follow what video apps co
     "alive" and the animations.
   - On the preview, drag the box to move, pinch or pull the corner to scale, double-tap to edit. The change is one
     edit when the fingers lift (a keyframe when the clip's picture is animated).
+
+### Resizing follows the hand
+
+Stickers and text grow, shrink and move with the mouse or fingers while the gesture runs, and the size, outline,
+shadow and label sliders change the picture while they move: nothing jumps on release. During the gesture the core
+renders the result of the edit on a scratch copy (`Editor::preview`, C API `vs_live_*`); the project and the undo
+history change only when the gesture ends, as one undo step. Esc (desktop) or a refused edit drops the live preview.
+
+The sticker "Cỡ" slider shows the size as seen on the canvas (content size × scale at the playhead, 20 to 2000 px),
+so it matches a corner drag or a pinch; moving it sets the content size for the current scale. Stickers are vectors
+drawn at the output resolution, so they stay sharp at any size.
 
 ## C API
 
