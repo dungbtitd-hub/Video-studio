@@ -16,7 +16,8 @@ double curveElapsed(List<(double, double)> keys, double base, double a, double b
     if (s >= keys.last.$1) return base * keys.last.$2;
     for (var i = 1; i < keys.length; i++) {
       if (s <= keys[i].$1) {
-        final (t0, v0) = keys[i - 1], (t1, v1) = keys[i];
+        final (t0, v0) = keys[i - 1];
+        final (t1, v1) = keys[i];
         return base * (t1 > t0 ? v0 + (v1 - v0) * (s - t0) / (t1 - t0) : v1);
       }
     }
@@ -37,6 +38,7 @@ double curveElapsed(List<(double, double)> keys, double base, double a, double b
   }
   return t;
 }
+
 int secondsToTicks(double s) => (s * ticksPerSecond).round();
 
 class ClipView {
