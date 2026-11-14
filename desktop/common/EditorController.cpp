@@ -1017,7 +1017,7 @@ void EditorController::setOverlayFullFrame() {
 std::optional<vstudio::Json> EditorController::selectedContent() const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated()) return std::nullopt;
-    return c->content;
+    return std::optional<vstudio::Json>(std::in_place, c->content);  // MSVC: Json converts to too many types
 }
 
 void EditorController::updateContent(const vstudio::Json& patch) {
