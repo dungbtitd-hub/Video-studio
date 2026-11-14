@@ -19,9 +19,11 @@
 #include <QHash>
 #include <QImage>
 #include <QMetaObject>
+#include <QStandardPaths>
 
 #include "AudioOutput.h"
 #include "vstudio/project_io.hpp"
+#include "vstudio/recents.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
 
@@ -90,11 +92,14 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
     preview_ = std::make_unique<PreviewEngine>(backend_, mediaBaseDir(s(packageDir)), cfg, &modules_);
     preview_->setFrameCallback([this](std::shared_ptr<const VideoFrame> f) {
         // Render thread -> UI thread. Wrap without copying; QImage keeps the frame alive.
-        auto* holder = new std::shared_ptr<const VideoFrame>(std::move(f));
+        auto* holder = new std::shared_ptr<const VideoFrame>(f);
         QImage img((*holder)->rgba.data(), (*holder)->width, (*holder)->height, (*holder)->width * 4,
                    QImage::Format_RGBA8888, [](void* h) { delete static_cast<std::shared_ptr<const VideoFrame>*>(h); },
                    holder);
-        QMetaObject::invokeMethod(this, [this, img] { emit frameReady(img); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, img, f = std::move(f)] {
+            lastFrame_ = f;
+            emit frameReady(img);
+        }, Qt::QueuedConnection);
     });
     audio_ = std::make_unique<AudioOutput>(preview_.get(), editor_->project().sampleRate, editor_->project().audioChannels);
     // Disk cache next to the project (or in temp until it is saved), keyed by file fingerprint.
@@ -168,6 +173,10 @@ void EditorController::openProject(const QUrl& folder) {
             setStatus(tr("Recovered unsaved changes"));
         }
         resetSession(std::move(p), dir);
+        try {
+            recents::RecentList(s(recentFile())).touch(s(dir));
+        } catch (...) {
+        }
         // Assets that already have a proxy from a previous session.
         for (const auto& a : editor_->project().assets) {
             const QString proxy = dir + "/cache/proxy/" + q(a.id) + ".mp4";
@@ -188,10 +197,50 @@ void EditorController::saveProject(const QUrl& folder) {
         if (dir != packageDir_) preview_->setProjectDir(mediaBaseDir(s(dir)));
         packageDir_ = dir;
         editor_->markSaved();
+        try {  // the start strip's card: name, length, a small poster of the preview
+            recents::writeCard(s(dir), editor_->project(), lastFrame_.get());
+            recents::RecentList(s(recentFile())).touch(s(dir));
+        } catch (...) {
+        }
         emit projectChanged();
         setStatus(tr("Saved %1").arg(dir));
     } catch (const std::exception& e) {
         setStatus(tr("Save failed: %1").arg(q(e.what())));
+    }
+}
+
+QString EditorController::recentFile() const {
+    if (!recentFile_.isEmpty()) return recentFile_;
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent.json";
+}
+
+QVariantList EditorController::recentProjects(bool unfinishedOnly, int max) const {
+    QVariantList out;
+    for (const auto& c : recents::startCards(s(recentFile()), {}, unfinishedOnly, static_cast<std::size_t>(std::max(0, max)),
+                                             s(packageDir_))) {
+        out.push_back(QVariantMap{{"path", q(c.path)},
+                                  {"name", q(c.name)},
+                                  {"savedAt", QVariant::fromValue<qint64>(c.savedAt)},
+                                  {"duration", c.duration},
+                                  {"clips", c.clips},
+                                  {"width", c.width},
+                                  {"height", c.height},
+                                  {"exported", c.exported},
+                                  {"hasPoster", c.hasPoster}});
+    }
+    return out;
+}
+
+QImage EditorController::projectPoster(const QString& packageDir) {
+    VideoFrame f;
+    if (!recents::readPoster(s(packageDir), f)) return {};
+    return QImage(f.rgba.data(), f.width, f.height, f.width * 4, QImage::Format_RGBA8888).copy();
+}
+
+void EditorController::forgetRecent(const QString& packageDir) {
+    try {
+        recents::RecentList(s(recentFile())).remove(s(packageDir));
+    } catch (...) {
     }
 }
 
@@ -764,8 +813,8 @@ void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
     emit exportChanged();
     auto snap = editor_->snapshot();  // frozen copy: editing continues during export
     const std::string out = s(file.toLocalFile());
-    const std::string base = mediaBaseDir(s(packageDir_));
-    jobs_->submit("export", JobPriority::Normal, [this, snap, es, out, base](const CancelToken& tok) {
+    const std::string base = mediaBaseDir(s(packageDir_)), package = s(packageDir_);
+    jobs_->submit("export", JobPriority::Normal, [this, snap, es, out, base, package](const CancelToken& tok) {
         MediaPool pool(backend_, base);
         auto enc = backend_->createEncoder();
         auto r = exportProject(*snap, pool, *enc, out, es, [this](const ExportProgress& p) {
@@ -775,6 +824,12 @@ void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
                 emit exportChanged();
             }, Qt::QueuedConnection);
         }, tok.flag(), &modules_);
+        if (r.ok && !package.empty()) {
+            try {
+                recents::markExported(package, *snap);  // no longer "unfinished" on the start strip
+            } catch (...) {
+            }
+        }
         QMetaObject::invokeMethod(this, [this, r, out] {
             exporting_ = false;
             emit exportChanged();

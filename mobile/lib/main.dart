@@ -18,6 +18,7 @@ import 'ui/cover_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
+import 'ui/recent_strip.dart';
 import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
@@ -67,6 +68,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   // Transitions: every place one can go (per video track), and the one being edited.
   Map<String, List<CutPoint>> _cuts = const {};
   CutPoint? _selectedCut;
+  // Unfinished projects shown at the bottom when the app opens, until work starts.
+  List<ProjectCard> _recent = const [];
+  bool _recentShown = false;
 
   @override
   void initState() {
@@ -97,6 +101,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       }
       if (!mounted) return vs.dispose();
       await _attach(vs, path);
+      _loadRecent();
       debugPrint('vstudio: core ${vs.version} ready'); // CI smoke test looks for this line
     } catch (e) {
       setState(() => _error = 'Không nạp được Video Studio Core: $e');
@@ -126,10 +131,30 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     vs.seek(0);
   }
 
+  /// Lists the other unfinished projects (small card files only, no media) and slides the strip in.
+  void _loadRecent() {
+    final store = _store;
+    if (store == null || !mounted) return;
+    try {
+      final cards = VStudio.recentProjects(store.projectsDir.path, exclude: _packagePath);
+      setState(() {
+        _recent = cards;
+        _recentShown = cards.isNotEmpty;
+      });
+    } catch (e) {
+      debugPrint('vstudio: recent projects unavailable: $e');
+    }
+  }
+
+  void _hideRecent() {
+    if (_recentShown) setState(() => _recentShown = false);
+  }
+
   /// Saves (if needed), releases the current session, then opens [path] or a new project.
   Future<void> _switchProject({String? path, String? newName}) async {
     final store = _store, old = _vs;
     if (store == null || old == null || path == _packagePath) return;
+    _hideRecent();
     _saveNow();
     _saveTimer?.cancel();
     old.pause();
@@ -293,7 +318,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (vs == null) return;
     try {
       f(vs);
-      setState(_refresh);
+      setState(() {
+        _refresh();
+        _recentShown = false; // work started: the "continue" strip slides away
+      });
       _scheduleSave();
     } on VStudioException catch (e) {
       setState(() => _status = e.message);
@@ -1126,103 +1154,118 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Container(
-              color: Colors.black,
-              alignment: Alignment.center,
-              child: _textureId != null && (_project?.duration ?? 0) > 0
-                  ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
-                  : _frame == null
-                      ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
-                      : AspectRatio(
-                          aspectRatio: _frame!.width / _frame!.height,
-                          child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
+      body: Stack(children: [
+        Column(
+          children: [
+            Expanded(
+              child: Container(
+                color: Colors.black,
+                alignment: Alignment.center,
+                child: _textureId != null && (_project?.duration ?? 0) > 0
+                    ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
+                    : _frame == null
+                        ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
+                        : AspectRatio(
+                            aspectRatio: _frame!.width / _frame!.height,
+                            child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
+              ),
             ),
-          ),
-          Container(
-            color: VsColors.panel,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Row(children: [
-              Text('${_playhead.toStringAsFixed(2)} s',
-                  style: const TextStyle(fontFeatures: [ui.FontFeature.tabularFigures()], color: VsColors.fg2)),
-              const Spacer(),
-              IconButton(
-                iconSize: 34,
-                color: VsColors.accent,
-                icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
-                onPressed: () {
-                  final vs = _vs!;
-                  if (vs.playing) {
-                    vs.pause();
-                  } else {
-                    vs.play(_playhead >= project.duration ? 0 : _playhead);
-                  }
+            Container(
+              color: VsColors.panel,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Row(children: [
+                Text('${_playhead.toStringAsFixed(2)} s',
+                    style: const TextStyle(fontFeatures: [ui.FontFeature.tabularFigures()], color: VsColors.fg2)),
+                const Spacer(),
+                IconButton(
+                  iconSize: 34,
+                  color: VsColors.accent,
+                  icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
+                  onPressed: () {
+                    final vs = _vs!;
+                    if (vs.playing) {
+                      vs.pause();
+                    } else {
+                      vs.play(_playhead >= project.duration ? 0 : _playhead);
+                    }
+                  },
+                ),
+                const Spacer(),
+                Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
+              ]),
+            ),
+            if (_coverMode && _selectedVideoClip != null)
+              _coverPanel(_vs!, _selectedVideoClip!)
+            else if (_selectedClip != null)
+              KeyframeBar(
+                state: keys,
+                video: _selectedVideoClip != null,
+                hasKeys: _selectedClip!.animated,
+                onToggle: _toggleKeyframe,
+                onJump: _jumpKeyframe,
+                onVolume: (v) {
+                  _edit((vs) => vs.setPropertyAt(_selectedClip!.id, _playhead, {'volume': v}));
                 },
               ),
-              const Spacer(),
-              Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
-            ]),
-          ),
-          if (_coverMode && _selectedVideoClip != null)
-            _coverPanel(_vs!, _selectedVideoClip!)
-          else if (_selectedClip != null)
-            KeyframeBar(
-              state: keys,
-              video: _selectedVideoClip != null,
-              hasKeys: _selectedClip!.animated,
-              onToggle: _toggleKeyframe,
-              onJump: _jumpKeyframe,
-              onVolume: (v) {
-                _edit((vs) => vs.setPropertyAt(_selectedClip!.id, _playhead, {'volume': v}));
-              },
-            ),
-          SizedBox(
-            height: 22 + 56.0 * (project.tracks.isEmpty ? 1 : project.tracks.length) + 8,
-            child: TimelineView(
-              project: project,
-              playhead: _playhead,
-              selectedClip: _selected,
-              onSeek: _seek,
-              onSelect: (id) => setState(() {
-                if (id != _selected) _activeCover = null;
-                _selected = id;
-                if (_selectedVideoClip == null) _coverMode = false;
-                if (_coverMode) _activeCover = _coverIds().firstOrNull;
-              }),
-              onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
-              onTrackFlags: (t, {required enabled, required locked, required muted}) =>
-                  _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
-              onTrackMenu: _trackMenu,
-              snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
-              onTrim: (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
-              snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
-              media: _media,
-              cuts: _cuts,
-              selectedCut: _selectedCut,
-              onCut: _transitions,
-            ),
-          ),
-          for (final a in project.assets.where((a) => _media.missing.contains(a.id)))
-            Material(
-              color: const Color(0xFF4A1C1C),
-              child: ListTile(
-                dense: true,
-                leading: const Icon(Icons.link_off, color: Color(0xFFFF8A80)),
-                title: Text('Không tìm thấy file: ${a.name}', style: const TextStyle(color: VsColors.fg, fontSize: 13)),
-                trailing: TextButton(onPressed: () => _relink(a.id), child: const Text('Chọn lại')),
+            SizedBox(
+              height: 22 + 56.0 * (project.tracks.isEmpty ? 1 : project.tracks.length) + 8,
+              child: TimelineView(
+                project: project,
+                playhead: _playhead,
+                selectedClip: _selected,
+                onSeek: _seek,
+                onSelect: (id) => setState(() {
+                  if (id != _selected) _activeCover = null;
+                  _selected = id;
+                  if (_selectedVideoClip == null) _coverMode = false;
+                  if (_coverMode) _activeCover = _coverIds().firstOrNull;
+                }),
+                onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
+                onTrackFlags: (t, {required enabled, required locked, required muted}) =>
+                    _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
+                onTrackMenu: _trackMenu,
+                snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
+                onTrim: (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
+                snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
+                media: _media,
+                cuts: _cuts,
+                selectedCut: _selectedCut,
+                onCut: _transitions,
               ),
             ),
-          if (_status != null)
-            Container(
-              width: double.infinity,
-              color: VsColors.panel,
-              padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
-              child: Text(_status!, style: const TextStyle(color: VsColors.fg3, fontSize: 11), maxLines: 1),
-            ),
-        ],
-      ),
+            for (final a in project.assets.where((a) => _media.missing.contains(a.id)))
+              Material(
+                color: const Color(0xFF4A1C1C),
+                child: ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.link_off, color: Color(0xFFFF8A80)),
+                  title:
+                      Text('Không tìm thấy file: ${a.name}', style: const TextStyle(color: VsColors.fg, fontSize: 13)),
+                  trailing: TextButton(onPressed: () => _relink(a.id), child: const Text('Chọn lại')),
+                ),
+              ),
+            if (_status != null)
+              Container(
+                width: double.infinity,
+                color: VsColors.panel,
+                padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+                child: Text(_status!, style: const TextStyle(color: VsColors.fg3, fontSize: 11), maxLines: 1),
+              ),
+          ],
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: RecentStrip(
+            cards: _recent,
+            shown: _recentShown,
+            onOpen: (c) => _switchProject(path: c.path),
+            onClose: _hideRecent,
+            onAll: _projectsMenu,
+          ),
+        ),
+      ]),
       bottomNavigationBar: BottomAppBar(
         color: VsColors.panel,
         // Scrolls sideways when the tools do not fit a narrow phone.

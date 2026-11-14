@@ -27,6 +27,7 @@
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/project_io.hpp"
+#include "vstudio/recents.hpp"
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 
@@ -65,6 +66,8 @@ struct vs_session {
     std::mutex frameMu;
     std::shared_ptr<const VideoFrame> latest;
     std::int64_t latestSerial = 0;
+    std::int64_t posterSerial = -1;  // the frame last written as the project's poster
+    std::string posterDir;
     // Native preview sink; sinkMu is held while it runs so removing it is a hard barrier.
     std::mutex sinkMu;
     vs_frame_sink sink = nullptr;
@@ -290,6 +293,17 @@ int vs_save(vs_session* s, const char* package_dir) {
         s->packageDir = dir;
         clearAutosave(dir);
         s->editor->markSaved();
+        std::shared_ptr<const VideoFrame> poster;
+        {
+            std::lock_guard lk(s->frameMu);
+            if (s->latestSerial != s->posterSerial || dir != s->posterDir) poster = s->latest;  // unchanged: keep it
+            s->posterSerial = s->latestSerial;
+        }
+        s->posterDir = dir;
+        try {
+            recents::writeCard(dir, s->editor->project(), poster.get());  // the start screen's card
+        } catch (...) {
+        }
     });
 }
 
@@ -1183,9 +1197,9 @@ void startExport(vs_session* s, const char* out_path, const ExportSettings& es) 
         s->exportStatus = VS_EXPORT_RUNNING;
         auto snap = s->editor->snapshot();  // export works on a frozen copy; editing can continue
         const std::string out = str(out_path);
-        const std::string base = mediaBaseDir(s->packageDir);
+        const std::string base = mediaBaseDir(s->packageDir), package = s->packageDir;
         s->jobs->submit("export", JobPriority::Normal,
-                        [s, snap, es, out, base](const CancelToken& tok) {
+                        [s, snap, es, out, base, package](const CancelToken& tok) {
                             MediaPool pool(s->backend, base);
                             auto enc = s->backend->createEncoder();
                             auto r = exportProject(*snap, pool, *enc, out, es,
@@ -1196,6 +1210,12 @@ void startExport(vs_session* s, const char* out_path, const ExportSettings& es) 
                             {
                                 std::lock_guard lk(s->exportErrMu);
                                 s->exportError = r.error;
+                            }
+                            if (r.ok && !package.empty()) {
+                                try {
+                                    recents::markExported(package, *snap);  // no longer "unfinished" at start
+                                } catch (...) {
+                                }
                             }
                             s->exportStatus = r.ok ? VS_EXPORT_DONE : (r.cancelled ? VS_EXPORT_CANCELLED : VS_EXPORT_FAILED);
                         },
@@ -1338,4 +1358,48 @@ char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_tra
         r.error = e.what();
         return transferJson(r);
     }
+}
+
+char* vs_recent_projects_json(const char* recent_file, const char* scan_dir, int unfinished_only, int max,
+                              const char* exclude) {
+    try {
+        Json out = Json::array();
+        for (const auto& c : recents::startCards(str(recent_file), str(scan_dir), unfinished_only != 0,
+                                                 static_cast<std::size_t>(std::max(0, max)), str(exclude)))
+            out.push_back(recents::toJson(c));
+        return dup(out.dump());
+    } catch (...) {
+        return dup("[]");
+    }
+}
+
+int vs_recent_touch(const char* recent_file, const char* package_dir) {
+    if (!recent_file || !*recent_file || !package_dir || !*package_dir) return -1;
+    try {
+        recents::RecentList(recent_file).touch(package_dir);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_recent_remove(const char* recent_file, const char* package_dir) {
+    if (!recent_file || !*recent_file || !package_dir) return -1;
+    try {
+        recents::RecentList(recent_file).remove(package_dir);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacity, int* width, int* height) {
+    VideoFrame f;
+    if (!package_dir || !recents::readPoster(package_dir, f)) return 0;
+    if (width) *width = f.width;
+    if (height) *height = f.height;
+    if (!dst) return 1;
+    if (dst_capacity < static_cast<int64_t>(f.rgba.size())) return -1;
+    std::memcpy(dst, f.rgba.data(), f.rgba.size());
+    return 1;
 }
