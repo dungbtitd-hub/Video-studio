@@ -16,6 +16,7 @@ class TextPanel;
 class StickerPanel;
 class OverlayPanel;
 class RecentStrip;
+class VideoFxPanel;
 class QListWidget;
 class QLabel;
 class QToolButton;
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] TextPanel* textPanel() const { return text_; }
     [[nodiscard]] StickerPanel* stickerPanel() const { return stickers_; }
     [[nodiscard]] OverlayPanel* overlayPanel() const { return overlays_; }
+    [[nodiscard]] VideoFxPanel* videoFxPanel() const { return videoFx_; }
     [[nodiscard]] PreviewWidget* preview() const { return preview_; }
     [[nodiscard]] RecentStrip* recentStrip() const { return recent_; }
     // Fills the "continue" strip with unfinished projects and slides it in (at start).
@@ -72,6 +74,7 @@ private:
     TextPanel* text_;
     StickerPanel* stickers_;
     OverlayPanel* overlays_;
+    VideoFxPanel* videoFx_;
     RecentStrip* recent_;
     QListWidget* assets_;
     QLabel* timecode_;

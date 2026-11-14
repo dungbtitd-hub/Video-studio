@@ -120,6 +120,11 @@ public:
     QString selectedClip() const { return selected_; }
     // Colour looks (vstudio/looks.hpp): one undo step for any number of clips; "" removes.
     void setClipLook(const QStringList& clipIds, const QString& lookId, double strength);
+    // Video effects (vstudio/video_fx.hpp): zoom / rotate / reflect, one per group; "" removes the group's.
+    void setClipVideoFx(const QStringList& clipIds, const QString& group, const QString& fxId, double amount = 1.0,
+                        double speed = 1.0, double line = -1.0);
+    // The group's effect on a clip: {fx, amount, speed, line}; empty when none.
+    [[nodiscard]] QVariantMap clipVideoFx(const QString& clipId, const QString& group) const;
     // Look on a clip: (look id, strength); empty id if none.
     [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
     [[nodiscard]] QString clipAsset(const QString& clipId) const;

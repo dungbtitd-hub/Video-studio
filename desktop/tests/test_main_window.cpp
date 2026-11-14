@@ -33,6 +33,7 @@
 #include "OverlayPanel.h"
 #include "TextPanel.h"
 #include "RecentStrip.h"
+#include "VideoFxPanel.h"
 #include <QPlainTextEdit>
 #include <QMimeData>
 
@@ -160,6 +161,39 @@ private slots:
                 QVERIFY(m["estimatedBytes"].toLongLong() > 0);
             }
         }
+    }
+
+    void videoEffects() {
+        VideoFxPanel* panel = win_->videoFxPanel();
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString clip = QString::fromStdString(v1.clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        // Zoom group first; each thumbnail is drawn.
+        QCOMPARE(panel->group()->currentData().toString(), QString("zoom"));
+        QVERIFY(panel->list()->count() >= 6);
+        QVERIFY(!panel->list()->item(0)->icon().isNull());
+        emit panel->list()->itemClicked(panel->list()->item(0));
+        QCOMPARE(ctrl_->clipVideoFx(clip, "zoom").value("fx").toString(), QString("zoom_in"));
+        // Reflections: water, with the surface line slider; combined with the zoom.
+        panel->group()->setCurrentIndex(panel->group()->findData("reflect"));
+        QListWidgetItem* water = nullptr;
+        for (int i = 0; i < panel->list()->count(); ++i)
+            if (panel->list()->item(i)->data(Qt::UserRole) == "reflect_water") water = panel->list()->item(i);
+        QVERIFY(water);
+        emit panel->list()->itemClicked(water);
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("fx").toString(), QString("reflect_water"));
+        QCOMPARE(ctrl_->clipVideoFx(clip, "zoom").value("fx").toString(), QString("zoom_in"));
+        QVERIFY(panel->line()->isEnabled());
+        panel->line()->setValue(70);
+        panel->amount()->setValue(150);
+        emit panel->line()->sliderReleased();
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("line").toDouble(), 0.7);
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("amount").toDouble(), 1.5);
+        // Remove the group's effect; undo brings it back.
+        panel->clearButton()->click();
+        QVERIFY(ctrl_->clipVideoFx(clip, "reflect").isEmpty());
+        ctrl_->undo();
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("fx").toString(), QString("reflect_water"));
     }
 
     void oneTapLooks() {

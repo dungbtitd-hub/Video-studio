@@ -121,6 +121,11 @@ public:
     void setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure = 0.0);
     // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.
     void setClipLut(const std::vector<Id>& clipIds, const std::string& path, double strength = 1.0);
+    // Video effects (video_fx.hpp): zoom, rotate or reflection; one of each group per clip, kept after
+    // colour effects and covers in the order zoom -> rotate -> reflect. `fxId` "" removes `group`'s.
+    // `line` (reflections) < 0 keeps the default. One undo step.
+    void setClipVideoFx(const std::vector<Id>& clipIds, const std::string& group, const std::string& fxId,
+                        double amount = 1.0, double speed = 1.0, double line = -1.0);
 
     bool undo();
     bool redo();
