@@ -1,5 +1,8 @@
 #include "vstudio/editor.hpp"
 
+#include <cmath>
+#include <limits>
+
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
 #include "vstudio/looks.hpp"
@@ -656,6 +659,195 @@ std::shared_ptr<const Project> Editor::snapshot() {
         snapshotRevision_ = history_.revision();
     }
     return snapshot_;
+}
+
+
+// ---------------------------------------------------------------- subtitles
+
+namespace {
+
+std::size_t topVideoIndex(const Project& p) {
+    std::size_t idx = 0;
+    for (std::size_t i = 0; i < p.tracks.size(); ++i)
+        if (p.tracks[i].type == TrackType::Video) idx = i + 1;
+    return idx;
+}
+
+Json subtitleSettingsFor(const Project& p, const Json& patch) {
+    Json set = subtitles::defaultTrackSettings();
+    // 5.2 % of the short side: ~56 px on 1080p, as large on a vertical 1080x1920 video.
+    set["style"]["size"] = std::round(std::min(p.canvas.width, p.canvas.height) * 0.052);
+    if (patch.is_object()) set.merge_patch(patch);
+    return set;
+}
+
+Track& requireSubtitleTrack(Project& p, const Id& trackId) {
+    Track* t = p.findTrack(trackId);
+    if (!t || !subtitles::isSubtitleTrack(*t)) throw EditError("not a subtitle track");
+    if (t->locked) throw EditError("track is locked: " + t->name);
+    return *t;
+}
+
+Clip cueClip(const Project& p, Time start, Time end, const std::string& text) {
+    Clip c;
+    c.id = newId();
+    c.timelineIn = start;
+    c.sourceIn = Time::zero();
+    c.sourceOut = std::max(Time::fromFrame(1, p.fps), end - start);
+    c.content = subtitles::cueContent(text);
+    return c;
+}
+
+}  // namespace
+
+Id Editor::addSubtitleTrack(const std::string& name, const Json& settings) {
+    Track t;
+    t.id = newId();
+    t.type = TrackType::Video;
+    t.name = name.empty() ? "Phụ đề" : name;
+    t.extra[subtitles::kExtraKey] = subtitleSettingsFor(project_, settings);
+    const Id id = t.id;
+    const std::size_t index = topVideoIndex(project_);
+    run("Add subtitle track", EditCommand::Scope::AllTracks, {}, [t, index](Project& p) { edit::addTrack(p, t, index); });
+    return id;
+}
+
+Id Editor::addSubtitle(const Id& trackId, Time at, const std::string& text, Time duration) {
+    const Time frame = Time::fromFrame(1, project_.fps);
+    Id target = trackId;
+    if (target.empty()) {
+        for (std::size_t i = project_.tracks.size(); i-- > 0;)
+            if (subtitles::isSubtitleTrack(project_.tracks[i]) && !project_.tracks[i].locked) {
+                target = project_.tracks[i].id;
+                break;
+            }
+    }
+    const Track* existing = target.empty() ? nullptr : project_.findTrack(target);
+    if (!target.empty() && (!existing || !subtitles::isSubtitleTrack(*existing))) throw EditError("not a subtitle track");
+    if (existing && existing->locked) throw EditError("track is locked: " + existing->name);
+    Time start = std::max(Time::zero(), at).snapToFrame(project_.fps);
+    Time limit = Time::fromTicks(std::numeric_limits<std::int64_t>::max() / 4);
+    if (existing) {
+        if (const Clip* under = existing->clipAt(start)) start = under->timelineOut();
+        for (const auto& c : existing->clips)
+            if (c.timelineIn >= start) limit = std::min(limit, c.timelineIn);
+    }
+    const Time end = std::min(limit, (start + std::max(duration, frame)).snapToFrame(project_.fps));
+    if (end - start < frame) throw EditError("Không còn chỗ cho dòng phụ đề ở đây");
+    const Clip c = cueClip(project_, start, end, text);
+    const Id id = c.id;
+    if (existing) {
+        run("Add subtitle", EditCommand::Scope::Tracks, {target}, [=](Project& p) { edit::insertClip(p, target, c); });
+        return id;
+    }
+    Track t;
+    t.id = newId();
+    t.type = TrackType::Video;
+    t.name = "Phụ đề";
+    t.extra[subtitles::kExtraKey] = subtitleSettingsFor(project_, Json::object());
+    const std::size_t index = topVideoIndex(project_);
+    run("Add subtitle", EditCommand::Scope::AllTracks, {}, [=](Project& p) {
+        edit::addTrack(p, t, index);
+        edit::insertClip(p, t.id, c);
+    });
+    return id;
+}
+
+Id Editor::importSubtitles(const std::vector<subtitles::Cue>& cues, const std::string& name, const std::string& lang,
+                           Time offset) {
+    std::vector<subtitles::Cue> shifted = cues;
+    for (auto& c : shifted) {
+        c.start += offset;
+        c.end += offset;
+    }
+    shifted = subtitles::normalise(std::move(shifted), project_.fps);
+    if (shifted.empty()) throw EditError("Tệp phụ đề không có dòng nào");
+    Track t;
+    t.id = newId();
+    t.type = TrackType::Video;
+    t.name = name.empty() ? "Phụ đề" : name;
+    Json patch = Json::object();
+    if (!lang.empty()) patch["lang"] = lang;
+    t.extra[subtitles::kExtraKey] = subtitleSettingsFor(project_, patch);
+    // Built in one go (not clip by clip): thousands of lines import in milliseconds.
+    t.clips.reserve(shifted.size());
+    for (const auto& c : shifted) t.clips.push_back(cueClip(project_, c.start, c.end, c.text));
+    const Id id = t.id;
+    const std::size_t index = topVideoIndex(project_);
+    run("Import subtitles", EditCommand::Scope::AllTracks, {}, [t = std::move(t), index](Project& p) { edit::addTrack(p, t, index); });
+    return id;
+}
+
+void Editor::setSubtitleSettings(const Id& trackId, const Json& patch) {
+    if (!patch.is_object()) throw EditError("settings patch must be an object");
+    const Track* t = project_.findTrack(trackId);
+    if (!t || !subtitles::isSubtitleTrack(*t)) throw EditError("not a subtitle track");
+    run("Subtitle style", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) {
+        Track& tr = requireSubtitleTrack(p, trackId);
+        tr.extra[subtitles::kExtraKey].merge_patch(patch);
+    });
+}
+
+void Editor::shiftSubtitles(const Id& trackId, Time delta) {
+    const Track* t = project_.findTrack(trackId);
+    if (!t || !subtitles::isSubtitleTrack(*t)) throw EditError("not a subtitle track");
+    if (!t->clips.empty() && t->clips.front().timelineIn + delta < Time::zero())
+        throw EditError("Dòng đầu tiên sẽ bắt đầu trước 0 giây");
+    const Time d = delta.snapToFrame(project_.fps);
+    run("Shift subtitles", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) {
+        Track& tr = requireSubtitleTrack(p, trackId);
+        for (auto& c : tr.clips) c.timelineIn += d;
+    });
+}
+
+Id Editor::applySubtitleTranslation(const Id& sourceTrackId, const std::map<Id, std::string>& texts,
+                                    const std::string& lang, TranslationMode mode) {
+    const Track* src = project_.findTrack(sourceTrackId);
+    if (!src || !subtitles::isSubtitleTrack(*src)) throw EditError("not a subtitle track");
+    if (texts.empty()) throw EditError("Chưa có bản dịch");
+    if (mode == TranslationMode::Replace) {
+        run("Translate subtitles", EditCommand::Scope::Tracks, {sourceTrackId}, [=](Project& p) {
+            Track& tr = requireSubtitleTrack(p, sourceTrackId);
+            for (auto& c : tr.clips)
+                if (auto it = texts.find(c.id); it != texts.end()) c.content["text"] = it->second;
+            tr.extra[subtitles::kExtraKey]["lang"] = lang;
+        });
+        return sourceTrackId;
+    }
+    Track t;
+    t.id = newId();
+    t.type = TrackType::Video;
+    std::string langName = lang;
+    for (const auto& l : subtitles::languages())
+        if (l.value("code", std::string{}) == lang) langName = l.value("name", lang);
+    t.name = "Phụ đề " + langName;
+    Json set = src->extra[subtitles::kExtraKey];
+    set["lang"] = lang;
+    if (mode == TranslationMode::Bilingual) {
+        // The translation sits right above the source line, a little smaller.
+        set["position"]["anchor"] = "above";
+        set["position"]["track"] = sourceTrackId;
+        if (set["style"].is_object()) set["style"]["size"] = std::round(set["style"].value("size", 56.0) * 0.9);
+    }
+    t.extra[subtitles::kExtraKey] = set;
+    for (const auto& c : src->clips) {
+        if (!c.generated() || c.content.value("kind", std::string{}) != "subtitle") continue;
+        Clip n = c;
+        n.id = newId();
+        if (auto it = texts.find(c.id); it != texts.end()) n.content["text"] = it->second;
+        t.clips.push_back(std::move(n));
+    }
+    const Id id = t.id;
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < project_.tracks.size(); ++i)
+        if (project_.tracks[i].id == sourceTrackId) index = i + 1;
+    const bool hideSource = mode == TranslationMode::NewTrack;
+    run("Translate subtitles", EditCommand::Scope::AllTracks, {}, [t = std::move(t), index, hideSource, sourceTrackId](Project& p) {
+        edit::addTrack(p, t, index);
+        if (hideSource)
+            if (Track* s = p.findTrack(sourceTrackId)) s->enabled = false;
+    });
+    return id;
 }
 
 }  // namespace vstudio

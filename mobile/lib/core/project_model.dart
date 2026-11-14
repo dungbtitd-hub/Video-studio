@@ -55,6 +55,9 @@ String generatedLabel(Map<String, dynamic> content) {
     case 'text':
       final t = ((content['text'] ?? '') as String).replaceAll(RegExp(r'\s+'), ' ').trim();
       return 'T  ${t.isEmpty ? '(chữ trống)' : t}';
+    case 'subtitle':
+      final t = ((content['text'] ?? '') as String).replaceAll(RegExp(r'\s+'), ' ').trim();
+      return 'CC  ${t.isEmpty ? '(dòng trống)' : t}';
     case 'sticker':
       final id = (content['sticker'] ?? '') as String;
       return '★  ${stickerNames[id] ?? 'Sticker'}';
@@ -71,7 +74,8 @@ class TrackView {
       this.enabled = true,
       this.locked = false,
       this.muted = false,
-      this.indexInType = 0});
+      this.indexInType = 0,
+      this.subtitle});
   final String id;
   final String type; // "video" | "audio"
   final String name;
@@ -80,7 +84,9 @@ class TrackView {
   final bool locked; // no edits; clips stay visible
   final bool muted; // audio: silent
   final int indexInType; // order among tracks of this type in the project (0 = bottom video layer / first audio)
+  final Map<String, dynamic>? subtitle; // subtitle track settings (style, position, lang), else null
   bool get audio => type == 'audio';
+  bool get isSubtitle => subtitle != null;
 }
 
 class AssetView {
@@ -185,6 +191,7 @@ class ProjectView {
         locked: (t['locked'] ?? false) as bool,
         muted: (t['muted'] ?? false) as bool,
         indexInType: indexInType,
+        subtitle: t['subtitle'] is Map<String, dynamic> ? t['subtitle'] as Map<String, dynamic> : null,
       );
     }
 

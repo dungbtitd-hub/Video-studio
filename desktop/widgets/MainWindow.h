@@ -13,6 +13,7 @@ class LooksPanel;
 class CoverPanel;
 class TransitionsPanel;
 class TextPanel;
+class SubtitlePanel;
 class StickerPanel;
 class QListWidget;
 class QLabel;
@@ -30,6 +31,7 @@ public:
     [[nodiscard]] CoverPanel* coverPanel() const { return covers_; }
     [[nodiscard]] TransitionsPanel* transitionsPanel() const { return transitions_; }
     [[nodiscard]] TextPanel* textPanel() const { return text_; }
+    [[nodiscard]] SubtitlePanel* subtitlePanel() const { return subtitles_; }
     [[nodiscard]] StickerPanel* stickerPanel() const { return stickers_; }
     [[nodiscard]] PreviewWidget* preview() const { return preview_; }
     // Every shortcut in the menus, as shown in Trợ giúp > Phím tắt (menu, action, keys).
@@ -62,6 +64,7 @@ private:
     CoverPanel* covers_;
     TransitionsPanel* transitions_;
     TextPanel* text_;
+    SubtitlePanel* subtitles_;
     StickerPanel* stickers_;
     QListWidget* assets_;
     QLabel* timecode_;

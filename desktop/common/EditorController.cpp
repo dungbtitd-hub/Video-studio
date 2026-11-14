@@ -1,5 +1,6 @@
 #include "EditorController.h"
 
+#include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
@@ -20,6 +21,11 @@
 #include <QMetaObject>
 
 #include "AudioOutput.h"
+#include "TranslationClient.h"
+#include <QDirIterator>
+#include <QFile>
+#include <QRegularExpression>
+#include <QStandardPaths>
 #include "vstudio/project_io.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
@@ -45,6 +51,19 @@ Time fromSecs(double v) { return Time::fromSeconds(v); }
 
 EditorController::EditorController(QObject* parent) : QObject(parent) {
     registerBuiltinModules(modules_);
+    // Fonts the user added earlier (Phụ đề / Chữ panels: "Thêm phông…").
+    for (QDirIterator it(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/fonts",
+                         {"*.ttf", "*.otf", "*.TTF", "*.OTF"}, QDir::Files);
+         it.hasNext();) {
+        const QFileInfo info(it.next());
+        QFile f(info.absoluteFilePath());
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        const QByteArray b = f.readAll();
+        QString name = info.completeBaseName();
+        if (name.startsWith("user-")) name = name.mid(5);
+        vstudio::text::registerFont(info.completeBaseName().toStdString(), name.toStdString(),
+                                    std::vector<std::uint8_t>(b.begin(), b.end()));
+    }
 #if defined(VSTUDIO_HAS_FFMPEG)
     ffmpeg::registerModule(modules_);
 #endif
@@ -798,6 +817,10 @@ QString generatedLabel(const vstudio::Clip& c) {
         QString t = QString::fromStdString(c.content.value("text", std::string{})).simplified();
         return QStringLiteral("T  ") + (t.isEmpty() ? QObject::tr("(chữ trống)") : t);
     }
+    if (kind == "subtitle") {
+        QString t = QString::fromStdString(c.content.value("text", std::string{})).simplified();
+        return QStringLiteral("CC  ") + (t.isEmpty() ? QObject::tr("(dòng trống)") : t);
+    }
     if (kind == "sticker") {
         const auto* info = vstudio::stickers::findSticker(c.content.value("sticker", std::string{}));
         return QStringLiteral("★  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Sticker"));
@@ -837,6 +860,172 @@ void EditorController::updateContent(const vstudio::Json& patch) {
     edit([&] { editor_->updateClipContent(c->id, patch); });
 }
 
+// ---- subtitles ----
+
+QString EditorController::currentSubtitleTrack() const {
+    if (!snapshot_) return {};
+    if (const auto* t = snapshot_->trackOfClip(s(selected_)); t && vstudio::subtitles::isSubtitleTrack(*t)) return q(t->id);
+    if (const auto* t = snapshot_->findTrack(s(subtitleTrack_)); t && vstudio::subtitles::isSubtitleTrack(*t))
+        return subtitleTrack_;
+    for (auto it = snapshot_->tracks.rbegin(); it != snapshot_->tracks.rend(); ++it)
+        if (vstudio::subtitles::isSubtitleTrack(*it)) return q(it->id);
+    return {};
+}
+
+void EditorController::setCurrentSubtitleTrack(const QString& trackId) {
+    if (subtitleTrack_ == trackId) return;
+    subtitleTrack_ = trackId;
+    // A line of another track stays selected only if it belongs to this one.
+    if (const auto* t = snapshot_ ? snapshot_->trackOfClip(s(selected_)) : nullptr; t && q(t->id) != trackId &&
+                                                                                     vstudio::subtitles::isSubtitleTrack(*t))
+        setSelectedClip({});
+    emit subtitleTrackChanged();
+}
+
+QString EditorController::addSubtitleTrack() {
+    Id id;
+    if (!edit([&] { id = editor_->addSubtitleTrack(); })) return {};
+    setCurrentSubtitleTrack(q(id));
+    return q(id);
+}
+
+QString EditorController::addSubtitle(const QString& text) {
+    Id id;
+    if (!edit([&] { id = editor_->addSubtitle(s(currentSubtitleTrack()), fromSecs(playhead_), s(text)); })) return {};
+    setSelectedClip(q(id));
+    return q(id);
+}
+
+bool EditorController::importSubtitles(const QUrl& file, double offsetSecs) {
+    QFile f(file.toLocalFile());
+    if (!f.open(QIODevice::ReadOnly)) {
+        setStatus(tr("Không mở được tệp phụ đề"));
+        return false;
+    }
+    if (f.size() > 50 * 1024 * 1024) {
+        setStatus(tr("Tệp phụ đề quá lớn"));
+        return false;
+    }
+    const std::string text = f.readAll().toStdString();
+    const auto cues = vstudio::subtitles::parseAny(text);
+    Id id;
+    const QString name = QFileInfo(file.toLocalFile()).completeBaseName();
+    if (!edit([&] { id = editor_->importSubtitles(cues, s(name), {}, fromSecs(offsetSecs)); })) return false;
+    setCurrentSubtitleTrack(q(id));
+    setStatus(tr("Đã nhập %1 dòng phụ đề").arg(cues.size()));
+    return true;
+}
+
+bool EditorController::exportSubtitles(const QString& trackId, const QUrl& file) {
+    const auto* t = snapshot_ ? snapshot_->findTrack(s(trackId)) : nullptr;
+    if (!t || !vstudio::subtitles::isSubtitleTrack(*t)) return false;
+    const QString path = file.toLocalFile();
+    const auto cues = vstudio::subtitles::cuesOf(*t);
+    const std::string out =
+        path.endsWith(".vtt", Qt::CaseInsensitive) ? vstudio::subtitles::toVtt(cues) : vstudio::subtitles::toSrt(cues);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(out.data(), qint64(out.size())) != qint64(out.size())) {
+        setStatus(tr("Không ghi được tệp phụ đề"));
+        return false;
+    }
+    setStatus(tr("Đã xuất %1 dòng phụ đề").arg(cues.size()));
+    return true;
+}
+
+void EditorController::setSubtitleText(const QString& clipId, const QString& text) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c || !c->generated() || c->content.value("text", std::string{}) == s(text)) return;
+    edit([&] { editor_->updateClipContent(c->id, {{"text", s(text)}}); });
+}
+
+void EditorController::setSubtitleSettings(const QString& trackId, const vstudio::Json& patch) {
+    edit([&] { editor_->setSubtitleSettings(s(trackId), patch); });
+}
+
+void EditorController::shiftSubtitles(const QString& trackId, double seconds) {
+    edit([&] { editor_->shiftSubtitles(s(trackId), fromSecs(seconds)); });
+}
+
+bool EditorController::translating() const { return translator_ && translator_->running(); }
+
+void EditorController::cancelTranslation() {
+    if (translator_) translator_->cancel();
+}
+
+void EditorController::translateSubtitles(const QString& trackId, const vstudio::Json& config, const QString& from,
+                                          const QString& to, const QString& notes, int mode, int batchSize) {
+    const auto* t = snapshot_ ? snapshot_->findTrack(s(trackId)) : nullptr;
+    if (!t || !vstudio::subtitles::isSubtitleTrack(*t) || t->clips.empty()) {
+        emit translationFinished(false, tr("Track này chưa có dòng phụ đề nào"));
+        return;
+    }
+    if (!translator_) {
+        translator_ = new TranslationClient(this);
+        connect(translator_, &TranslationClient::progress, this, &EditorController::translationProgress);
+        connect(translator_, &TranslationClient::finished, this, [this](int failed, const QString& err, bool cancelled) {
+            auto job = translator_->take();
+            if (cancelled || !job) {
+                emit translationFinished(false, tr("Đã dừng dịch"));
+                return;
+            }
+            if (job->results().empty()) {
+                emit translationFinished(false, tr("Không dịch được: %1").arg(err));
+                return;
+            }
+            const auto mode = translateMode_ == 0   ? vstudio::Editor::TranslationMode::Replace
+                              : translateMode_ == 2 ? vstudio::Editor::TranslationMode::Bilingual
+                                                    : vstudio::Editor::TranslationMode::NewTrack;
+            Id id;
+            if (!edit([&] { id = editor_->applySubtitleTranslation(job->sourceTrack(), job->results(), job->targetLanguage(), mode); })) {
+                emit translationFinished(false, status_);
+                return;
+            }
+            setCurrentSubtitleTrack(q(id));
+            const QString msg = failed ? tr("Đã dịch %1 dòng; %2 nhóm dòng chưa dịch được (giữ nguyên bản gốc): %3")
+                                             .arg(job->results().size())
+                                             .arg(failed)
+                                             .arg(err)
+                                       : tr("Đã dịch %1 dòng").arg(job->results().size());
+            setStatus(msg);
+            emit translationFinished(failed == 0, msg);
+        });
+    }
+    try {
+        const vstudio::Json jobCfg = TranslationClient::jobConfig(config);
+        auto job = std::make_unique<vstudio::subtitles::TranslationJob>(*t, jobCfg, s(from), s(to), s(notes), batchSize);
+        if (config.value("provider", std::string{}) != "command") (void)job->request(0);  // config problems show now
+        translateTrack_ = trackId;
+        translateMode_ = mode;
+        translator_->start(std::move(job), config);
+    } catch (const std::exception& e) {
+        emit translationFinished(false, q(e.what()));
+    }
+}
+
+bool EditorController::addFontFile(const QUrl& file, QString* fontId) {
+    QFile f(file.toLocalFile());
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = f.readAll();
+    const QFileInfo info(file.toLocalFile());
+    const QString id = "user-" + info.completeBaseName().toLower().replace(QRegularExpression("[^a-z0-9]+"), "-");
+    std::vector<std::uint8_t> data(bytes.begin(), bytes.end());
+    if (!vstudio::text::registerFont(s(id), s(info.completeBaseName()), std::move(data))) {
+        setStatus(tr("Tệp này không phải phông TrueType/OpenType dùng được"));
+        return false;
+    }
+    // Kept with the app so the font is there next time.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/fonts";
+    QDir().mkpath(dir);
+    const QString dest = dir + "/" + id + "." + info.suffix().toLower();
+    if (QFileInfo(dest) != info) {
+        QFile::remove(dest);
+        QFile::copy(info.absoluteFilePath(), dest);
+    }
+    if (fontId) *fontId = id;
+    setStatus(tr("Đã thêm phông %1").arg(info.completeBaseName()));
+    return true;
+}
+
 QRectF EditorController::objectCanvasRect() const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated()) return {};
@@ -850,6 +1039,28 @@ QRectF EditorController::objectCanvasRect() const {
 void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated() || from.width() <= 0) return;
+    if (c->content.value("kind", std::string{}) == "subtitle") {
+        // Subtitles move as a block: dragging places the track's lines (or this line, when it has its
+        // own position) freely; pulling a corner changes the text size.
+        const vstudio::Track* tr = snapshot_->trackOfClip(c->id);
+        if (!tr) return;
+        const double k = to.width() / from.width();
+        const bool own = c->content.contains("position") && c->content["position"].is_object();
+        vstudio::Json pos{{"anchor", "custom"}, {"h", "center"}, {"x", std::clamp(to.center().x(), 0.0, 1.0)},
+                          {"y", std::clamp(to.center().y(), 0.0, 1.0)}};
+        if (std::abs(k - 1) > 0.01) {
+            const vstudio::Json st = tr->extra.value(vstudio::subtitles::kExtraKey, vstudio::Json::object())
+                                         .value("style", vstudio::Json::object());
+            const double size = std::clamp(st.value("size", 56.0) * k, 12.0, 400.0);
+            edit([&] { editor_->setSubtitleSettings(tr->id, {{"style", {{"size", std::round(size)}}}}); });
+            return;
+        }
+        edit([&] {
+            if (own) editor_->updateClipContent(c->id, {{"position", pos}});
+            else editor_->setSubtitleSettings(tr->id, {{"position", pos}});
+        });
+        return;
+    }
     const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
     const Transform tf = animatedTransform(*c, src);
     const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;

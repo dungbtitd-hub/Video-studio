@@ -26,6 +26,7 @@
 #include "vstudio/scheduler.hpp"
 
 class AudioOutput;
+class TranslationClient;
 
 // Timeline label of a text/sticker clip ("" for media clips).
 QString generatedLabel(const vstudio::Clip& c);
@@ -197,6 +198,28 @@ public:
     [[nodiscard]] QRectF objectCanvasRect() const;
     // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated).
     void setObjectCanvasRect(const QRectF& from, const QRectF& to);
+
+    // ---- subtitles (vstudio/subtitles.hpp) ----
+    // Track shown in the subtitle panel: the selected line's track, else the topmost subtitle track ("" if none).
+    [[nodiscard]] QString currentSubtitleTrack() const;
+    void setCurrentSubtitleTrack(const QString& trackId);
+    // A line at the playhead on the current subtitle track (created when there is none); selects it.
+    QString addSubtitle(const QString& text = {});
+    QString addSubtitleTrack();
+    // Reads an .srt / .vtt / .ass file into a new track (shifted to start at `offsetSecs`).
+    bool importSubtitles(const QUrl& file, double offsetSecs = 0);
+    bool exportSubtitles(const QString& trackId, const QUrl& file);  // .vtt by extension, else .srt
+    void setSubtitleText(const QString& clipId, const QString& text);
+    void setSubtitleSettings(const QString& trackId, const vstudio::Json& patch);
+    void shiftSubtitles(const QString& trackId, double seconds);
+    // AI translation of a whole track; runs in the background (network), one undo step at the end.
+    // mode: 0 replace the texts, 1 new track (source hidden), 2 bilingual.
+    void translateSubtitles(const QString& trackId, const vstudio::Json& config, const QString& from, const QString& to,
+                            const QString& notes, int mode, int batchSize = 40);
+    void cancelTranslation();
+    [[nodiscard]] bool translating() const;
+    // Fonts the user added (files kept in the app data folder, registered at start-up).
+    bool addFontFile(const QUrl& file, QString* fontId = nullptr);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }
@@ -234,6 +257,9 @@ signals:
     void coversChanged();  // active cover or tracking state changed
     void cutChanged();     // the selected cut (transitions)
     void trackFinished(bool ok, const QString& message);
+    void subtitleTrackChanged();
+    void translationProgress(int done, int total);
+    void translationFinished(bool ok, const QString& message);
 
 private:
     template <class F>
@@ -287,4 +313,8 @@ private:
                                                                                  const std::atomic<bool>*)> work,
                      std::function<void(const vstudio::TransferResult&)> done);
     QTimer timer_;
+    QString subtitleTrack_;
+    TranslationClient* translator_ = nullptr;
+    QString translateTrack_;
+    int translateMode_ = 1;
 };
