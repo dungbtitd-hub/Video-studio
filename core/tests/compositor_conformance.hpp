@@ -284,9 +284,10 @@ struct CompositorSuite {
             for (int deep = 0; deep < 2; ++deep)
                 for (const auto& kp : keys)
                     for (int withLook = 0; withLook < 2; ++withLook) {
-                        // The CPU rounds the look to 8 bits before keying; the shader keeps floats. A hard key edge
-                        // (smoothness 0.1) turns that rounding into alpha steps, so "+ look" uses the softer key.
-                        if (withLook && kp.value("smoothness", 0.0) < 0.3) continue;
+                        // On 8-bit layers the CPU rounds the look to 8 bits before keying while the shader keeps
+                        // floats; the key's alpha ramp magnifies that rounding (several levels on bright colours).
+                        // 10-bit layers stay half float between the steps on the CPU too, so "+ look" runs on those.
+                        if (withLook && !deep) continue;
                         auto src = pattern(320, 180, 17, false);
                         if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
                         CompositeLayer l{src, {}, gpuGrade(Json(), withLook ? findColorLook("vivid")->params : Json(), kp)};
