@@ -49,6 +49,13 @@ class LookInfo {
   final String id, name, category;
 }
 
+/// One colour band of the HSL mixer (grade.hpp): id stored in the project, UI name, centre hue.
+class HslBandInfo {
+  const HslBandInfo(this.id, this.name, this.hue);
+  final String id, name;
+  final double hue;
+}
+
 class LogFormatInfo {
   const LogFormatInfo(this.id, this.name, this.vendor);
   final String id, name, vendor;
@@ -67,6 +74,14 @@ class ExportPresetView {
   final String id, name, description;
   final int width, height, videoBitrate, estimatedBytes;
   final double fps;
+}
+
+class ExportFormatView {
+  ExportFormatView.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        description = j['description'] as String;
+  final String id, name, description;
 }
 
 class CoverStyleInfo {
@@ -848,10 +863,94 @@ class VStudio {
         return Uint8List.fromList(buf.asTypedList(rgba.length));
       });
 
-  /// Shared presets, sized for this project (its aspect is kept).
-  List<ExportPresetView> exportPresets() => (jsonDecode(_take(_b.exportPresetsJson(_s))) as List)
-      .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
+  // ---- pro colour grade (grade.hpp): same effect, same maths as desktop ----
+
+  /// Commits [params] as the clips' grade (one undo step); null or neutral removes it.
+  void setClipGrade(List<String> clipIds, Map<String, dynamic>? params) => using((a) => _check(_b.setClipGrade(
+      _s, jsonEncode(clipIds).toNativeUtf8(allocator: a), jsonEncode(params).toNativeUtf8(allocator: a))));
+
+  /// The clip's grade parameters ({} when it has none).
+  Map<String, dynamic> clipGrade(String clipId) => using((a) {
+        final p = _b.clipGradeJson(_s, clipId.toNativeUtf8(allocator: a));
+        if (p == nullptr) throw VStudioException(_b.lastError(_s).toDartString());
+        return jsonDecode(_take(p)) as Map<String, dynamic>;
+      });
+
+  /// Shows [params] on the preview while a control is dragged, without an undo step;
+  /// [clipId] '' clears. Commit with [setClipGrade] when the finger lifts.
+  void setEffectPreview(String clipId, String type, Map<String, dynamic>? params) =>
+      using((a) => _check(_b.setEffectPreview(_s, clipId.toNativeUtf8(allocator: a), type.toNativeUtf8(allocator: a),
+          (params == null ? '' : jsonEncode(params)).toNativeUtf8(allocator: a))));
+
+  List<HslBandInfo> hslBands() {
+    final p = _b.hslBandsJson();
+    if (p == nullptr) return const [];
+    return [
+      for (final e in (jsonDecode(_take(p)) as List).cast<Map<String, dynamic>>())
+        HslBandInfo(e['id'] as String, e['name'] as String, (e['hue'] as num).toDouble())
+    ];
+  }
+
+  /// The applied curve through [points] ([[x, y], ...] in 0..1), sampled at [n] inputs.
+  Float32List gradeCurve(List<List<double>> points, int n) => using((a) {
+        final out = a<Float>(n);
+        if (_b.gradeCurve(jsonEncode(points).toNativeUtf8(allocator: a), n, out) != 0) return Float32List(0);
+        return Float32List.fromList(out.asTypedList(n));
+      });
+
+  /// Wheel position (angle in degrees, 0 = red, counter-clockwise; distance 0..1) to the stored balance.
+  List<double> wheelToBalance(double angleDeg, double distance) => using((a) {
+        final rgb = a<Double>(3);
+        _b.wheelToBalance(angleDeg, distance, rgb);
+        return [rgb[0], rgb[1], rgb[2]];
+      });
+
+  (double angle, double distance) balanceToWheel(List<double> rgb) => using((a) {
+        final p = a<Double>(3), ang = a<Double>(1), dist = a<Double>(1);
+        for (var i = 0; i < 3; i++) {
+          p[i] = i < rgb.length ? rgb[i] : 0;
+        }
+        _b.balanceToWheel(p, ang, dist);
+        return (ang.value, dist.value);
+      });
+
+  /// Eyedropper: average colour around ([x], [y]) (0..1 of the frame) of the newest preview frame.
+  (double r, double g, double b)? pickPreviewColor(double x, double y) => using((a) {
+        final rgb = a<Double>(3);
+        if (_b.previewPickColor(_s, x, y, rgb) != 0) return null;
+        return (rgb[0], rgb[1], rgb[2]);
+      });
+
+  /// Scope of the newest preview frame as RGBA ([kind]: 0 waveform, 1 RGB parade, 2 vectorscope,
+  /// 3 histogram); null before the first frame.
+  Uint8List? previewScope(int kind, int width, int height) => using((a) {
+        final n = width * height * 4;
+        final buf = a<Uint8>(n);
+        if (_b.previewScope(_s, kind, width, height, buf) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(n));
+      });
+
+  /// A copy of [rgba] with grade [params] applied (thumbnails).
+  Uint8List? gradePreview(Map<String, dynamic> params, Uint8List rgba, int width, int height) => using((a) {
+        final buf = a<Uint8>(rgba.length);
+        buf.asTypedList(rgba.length).setAll(0, rgba);
+        if (_b.gradePreview(jsonEncode(params).toNativeUtf8(allocator: a), buf, width, height) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(rgba.length));
+      });
+
+  /// Shared presets, sized for this project (its aspect is kept); bitrate and size for [format].
+  List<ExportPresetView> exportPresets([String format = 'h264']) => using((a) =>
+      (jsonDecode(_take(_b.exportPresetsFormatJson(_s, format.toNativeUtf8(allocator: a)))) as List)
+          .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  /// Video formats: h264, hevc, hevc10 (H.265 10-bit).
+  List<ExportFormatView> exportFormats() => (jsonDecode(_take(_b.exportFormatsJson(_s))) as List)
+      .map((e) => ExportFormatView.fromJson(e as Map<String, dynamic>))
       .toList();
+  void startExportPresetFormat(String outPath, String presetId, String format) => using((a) => _check(
+      _b.exportStartPresetFormat(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a),
+          format.toNativeUtf8(allocator: a))));
   void startExportPreset(String outPath, String presetId) => using(
       (a) => _check(_b.exportStartPreset(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a))));
 

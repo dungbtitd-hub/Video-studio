@@ -11,6 +11,7 @@
 #include "vstudio/tracker.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
+#include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/video_fx.hpp"
 
@@ -34,6 +35,13 @@
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
 
+#include "vstudio/stills.hpp"
+#if defined(VSTUDIO_HAS_LIBRAW)
+#include "vstudio/libraw/libraw_module.hpp"
+#endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+#include "vstudio/apple/apple_raw.hpp"
+#endif
 #if defined(VSTUDIO_HAS_FFMPEG)
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
@@ -77,8 +85,14 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 #if defined(VSTUDIO_HAS_D3D11)
     windows::registerD3D11Compositor(modules_);
 #endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+    apple::registerRawModule(modules_);  // camera RAW with Apple's engine; LibRaw reads the rest
+#endif
+#if defined(VSTUDIO_HAS_LIBRAW)
+    libraw::registerModule(modules_);  // camera RAW photos, loaded on the first RAW file
+#endif
     std::string err;
-    backend_ = modules_.best<IMediaBackend>("decode", &err);
+    backend_ = withStillDecoders(modules_.best<IMediaBackend>("decode", &err), modules_);
     jobs_ = std::make_unique<JobScheduler>();
     libJobs_ = std::make_unique<JobScheduler>(1);
     resetSession(Editor::newProject("Untitled", 1920, 1080, {30, 1}, ModuleRegistry::currentPlatform()), {});
@@ -330,6 +344,10 @@ bool EditorController::edit(F&& f) {
 void EditorController::published() {
     live_ = false;  // a real edit replaces any live preview
     snapshot_ = editor_->snapshot();
+    if (gradePreviewOn_) {  // an edit (or undo) always shows the committed project
+        gradePreviewOn_ = false;
+        preview_->setEffectOverride(nullptr);
+    }
     preview_->setProject(snapshot_);
     assetsDirty_ = tracksDirty_ = true;
     refreshLibrary();
@@ -412,6 +430,30 @@ const Json* clipEffect(const Project* p, const QString& clipId, const char* type
     return nullptr;
 }
 }  // namespace
+
+void EditorController::setClipGrade(const QStringList& clipIds, const Json& params) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    gradePreviewOn_ = false;
+    preview_->setEffectOverride(nullptr);
+    edit([&] { editor_->setClipGrade(ids, params); });
+}
+
+Json EditorController::clipGrade(const QString& clipId) const {
+    if (const Json* p = clipEffect(snapshot_.get(), clipId, kColorGradeEffect)) return *p;
+    return Json::object();
+}
+
+void EditorController::previewGrade(const QString& clipId, const Json& params) {
+    gradePreviewOn_ = true;
+    preview_->setEffectOverride(std::make_shared<EffectOverride>(EffectOverride{s(clipId), kColorGradeEffect, params}));
+}
+
+void EditorController::clearGradePreview() {
+    if (!gradePreviewOn_) return;
+    gradePreviewOn_ = false;
+    preview_->setEffectOverride(nullptr);
+}
 
 void EditorController::setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure) {
     std::vector<Id> ids;
@@ -825,17 +867,25 @@ void EditorController::exportTo(const QUrl& file, int width, int height) {
     startExport(file, es);
 }
 
-void EditorController::exportWithPreset(const QUrl& file, const QString& presetId) {
+void EditorController::exportWithPreset(const QUrl& file, const QString& presetId, const QString& formatId) {
     const ExportPreset* pr = findExportPreset(s(presetId));
     if (!pr) return setStatus(tr("Unknown export preset"));
-    startExport(file, exportSettingsFor(editor_->project(), *pr));
+    if (!findExportFormat(s(formatId))) return setStatus(tr("Unknown export format"));
+    startExport(file, exportSettingsFor(editor_->project(), *pr, s(formatId)));
 }
 
-QVariantList EditorController::exportPresets() const {
+QVariantList EditorController::exportFormats() const {
+    QVariantList out;
+    for (const auto& f : vstudio::exportFormats())
+        out.push_back(QVariantMap{{"id", q(f.id)}, {"name", q(f.name)}, {"description", q(f.description)}});
+    return out;
+}
+
+QVariantList EditorController::exportPresets(const QString& formatId) const {
     QVariantList out;
     const Project& p = editor_->project();
     for (const auto& pr : vstudio::exportPresets()) {
-        const ExportSettings es = exportSettingsFor(p, pr);
+        const ExportSettings es = exportSettingsFor(p, pr, s(formatId));
         out.push_back(QVariantMap{{"id", q(pr.id)},
                                   {"name", q(pr.name)},
                                   {"description", q(pr.description)},

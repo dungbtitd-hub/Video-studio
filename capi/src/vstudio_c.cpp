@@ -15,6 +15,8 @@
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
+#include "vstudio/grade.hpp"
+#include "vstudio/scopes.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/transitions.hpp"
@@ -34,6 +36,10 @@
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 
+#include "vstudio/stills.hpp"
+#if defined(VSTUDIO_HAS_LIBRAW)
+#include "vstudio/libraw/libraw_module.hpp"
+#endif
 #if defined(VSTUDIO_HAS_FFMPEG)
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #endif
@@ -44,6 +50,7 @@
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
 #include "vstudio/apple/avfoundation_module.hpp"
 #include "vstudio/apple/metal_compositor.hpp"
+#include "vstudio/apple/apple_raw.hpp"
 #endif
 #if defined(VSTUDIO_HAS_D3D11)
 #include "vstudio/windows/d3d11_compositor.hpp"
@@ -105,14 +112,18 @@ struct vs_session {
 #if defined(VSTUDIO_HAS_APPLE_MEDIA)
         apple::registerModule(modules);  // VideoToolbox hardware codecs; preferred over FFmpeg on macOS/iOS
         apple::registerMetalCompositor(modules);  // GPU compositing; CPU stays the fallback
+        apple::registerRawModule(modules);  // camera RAW with Apple's engine; LibRaw reads the rest
 #endif
 #if defined(VSTUDIO_HAS_D3D11)
         windows::registerD3D11Compositor(modules);  // GPU compositing; CPU stays the fallback
 #endif
+#if defined(VSTUDIO_HAS_LIBRAW)
+        libraw::registerModule(modules);  // camera RAW photos, loaded on the first RAW file
+#endif
     }
 
     IMediaBackend* media() {
-        if (!backend) backend = modules.best<IMediaBackend>("decode", &error);
+        if (!backend) backend = withStillDecoders(modules.best<IMediaBackend>("decode", &error), modules);
         return backend.get();
     }
 
@@ -504,6 +515,129 @@ int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, 
         s->editor->setClipLut(clipIdsFrom(clip_ids_json), p, strength);
         s->edited();
     });
+}
+
+namespace {
+Json jsonOrNull(const char* text) {
+    const std::string t = str(text);
+    return t.empty() ? Json() : Json::parse(t);
+}
+}  // namespace
+
+int vs_set_clip_grade(vs_session* s, const char* clip_ids_json, const char* params_json) {
+    return guard(s, [&] {
+        s->editor->setClipGrade(clipIdsFrom(clip_ids_json), jsonOrNull(params_json));
+        if (s->preview) s->preview->setEffectOverride(nullptr);  // the committed grade replaces the live one
+        s->edited();
+    });
+}
+
+char* vs_clip_grade_json(vs_session* s, const char* clip_id) {
+    if (!s) return nullptr;
+    try {
+        const Clip* c = s->editor->project().findClip(str(clip_id));
+        if (!c) throw std::runtime_error("clip not found");
+        Json out = Json::object();
+        if (c->effects.is_array())
+            for (const auto& e : c->effects)
+                if (e.is_object() && e.value("type", std::string{}) == kColorGradeEffect) out = e.value("params", Json::object());
+        return dup(out.dump());
+    } catch (const std::exception& ex) {
+        s->error = ex.what();
+        return nullptr;
+    }
+}
+
+char* vs_hsl_bands_json(void) {
+    try {
+        Json out = Json::array();
+        for (const auto& b : hslBands()) out.push_back({{"id", b.id}, {"name", b.name}, {"hue", b.hue}});
+        return dup(out.dump());
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int vs_grade_curve(const char* points_json, int n, float* out) {
+    if (!out || n < 2) return -1;
+    try {
+        const auto c = sampleCurve(jsonOrNull(points_json), n);
+        std::copy(c.begin(), c.end(), out);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+void vs_wheel_to_balance(double angle_deg, double distance, double* rgb3) {
+    if (!rgb3) return;
+    const auto b = wheelToBalance(angle_deg, distance);
+    std::copy(b.begin(), b.end(), rgb3);
+}
+
+void vs_balance_to_wheel(const double* rgb3, double* angle_deg, double* distance) {
+    if (!rgb3) return;
+    balanceToWheel({rgb3[0], rgb3[1], rgb3[2]}, angle_deg, distance);
+}
+
+int vs_set_effect_preview(vs_session* s, const char* clip_id, const char* type, const char* params_json) {
+    return guard(s, [&] {
+        const std::string clip = str(clip_id);
+        std::shared_ptr<const EffectOverride> o;
+        if (!clip.empty()) o = std::make_shared<EffectOverride>(EffectOverride{clip, str(type), jsonOrNull(params_json)});
+        else if (!s->preview) return;  // nothing to clear
+        s->previewEngine().setEffectOverride(std::move(o));
+    });
+}
+
+int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int height) {
+    if (!rgba || width <= 0 || height <= 0) return -1;
+    try {
+        VideoFrame f;
+        f.width = width;
+        f.height = height;
+        f.rgba.assign(rgba, rgba + static_cast<std::size_t>(width) * height * 4);
+        applyColorGrade(f, jsonOrNull(params_json));
+        std::copy(f.rgba.begin(), f.rgba.end(), rgba);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3) {
+    if (!s || !rgb3) return -1;
+    std::shared_ptr<const VideoFrame> f;
+    {
+        std::lock_guard lk(s->frameMu);
+        f = s->latest;
+    }
+    if (!f || f->empty() || f->deep()) return -1;
+    const int cx = std::clamp(static_cast<int>(x * f->width), 0, f->width - 1);
+    const int cy = std::clamp(static_cast<int>(y * f->height), 0, f->height - 1);
+    double sum[3] = {0, 0, 0};
+    int n = 0;
+    for (int yy = std::max(0, cy - 2); yy <= std::min(f->height - 1, cy + 2); ++yy)
+        for (int xx = std::max(0, cx - 2); xx <= std::min(f->width - 1, cx + 2); ++xx) {
+            const std::uint8_t* px = f->rgba.data() + (static_cast<std::size_t>(yy) * f->width + xx) * 4;
+            for (int c = 0; c < 3; ++c) sum[c] += px[c] / 255.0;
+            ++n;
+        }
+    for (int c = 0; c < 3; ++c) rgb3[c] = sum[c] / n;
+    return 0;
+}
+
+int vs_preview_scope(vs_session* s, int kind, int width, int height, uint8_t* rgba_out) {
+    if (!s || !rgba_out || kind < 0 || kind > 3 || width < 32 || height < 32 || width > 2048 || height > 2048) return -1;
+    std::shared_ptr<const VideoFrame> f;
+    {
+        std::lock_guard lk(s->frameMu);
+        f = s->latest;
+    }
+    if (!f || f->empty()) return -1;
+    const ScopeImage img = renderScope(*f, static_cast<ScopeKind>(kind), width, height);
+    std::copy(img.rgba.begin(), img.rgba.end(), rgba_out);
+    return 0;
 }
 
 int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {
@@ -1354,13 +1488,17 @@ int vs_export_start(vs_session* s, const char* out_path, int width, int height, 
     });
 }
 
-char* vs_export_presets_json(vs_session* s) {
+char* vs_export_presets_json(vs_session* s) { return vs_export_presets_format_json(s, nullptr); }
+
+char* vs_export_presets_format_json(vs_session* s, const char* format_id) {
     return guardStr(s, [&] {
         const Project& p = s->editor->project();
         const double seconds = p.duration().seconds();
+        const std::string fmt = str(format_id).empty() ? "h264" : str(format_id);
+        if (!findExportFormat(fmt)) throw std::runtime_error("unknown export format: " + fmt);
         Json out = Json::array();
         for (const auto& pr : exportPresets()) {
-            const ExportSettings es = exportSettingsFor(p, pr);
+            const ExportSettings es = exportSettingsFor(p, pr, fmt);
             out.push_back({{"id", pr.id},
                            {"name", pr.name},
                            {"description", pr.description},
@@ -1379,6 +1517,25 @@ int vs_export_start_preset(vs_session* s, const char* out_path, const char* pres
         const ExportPreset* pr = findExportPreset(str(preset_id));
         if (!pr) throw std::runtime_error("unknown export preset: " + str(preset_id));
         startExport(s, out_path, exportSettingsFor(s->editor->project(), *pr));
+    });
+}
+
+char* vs_export_formats_json(vs_session* s) {
+    return guardStr(s, [&] {
+        Json out = Json::array();
+        for (const auto& f : exportFormats())
+            out.push_back({{"id", f.id}, {"name", f.name}, {"description", f.description}});
+        return out.dump();
+    });
+}
+
+int vs_export_start_preset_format(vs_session* s, const char* out_path, const char* preset_id, const char* format_id) {
+    return guard(s, [&] {
+        const ExportPreset* pr = findExportPreset(str(preset_id));
+        if (!pr) throw std::runtime_error("unknown export preset: " + str(preset_id));
+        const std::string fmt = str(format_id).empty() ? "h264" : str(format_id);
+        if (!findExportFormat(fmt)) throw std::runtime_error("unknown export format: " + fmt);
+        startExport(s, out_path, exportSettingsFor(s->editor->project(), *pr, fmt));
     });
 }
 

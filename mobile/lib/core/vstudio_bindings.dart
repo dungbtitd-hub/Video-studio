@@ -260,10 +260,37 @@ class VStudioBindings {
                 'vs_translation_free'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
+        setClipGrade = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_set_clip_grade'),
+        clipGradeJson =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_clip_grade_json'),
+        hslBandsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_hsl_bands_json'),
+        gradeCurve =
+            lib.lookupFunction<Int32 Function(CStr, Int32, Pointer<Float>), int Function(CStr, int, Pointer<Float>)>(
+                'vs_grade_curve'),
+        wheelToBalance = lib.lookupFunction<Void Function(Double, Double, Pointer<Double>),
+            void Function(double, double, Pointer<Double>)>('vs_wheel_to_balance'),
+        balanceToWheel = lib.lookupFunction<Void Function(Pointer<Double>, Pointer<Double>, Pointer<Double>),
+            void Function(Pointer<Double>, Pointer<Double>, Pointer<Double>)>('vs_balance_to_wheel'),
+        setEffectPreview = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr)>('vs_set_effect_preview'),
+        previewPickColor = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Double, Double, Pointer<Double>),
+            int Function(Pointer<VsSession>, double, double, Pointer<Double>)>('vs_preview_pick_color'),
+        previewScope = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Int32, Int32, Int32, Pointer<Uint8>),
+            int Function(Pointer<VsSession>, int, int, int, Pointer<Uint8>)>('vs_preview_scope'),
+        gradePreview = lib.lookupFunction<Int32 Function(CStr, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, Pointer<Uint8>, int, int)>('vs_grade_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
             'vs_export_presets_json'),
         exportStartPreset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
             int Function(Pointer<VsSession>, CStr, CStr)>('vs_export_start_preset'),
+        exportFormatsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
+            'vs_export_formats_json'),
+        exportPresetsFormatJson = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr),
+            CStr Function(Pointer<VsSession>, CStr)>('vs_export_presets_format_json'),
+        exportStartPresetFormat = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr)>('vs_export_start_preset_format'),
         exportStart = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32, Int32, Int64),
             int Function(Pointer<VsSession>, CStr, int, int, int, int, int)>('vs_export_start'),
         exportStatus = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Pointer<Double>),
@@ -332,6 +359,16 @@ class VStudioBindings {
   final CStr Function() looksJson;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLook;
   final int Function(CStr, double, Pointer<Uint8>, int, int) lookPreview;
+  final int Function(Pointer<VsSession>, CStr, CStr) setClipGrade;
+  final CStr Function(Pointer<VsSession>, CStr) clipGradeJson;
+  final CStr Function() hslBandsJson;
+  final int Function(CStr, int, Pointer<Float>) gradeCurve;
+  final void Function(double, double, Pointer<Double>) wheelToBalance;
+  final void Function(Pointer<Double>, Pointer<Double>, Pointer<Double>) balanceToWheel;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr) setEffectPreview;
+  final int Function(CStr, Pointer<Uint8>, int, int) gradePreview;
+  final int Function(Pointer<VsSession>, double, double, Pointer<Double>) previewPickColor;
+  final int Function(Pointer<VsSession>, int, int, int, Pointer<Uint8>) previewScope;
   final CStr Function() logFormatsJson;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipColorSpace;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLut;
@@ -407,6 +444,9 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) zoomToRegion;
   final CStr Function(Pointer<VsSession>, CStr, int) clipStateAt;
   final int Function(Pointer<VsSession>, CStr, CStr) exportStartPreset;
+  final CStr Function(Pointer<VsSession>) exportFormatsJson;
+  final CStr Function(Pointer<VsSession>, CStr) exportPresetsFormatJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr) exportStartPresetFormat;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;
   final int Function(Pointer<VsSession>, CStr, int, int) requestThumbnails;

@@ -14,6 +14,13 @@
 #include "vstudio/ffmpeg/ffmpeg_module.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
+#include "vstudio/stills.hpp"
+#if defined(VSTUDIO_HAS_LIBRAW)
+#include "vstudio/libraw/libraw_module.hpp"
+#endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+#include "vstudio/apple/apple_raw.hpp"
+#endif
 #if defined(VSTUDIO_HAS_METAL)
 #include "vstudio/apple/metal_compositor.hpp"
 #endif
@@ -71,8 +78,14 @@ int main(int argc, char** argv) {
 #if defined(VSTUDIO_HAS_D3D11)
     windows::registerD3D11Compositor(mods);
 #endif
+#if defined(VSTUDIO_HAS_APPLE_MEDIA)
+    apple::registerRawModule(mods);
+#endif
+#if defined(VSTUDIO_HAS_LIBRAW)
+    libraw::registerModule(mods);
+#endif
     std::string err;
-    auto backend = mods.best<IMediaBackend>("decode", &err);
+    auto backend = withStillDecoders(mods.best<IMediaBackend>("decode", &err), mods);
     if (!backend) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 1;

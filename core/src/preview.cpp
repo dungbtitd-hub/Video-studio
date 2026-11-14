@@ -53,6 +53,15 @@ void PreviewEngine::setProject(std::shared_ptr<const Project> snap) {
     }
 }
 
+void PreviewEngine::setEffectOverride(std::shared_ptr<const EffectOverride> o) {
+    {
+        std::lock_guard lk(snapMu_);
+        override_ = std::move(o);
+        ++projectGen_;
+    }
+    if (!playing_) requestFrame(playhead());
+}
+
 void PreviewEngine::setProjectDir(const std::string& dir) {
     std::lock_guard lk(snapMu_);
     projectDir_ = dir;
@@ -172,6 +181,7 @@ void PreviewEngine::videoLoop() {
     std::uint64_t seenGen = ~0ull;
     std::int64_t lastFrame = -1, prefetchedTo = -1;
     std::shared_ptr<const Project> snap;
+    std::shared_ptr<const EffectOverride> live;
     while (!stop_) {
         std::optional<Time> target;
         int w, h;
@@ -190,6 +200,7 @@ void PreviewEngine::videoLoop() {
         {
             std::lock_guard lk(snapMu_);
             snap = project_;
+            live = override_;
             if (seenGen != projectGen_) {
                 seenGen = projectGen_;
                 pool.setProjectDir(projectDir_);
@@ -214,6 +225,7 @@ void PreviewEngine::videoLoop() {
                 if (prefetchedTo < f + cfg_.prefetchFrames) {
                     const std::int64_t next = std::max(prefetchedTo, f) + 1;
                     Renderer r(*snap, pool, &cache_, true, modules_);
+                    r.setEffectOverride(live);
                     (void)r.renderVideo(Time::fromFrame(next, fps), w, h, "preview");
                     prefetchedTo = next;
                 } else {
@@ -226,6 +238,7 @@ void PreviewEngine::videoLoop() {
         }
         if (!target) continue;
         Renderer r(*snap, pool, &cache_, true, modules_);
+        r.setEffectOverride(live);
         auto frame = std::make_shared<VideoFrame>(r.renderVideo(*target, w, h, "preview"));
         lastFrame = target->toFrame(fps);
         prefetchedTo = std::max(prefetchedTo, lastFrame);

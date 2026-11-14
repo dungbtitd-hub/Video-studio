@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -27,10 +28,13 @@
 #include <cmath>
 
 #include "EditorController.h"
+#include "vstudio/stills.hpp"
 #include "CoverPanel.h"
 #include "TransitionsPanel.h"
 #include "TextPanel.h"
 #include "StickerPanel.h"
+#include "GradePanel.h"
+#include "ScopesPanel.h"
 #include "OverlayPanel.h"
 #include "RecentStrip.h"
 #include "VideoFxPanel.h"
@@ -231,6 +235,21 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
+    auto* gradeDock = new QDockWidget("Chỉnh màu", this);
+    gradeDock->setObjectName("grade");
+    grade_ = new GradePanel(editor_, gradeDock);
+    gradeDock->setWidget(grade_);
+    addDockWidget(Qt::RightDockWidgetArea, gradeDock);
+    tabifyDockWidget(looksDock, gradeDock);
+    // Scopes sit under the media library so they show beside the grading panel.
+    auto* scopesDock = new QDockWidget("Scope", this);
+    scopesDock->setObjectName("scopes");
+    scopes_ = new ScopesPanel(editor_, scopesDock);
+    scopesDock->setWidget(scopes_);
+    addDockWidget(Qt::LeftDockWidgetArea, scopesDock);
+    // Eyedropper: the qualifier asks the preview for one click.
+    connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
+    connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);
     // Zoom, rotate and reflection effects for the selected clip.
     auto* videoFxDock = new QDockWidget("Hiệu ứng video", this);
     videoFxDock->setObjectName("videoFx");
@@ -617,46 +636,76 @@ void MainWindow::showShortcuts() {
 }
 
 void MainWindow::importMedia() {
+    // Camera RAW photos (vstudio/stills.hpp) sit next to video, audio and ordinary images.
+    QString raw;
+    for (const std::string& e : vstudio::cameraRawExtensions()) raw += " *" + QString::fromStdString(e);
     const QList<QUrl> files = QFileDialog::getOpenFileUrls(this, "Nhập media", {},
-        "Media (*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.mp3 *.wav *.m4a *.aac *.flac *.jpg *.jpeg *.png *.webp);;All (*)");
+        "Media (*.mp4 *.mov *.mkv *.webm *.m4v *.avi *.mp3 *.wav *.m4a *.aac *.flac *.jpg *.jpeg *.png *.webp" + raw +
+            ");;Ảnh RAW (" + raw.trimmed() + ");;All (*)");
     if (!files.isEmpty()) editor_->importMedia(files);
 }
 
 void MainWindow::exportVideo() {
     if (editor_->exporting()) return editor_->cancelExport();
     if (editor_->duration() <= 0) return statusBar()->showMessage("Timeline trống: chưa có gì để xuất");
-    const QString preset = choosePreset();
+    QString format;
+    const QString preset = choosePreset(&format);
     if (preset.isEmpty()) return;
     const QString f = QFileDialog::getSaveFileName(this, "Xuất MP4", editor_->projectName() + ".mp4", "MP4 (*.mp4)");
-    if (!f.isEmpty()) editor_->exportWithPreset(QUrl::fromLocalFile(f), preset);
+    if (!f.isEmpty()) editor_->exportWithPreset(QUrl::fromLocalFile(f), preset, format);
 }
 
-QString MainWindow::choosePreset() {
+QString MainWindow::choosePreset(QString* format) {
     QDialog dlg(this);
     dlg.setWindowTitle("Xuất video");
-    dlg.resize(460, 420);
+    dlg.resize(460, 470);
     auto* l = new QVBoxLayout(&dlg);
+    QSettings settings;
+    // Video format: H.264, H.265, H.265 10-bit (keeps graded 10-bit/Log footage free of banding).
+    auto* fmtRow = new QHBoxLayout;
+    fmtRow->addWidget(new QLabel("Định dạng:", &dlg));
+    auto* fmt = new QComboBox(&dlg);
+    fmt->setObjectName("exportFormat");
+    const QString lastFmt = settings.value("export/format", "h264").toString();
+    for (const QVariant& v : editor_->exportFormats()) {
+        const QVariantMap m = v.toMap();
+        fmt->addItem(m["name"].toString(), m["id"]);
+        fmt->setItemData(fmt->count() - 1, m["description"].toString(), Qt::ToolTipRole);
+        if (m["id"].toString() == lastFmt) fmt->setCurrentIndex(fmt->count() - 1);
+    }
+    fmtRow->addWidget(fmt, 1);
+    l->addLayout(fmtRow);
+    auto* fmtNote = new QLabel(&dlg);
+    fmtNote->setWordWrap(true);
+    fmtNote->setStyleSheet("color: palette(mid);");
+    l->addWidget(fmtNote);
     l->addWidget(new QLabel("Chọn chất lượng. Kích thước giữ đúng tỉ lệ khung hình của dự án.", &dlg));
     auto* list = new QListWidget(&dlg);
     list->setObjectName("exportPresets");
-    QSettings settings;
     const QString last = settings.value("export/preset", "fhd1080").toString();
-    for (const QVariant& v : editor_->exportPresets()) {
-        const QVariantMap m = v.toMap();
-        const double mb = m["estimatedBytes"].toDouble() / 1e6;
-        auto* it = new QListWidgetItem(QString("%1\n%2 × %3 · %4 khung/giây · %5 Mbit/s · khoảng %6 MB\n%7")
-                                           .arg(m["name"].toString())
-                                           .arg(m["width"].toInt())
-                                           .arg(m["height"].toInt())
-                                           .arg(m["fps"].toDouble(), 0, 'g', 4)
-                                           .arg(m["bitrate"].toDouble() / 1e6, 0, 'f', 1)
-                                           .arg(mb < 10 ? QString::number(mb, 'f', 1) : QString::number(qRound(mb)))
-                                           .arg(m["description"].toString()),
-                                       list);
-        it->setData(Qt::UserRole, m["id"]);
-        if (m["id"].toString() == last) list->setCurrentItem(it);
-    }
-    if (!list->currentItem() && list->count() > 0) list->setCurrentRow(0);
+    auto fill = [this, list, fmt, fmtNote, &last] {
+        const QString keep = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : last;
+        list->clear();
+        fmtNote->setText(fmt->currentData(Qt::ToolTipRole).toString());
+        for (const QVariant& v : editor_->exportPresets(fmt->currentData().toString())) {
+            const QVariantMap m = v.toMap();
+            const double mb = m["estimatedBytes"].toDouble() / 1e6;
+            auto* it = new QListWidgetItem(QString("%1\n%2 × %3 · %4 khung/giây · %5 Mbit/s · khoảng %6 MB\n%7")
+                                               .arg(m["name"].toString())
+                                               .arg(m["width"].toInt())
+                                               .arg(m["height"].toInt())
+                                               .arg(m["fps"].toDouble(), 0, 'g', 4)
+                                               .arg(m["bitrate"].toDouble() / 1e6, 0, 'f', 1)
+                                               .arg(mb < 10 ? QString::number(mb, 'f', 1) : QString::number(qRound(mb)))
+                                               .arg(m["description"].toString()),
+                                           list);
+            it->setData(Qt::UserRole, m["id"]);
+            if (m["id"].toString() == keep) list->setCurrentItem(it);
+        }
+        if (!list->currentItem() && list->count() > 0) list->setCurrentRow(0);
+    };
+    fill();
+    connect(fmt, &QComboBox::currentIndexChanged, &dlg, fill);
     l->addWidget(list, 1);
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     bb->button(QDialogButtonBox::Ok)->setText("Tiếp tục…");
@@ -667,6 +716,8 @@ QString MainWindow::choosePreset() {
     if (dlg.exec() != QDialog::Accepted || !list->currentItem()) return {};
     const QString id = list->currentItem()->data(Qt::UserRole).toString();
     settings.setValue("export/preset", id);
+    settings.setValue("export/format", fmt->currentData().toString());
+    if (format) *format = fmt->currentData().toString();
     return id;
 }
 

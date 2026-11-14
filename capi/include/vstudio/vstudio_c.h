@@ -93,6 +93,29 @@ VS_API int vs_set_clip_color_space(vs_session* s, const char* clip_ids_json, con
 /* .cube file, absolute or relative to the project's media folder; "" removes. Bad files fail here. */
 VS_API int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, double strength);
 VS_API char* vs_suggested_log_format(vs_session* s, const char* asset_id); /* "hlg" or "" */
+/* ---- pro colour grade (grade.hpp): wheels, curves, HSL mixer, qualifier; one effect per clip ----
+ * vs_set_clip_grade: params_json is the grade object; "" / "null" / neutral params remove it. One undo step.
+ * vs_clip_grade_json: the clip's grade params ("{}" when none).
+ * vs_hsl_bands_json: [{"id","name","hue"}].
+ * vs_grade_curve: samples the curve through points_json [[x,y],...] at n inputs into out (what is applied).
+ * vs_wheel_to_balance / vs_balance_to_wheel: wheel position (deg, 0..1) <-> luma-neutral rgb[3].
+ * vs_set_effect_preview: live preview of an uncommitted change while dragging (no undo step, project
+ *   untouched): type e.g. "builtin.color_grade"; clip_id "" clears. Commit with vs_set_clip_grade on release.
+ * vs_grade_preview: applies grade params to an RGBA buffer in place (thumbnails; no session needed). */
+VS_API int vs_set_clip_grade(vs_session* s, const char* clip_ids_json, const char* params_json);
+VS_API char* vs_clip_grade_json(vs_session* s, const char* clip_id);
+VS_API char* vs_hsl_bands_json(void);
+VS_API int vs_grade_curve(const char* points_json, int n, float* out);
+VS_API void vs_wheel_to_balance(double angle_deg, double distance, double* rgb3);
+VS_API void vs_balance_to_wheel(const double* rgb3, double* angle_deg, double* distance);
+VS_API int vs_set_effect_preview(vs_session* s, const char* clip_id, const char* type, const char* params_json);
+VS_API int vs_grade_preview(const char* params_json, uint8_t* rgba, int width, int height);
+/* Eyedropper: average colour (0..1 RGB) of a 5x5 spot of the newest preview frame at x, y (0..1 of
+ * the frame). Returns 0, or -1 when no frame has been shown yet. */
+VS_API int vs_preview_pick_color(vs_session* s, double x, double y, double* rgb3);
+/* Scope of the newest preview frame into rgba_out (width*height*4): kind 0 waveform, 1 RGB parade,
+ * 2 vectorscope, 3 histogram. A couple of milliseconds; returns -1 before the first frame. */
+VS_API int vs_preview_scope(vs_session* s, int kind, int width, int height, uint8_t* rgba_out);
 /* ---- keyframes inside one clip (keyframes.hpp); all undoable, times are TIMELINE ticks ----
  * group: 0 = picture (scale, x, y, opacity), 1 = audio (volume); the two are independent.
  * vs_add_keyframe captures the clip's current values at t. vs_remove_keyframe: 1 removed, 0 none there.
@@ -294,6 +317,15 @@ VS_API int vs_export_start(vs_session* s, const char* out_path, int width, int h
  * {"id","name","description","width","height","fps","video_bitrate","estimated_bytes"}. */
 VS_API char* vs_export_presets_json(vs_session* s);
 VS_API int vs_export_start_preset(vs_session* s, const char* out_path, const char* preset_id);
+/* Video formats: JSON array of {"id","name","description"}; ids "h264", "hevc", "hevc10"
+ * (H.265 Main 10, rendered in 16-bit float). */
+VS_API char* vs_export_formats_json(vs_session* s);
+/* vs_export_presets_json with bitrate and size for a format (NULL or "" = "h264"). */
+VS_API char* vs_export_presets_format_json(vs_session* s, const char* format_id);
+/* As vs_export_start_preset in a format (NULL or "" = "h264"). A device without an encoder for
+ * the format ends the export with VS_EXPORT_FAILED (vs_export_status) and the reason in vs_last_error. */
+VS_API int vs_export_start_preset_format(vs_session* s, const char* out_path, const char* preset_id,
+                                         const char* format_id);
 VS_API int vs_export_status(vs_session* s, double* progress); /* VS_EXPORT_* */
 VS_API void vs_export_cancel(vs_session* s);
 

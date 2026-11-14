@@ -1,6 +1,7 @@
 // Workspace: every shortcut is unique and documented, keys drive navigation and
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
+#include "raw_sample.hpp"
 #include <cmath>
 #include <QApplication>
 #include <QComboBox>
@@ -23,6 +24,9 @@
 
 #include "EditorController.h"
 #include "CoverPanel.h"
+#include "GradePanel.h"
+#include "ScopesPanel.h"
+#include "GradeWidgets.h"
 #include "LooksPanel.h"
 #include "MainWindow.h"
 #include "PreviewWidget.h"
@@ -158,6 +162,19 @@ private slots:
         QVERIFY(std::abs(tl->pxPerSec() - fit) < 1e-6);
     }
 
+    void importCameraRaw() {
+        // A camera RAW photo imports like any picture (LibRaw / Apple RAW behind the backend).
+        const QString path = QDir::temp().filePath("vstudio_desktop_test.dng");
+        vtest::writeTestDng(path.toStdString(), 640, 360);
+        const int before = ctrl_->assets().size();
+        ctrl_->importMedia({QUrl::fromLocalFile(path)});
+        QTRY_COMPARE(ctrl_->assets().size(), before + 1);
+        const QVariantMap m = ctrl_->assets().back().toMap();
+        QCOMPARE(m["name"].toString(), QString("vstudio_desktop_test.dng"));
+        QCOMPARE(m["type"].toString(), QString("image"));
+        QCOMPARE(m["resolution"].toString(), QString("640×360"));
+    }
+
     void exportPresetsForProject() {
         const QVariantList presets = ctrl_->exportPresets();
         QCOMPARE(presets.size(), 6);
@@ -169,6 +186,16 @@ private slots:
                 QVERIFY(m["estimatedBytes"].toLongLong() > 0);
             }
         }
+        // Formats: H.265 10-bit is offered and sized smaller than H.264 at the same preset.
+        const QVariantList formats = ctrl_->exportFormats();
+        QCOMPARE(formats.size(), 3);
+        QCOMPARE(formats.back().toMap()["id"].toString(), QString("hevc10"));
+        auto bitrate = [&](const QString& fmt) {
+            for (const QVariant& v : ctrl_->exportPresets(fmt))
+                if (v.toMap()["id"] == "fhd1080") return v.toMap()["bitrate"].toLongLong();
+            return qint64(0);
+        };
+        QVERIFY(bitrate("hevc10") > 0 && bitrate("hevc10") < bitrate("h264"));
     }
 
     void videoEffects() {
@@ -229,6 +256,56 @@ private slots:
         QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
         emit list->itemClicked(list->item(0));  // "Gốc": no look
         QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
+    }
+
+    void proGrade() {
+        GradePanel* panel = win_->grade();
+        const QString clip = QString::fromStdString(ctrl_->project()->tracks.front().clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        QVERIFY(panel->tabs()->isEnabled());
+        const auto undoDepth = [&] { return ctrl_->undoLabel(); };
+        // Dragging a slider previews live without an undo step; release commits one.
+        QSlider* sat = panel->slider("saturation");
+        sat->setSliderDown(true);
+        sat->setValue(150);
+        QVERIFY(ctrl_->clipGrade(clip).empty());  // still uncommitted
+        sat->setSliderDown(false);
+        emit sat->sliderReleased();
+        QCOMPARE(ctrl_->clipGrade(clip).value("saturation", 0.0), 1.5);
+        // A warm push on the highlights wheel.
+        panel->wheel(2)->dragPuckTo(30, 0.5);
+        const auto gain = ctrl_->clipGrade(clip)["gain"];
+        QVERIFY(gain.is_array() && gain[0].get<double>() > gain[2].get<double>());
+        // Curves: a point on the master curve is stored and drawn from the same spline.
+        panel->tabs()->setCurrentIndex(1);
+        panel->curve()->setPoints({{0, 0}, {0.5, 0.65}, {1, 1}});
+        emit panel->curve()->committed();
+        QCOMPARE(ctrl_->clipGrade(clip)["curves"]["master"].size(), std::size_t(3));
+        // Eyedropper -> qualifier selects that colour (kept even before any change inside it).
+        panel->pickColor(QColor(60, 120, 230));
+        const auto q = ctrl_->clipGrade(clip)["qualifier"];
+        QVERIFY(q.is_object());
+        QVERIFY(std::abs(q["hue"][0].get<double>() - 219) < 3);
+        // Undo goes back one control at a time; reset removes the grade.
+        ctrl_->undo();
+        QVERIFY(!ctrl_->clipGrade(clip).contains("qualifier"));
+        QVERIFY(ctrl_->clipGrade(clip).contains("curves"));
+        ctrl_->setClipGrade({clip}, vstudio::Json());
+        QVERIFY(ctrl_->clipGrade(clip).empty());
+        QCOMPARE(panel->slider("saturation")->value(), 100);  // panel follows the project
+        (void)undoDepth;
+    }
+
+    void scopesFollowPreview() {
+        ScopesPanel* sc = win_->scopes();
+        QVERIFY(sc->isVisible());
+        QSignalSpy spy(sc, &ScopesPanel::scopeUpdated);
+        for (int k = 0; k < 4; ++k) {
+            sc->kind()->setCurrentIndex(k);
+            ctrl_->refreshPreview();
+            QVERIFY(spy.wait(5000));
+            QVERIFY(!sc->scope().isNull());
+        }
     }
 
     void logInputAndLut() {

@@ -151,6 +151,10 @@ public:
     void setClipVideoFx(const std::vector<Id>& clipIds, const std::string& group, const std::string& fxId,
                         double amount = 1.0, double speed = 1.0, double line = -1.0);
 
+    // Colour grade (grade.hpp) on one or many clips, one undo step: replaces the clips'
+    // grade, keeping its place in the effect chain; null or neutral params remove it.
+    void setClipGrade(const std::vector<Id>& clipIds, const Json& params);
+
     bool undo();
     bool redo();
     [[nodiscard]] bool canUndo() const { return history_.canUndo(); }

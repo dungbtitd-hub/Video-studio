@@ -681,6 +681,26 @@ TEST("export presets keep the canvas aspect") {
     for (const auto& pr : exportPresets()) CHECK(!pr.name.empty() && !pr.id.empty());
 }
 
+TEST("export formats: H.264, H.265 and H.265 10-bit") {
+    Project p = Editor::newProject("P", 1920, 1080, {30, 1}, "test");
+    const auto& pr = *findExportPreset("fhd1080");
+    const ExportSettings h264 = exportSettingsFor(p, pr, "h264");
+    CHECK_EQ(h264.videoCodec, std::string("h264"));
+    CHECK_EQ(h264.bitDepth, 8);
+    const ExportSettings hevc = exportSettingsFor(p, pr, "hevc");
+    CHECK_EQ(hevc.videoCodec, std::string("hevc"));
+    CHECK(hevc.videoBitrate < h264.videoBitrate);  // same quality in a smaller file
+    const ExportSettings ten = exportSettingsFor(p, pr, "hevc10");
+    CHECK_EQ(ten.videoCodec, std::string("hevc"));
+    CHECK_EQ(ten.bitDepth, 10);
+    CHECK(ten.videoBitrate > hevc.videoBitrate && ten.videoBitrate < h264.videoBitrate);
+    ExportSettings u = h264;
+    CHECK(!applyExportFormat(u, "nope"));
+    CHECK_EQ(u.videoCodec, std::string("h264"));
+    CHECK_EQ(exportFormats().size(), 3u);
+    CHECK(findExportFormat("hevc10") != nullptr && findExportFormat("x") == nullptr);
+}
+
 TEST("colour looks: one tap, replaceable, undoable, render the same everywhere") {
     Fixture f;
     const Id a = f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(2));

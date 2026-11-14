@@ -15,6 +15,7 @@ import 'core/project_store.dart';
 import 'core/transfer.dart';
 import 'core/vstudio.dart';
 import 'ui/cover_panel.dart';
+import 'ui/grade_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
@@ -64,6 +65,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   late final AppLifecycleListener _lifecycle;
   // Covers (blur / mosaic... over a region) of the selected video clip.
   bool _coverMode = false;
+  bool _gradeMode = false; // "Chỉnh màu" panel under the preview
+  bool _picking = false; // eyedropper: next tap on the preview picks a colour
+  final _gradeKey = GlobalKey<GradePanelState>();
+  Timer? _scopeTimer; // refreshes the scope overlay while grading
+  ui.Image? _scope;
+  int _scopeKind = 0; // 0 waveform, 1 parade, 2 vectorscope, 3 histogram
   String? _activeCover;
   bool _tracking = false;
   double _trackProgress = 0;
@@ -217,6 +224,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void dispose() {
     _saveNow();
     _saveTimer?.cancel();
+    _stopScopes();
     _lifecycle.dispose();
     _ticker.dispose();
     _media.dispose();
@@ -334,7 +342,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   static const _mediaExtensions = [
     'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp', //
     'mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', //
-    'jpg', 'jpeg', 'png', 'webp', 'heic',
+    'jpg', 'jpeg', 'png', 'webp', 'heic', //
+    // Camera RAW photos (developed by LibRaw / Apple's RAW engine in the core).
+    'dng', 'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'raf', 'orf', 'rw2', 'pef', 'srw', 'x3f', //
+    '3fr', 'fff', 'iiq', 'erf', 'mef', 'mos', 'mrw', 'kdc', 'dcr', 'rwl',
   ];
 
   Future<void> _import() async {
@@ -351,6 +362,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           ListTile(
               leading: const Icon(Icons.folder_open),
               title: const Text('Tệp'),
+              subtitle: const Text('Cả ảnh RAW từ máy ảnh (DNG, CR3, NEF, ARW, RAF…)'),
               onTap: () => Navigator.pop(context, FileType.custom)),
         ]),
       ),
@@ -871,6 +883,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void _enterCovers() {
     final ids = _coverIds();
     setState(() {
+      _gradeMode = false;
       _coverMode = true;
       _activeCover = ids.isEmpty ? null : ids.first;
       _status = 'Chọn kiểu che, rồi kéo vùng trên khung hình. Kéo góc dưới bên phải hoặc dùng hai ngón để đổi cỡ.';
@@ -915,6 +928,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   /// The active cover over the preview, while covering and the clip is on screen.
   Widget _coverable(Widget preview, ClipKeyState? keys) {
+    if (_picking) {
+      return LayoutBuilder(
+        builder: (context, box) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (d) {
+            final c = _vs?.pickPreviewColor(d.localPosition.dx / box.maxWidth, d.localPosition.dy / box.maxHeight);
+            setState(() => _picking = false);
+            if (c != null) _gradeKey.currentState?.pickColor(Color.from(alpha: 1, red: c.$1, green: c.$2, blue: c.$3));
+          },
+          child: preview,
+        ),
+      );
+    }
     final vs = _vs, clip = _selectedVideoClip, cover = _activeCover;
     if (!_coverMode || vs == null || clip == null || cover == null || keys == null || _playing) {
       return _objectBox(preview, keys) ?? _zoomable(preview, keys);
@@ -939,6 +965,78 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       ),
     ]);
   }
+
+  static const _scopeW = 192, _scopeH = 108;
+
+  /// Scope of what the preview shows, a few times a second while grading (a couple of ms each).
+  void _startScopes() {
+    _scopeTimer?.cancel();
+    _scopeTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final vs = _vs;
+      if (vs == null || !_gradeMode) return _stopScopes();
+      final px = vs.previewScope(_scopeKind, _scopeW, _scopeH);
+      if (px == null) return;
+      ui.decodeImageFromPixels(px, _scopeW, _scopeH, ui.PixelFormat.rgba8888, (img) {
+        if (!mounted || !_gradeMode) return img.dispose();
+        setState(() {
+          _scope?.dispose();
+          _scope = img;
+        });
+      });
+    });
+  }
+
+  void _stopScopes() {
+    _scopeTimer?.cancel();
+    _scopeTimer = null;
+    _scope?.dispose();
+    _scope = null;
+  }
+
+  Widget _gradePanel(VStudio vs, ClipView clip) => GradePanel(
+        key: _gradeKey,
+        vs: vs,
+        clipId: clip.id,
+        params: clip.grade ?? const <String, dynamic>{},
+        onLive: (p) {
+          try {
+            // null = compare with the original: preview the clip without its grade.
+            vs.setEffectPreview(clip.id, 'builtin.color_grade', p);
+          } on VStudioException catch (e) {
+            setState(() => _status = e.message);
+          }
+        },
+        onCommit: (p) {
+          _edit((vs) => vs.setClipGrade([clip.id], p.isEmpty ? null : p));
+          _vs?.seek(_playhead);
+        },
+        onApplyAll: (p) {
+          final ids = [
+            for (final t in _project!.tracks)
+              if (!t.audio && !t.locked)
+                for (final c in t.clips)
+                  if (!c.generated) c.id
+          ];
+          _edit((vs) {
+            vs.setClipGrade(ids, p);
+            _status = 'Đã áp dụng chỉnh màu cho ${ids.length} clip';
+          });
+          _vs?.seek(_playhead);
+        },
+        onPickMode: (on) => setState(() {
+          _picking = on;
+          _status = on ? 'Chạm vào màu cần chỉnh trên khung hình' : null;
+        }),
+        onDone: () {
+          vs.setEffectPreview('', '', null);
+          _stopScopes();
+          setState(() {
+            _gradeMode = false;
+            _picking = false;
+            _status = null;
+          });
+        },
+      );
 
   Widget _coverPanel(VStudio vs, ClipView clip) {
     final ids = _coverIds();
@@ -1070,6 +1168,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   String? _exportPath; // file being written; moved to Photos when done
 
+  String _exportFormat = 'h264';
+
   Future<void> _export() async {
     final vs = _vs;
     if (vs == null) return;
@@ -1077,39 +1177,63 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       vs.cancelExport();
       return;
     }
-    final presets = vs.exportPresets();
-    final preset = await showModalBottomSheet<ExportPresetView>(
+    final formats = vs.exportFormats();
+    var format = _exportFormat;
+    final chosen = await showModalBottomSheet<(ExportPresetView, String)>(
       context: context,
       backgroundColor: VsColors.panel,
       isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
-          child: ListView(shrinkWrap: true, children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Text('Xuất video', style: TextStyle(color: VsColors.fg, fontSize: 16)),
-            ),
-            for (final p in presets)
-              ListTile(
-                title: Text(p.name),
-                subtitle: Text(
-                    '${p.width} × ${p.height} · ${p.fps.round()} khung/giây · khoảng ${_size(p.estimatedBytes)}\n'
-                    '${p.description}',
-                    style: const TextStyle(fontSize: 12)),
-                isThreeLine: true,
-                onTap: () => Navigator.pop(context, p),
+      builder: (context) => StatefulBuilder(builder: (context, setSheet) {
+        final presets = vs.exportPresets(format);
+        final note = formats.where((f) => f.id == format).firstOrNull?.description ?? '';
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
+            child: ListView(shrinkWrap: true, children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
+                child: Text('Xuất video', style: TextStyle(color: VsColors.fg, fontSize: 16)),
               ),
-          ]),
-        ),
-      ),
+              // H.264 / H.265 / H.265 10-bit: 10-bit keeps graded Log footage free of banding.
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Wrap(spacing: 8, children: [
+                  for (final f in formats)
+                    ChoiceChip(
+                      key: ValueKey('format-${f.id}'),
+                      label: Text(f.name),
+                      selected: f.id == format,
+                      onSelected: (_) => setSheet(() => format = f.id),
+                    ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Text(note, style: const TextStyle(color: VsColors.fg2, fontSize: 12)),
+              ),
+              for (final p in presets)
+                ListTile(
+                  title: Text(p.name),
+                  subtitle: Text(
+                      '${p.width} × ${p.height} · ${p.fps.round()} khung/giây · khoảng ${_size(p.estimatedBytes)}\n'
+                      '${p.description}',
+                      style: const TextStyle(fontSize: 12)),
+                  isThreeLine: true,
+                  onTap: () => Navigator.pop(context, (p, format)),
+                ),
+            ]),
+          ),
+        );
+      }),
     );
-    if (preset == null || !mounted) return;
+    if (chosen == null || !mounted) return;
+    final (preset, fmt) = chosen;
+    _exportFormat = fmt;
     // Written to the app's temporary folder, then handed to the photo library.
     final out = '${Directory.systemTemp.path}/${_safeName(_project?.name ?? 'video')} ${preset.height}p.mp4';
     _exportPath = out;
     _edit((vs) {
-      vs.startExportPreset(out, preset.id);
+      vs.startExportPresetFormat(out, preset.id, fmt);
       _exportProgress = 0;
       _status = 'Đang xuất ${preset.name}…';
     });
@@ -1280,17 +1404,34 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         Column(
           children: [
             Expanded(
-              child: Container(
-                color: Colors.black,
-                alignment: Alignment.center,
-                child: _textureId != null && (_project?.duration ?? 0) > 0
-                    ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
-                    : _frame == null
-                        ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
-                        : AspectRatio(
-                            aspectRatio: _frame!.width / _frame!.height,
-                            child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
-              ),
+              child: Stack(children: [
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black,
+                    alignment: Alignment.center,
+                    child: _textureId != null && (_project?.duration ?? 0) > 0
+                        ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
+                        : _frame == null
+                            ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
+                            : AspectRatio(
+                                aspectRatio: _frame!.width / _frame!.height,
+                                child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
+                  ),
+                ),
+                if (_gradeMode && _scope != null)
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: GestureDetector(
+                      // Tap: next scope (waveform, parade, vectorscope, histogram).
+                      onTap: () => setState(() => _scopeKind = (_scopeKind + 1) % 4),
+                      child: Opacity(
+                        opacity: 0.9,
+                        child: RawImage(image: _scope, width: _scopeW.toDouble(), height: _scopeH.toDouble()),
+                      ),
+                    ),
+                  ),
+              ]),
             ),
             Container(
               color: VsColors.panel,
@@ -1316,7 +1457,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
               ]),
             ),
-            if (_coverMode && _selectedVideoClip != null)
+            if (_gradeMode && _selectedMediaClip != null)
+              _gradePanel(_vs!, _selectedMediaClip!)
+            else if (_coverMode && _selectedVideoClip != null)
               _coverPanel(_vs!, _selectedVideoClip!)
             else if (_selectedClip != null)
               KeyframeBar(
@@ -1340,6 +1483,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                   if (id != _selected) _activeCover = null;
                   _selected = id;
                   if (_selectedVideoClip == null) _coverMode = false;
+                  if (_selectedMediaClip == null) _gradeMode = false;
                   if (_coverMode) _activeCover = _coverIds().firstOrNull;
                 }),
                 onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
@@ -1401,6 +1545,17 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.ac_unit, label: 'Lớp phủ', onTap: _vs == null ? null : _overlays),
             _Tool(icon: Icons.closed_caption_outlined, label: 'Phụ đề', onTap: _vs == null ? null : _subtitles),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
+            _Tool(
+                icon: Icons.palette_outlined,
+                label: 'Chỉnh màu',
+                onTap: _selectedMediaClip == null
+                    ? null
+                    : () => setState(() {
+                          _startScopes();
+                          _gradeMode = true;
+                          _coverMode = false;
+                          _status = 'Kéo để xem ngay; nhấc tay là lưu (hoàn tác được)';
+                        })),
             _Tool(icon: Icons.zoom_in_map, label: 'Hiệu ứng', onTap: _selectedMediaClip == null ? null : _videoFx),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),

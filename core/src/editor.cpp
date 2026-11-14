@@ -6,6 +6,7 @@
 
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
+#include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
 
@@ -738,6 +739,30 @@ void Editor::setClipLut(const std::vector<Id>& clipIds, const std::string& path,
     Json params;
     if (!path.empty()) params = Json{{"path", path}, {"strength", std::clamp(strength, 0.0, 1.0)}};
     setClipEffect(clipIds, kLutEffect, params, false, path.empty() ? "Remove LUT" : "Apply LUT");
+}
+
+void Editor::setClipGrade(const std::vector<Id>& clipIds, const Json& params) {
+    if (clipIds.empty()) throw EditError("no clip selected");
+    if (!params.is_null() && !params.is_object()) throw EditError("grade parameters must be an object");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    Json p = params;
+    if (p.is_object()) p.erase("show_mask");
+    if (p.is_object())
+        if (auto q = p.find("qualifier"); q != p.end() && q->is_object()) q->erase("show_mask");  // preview helper only
+    const bool remove = p.is_null() || isNeutralGrade(p);
+    const Id effectId = newId();
+    run(remove ? "Reset grade" : "Grade colour", EditCommand::Scope::Tracks, tracks, [=](Project& pr) {
+        for (const Id& c : clipIds) {
+            Clip* clip = pr.trackOfClip(c)->findClip(c);
+            clip->effects = withGradeEffect(clip->effects, remove ? Json() : p, effectId);
+        }
+    });
 }
 
 bool Editor::undo() { return history_.undo(project_); }

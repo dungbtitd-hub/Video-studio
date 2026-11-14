@@ -98,9 +98,13 @@ public:
     Q_INVOKABLE void stepFrames(int frames);
     Q_INVOKABLE void exportTo(const QUrl& file, int width, int height);
     // Export with a shared preset (vstudio/export_presets.hpp), sized for this project.
-    Q_INVOKABLE void exportWithPreset(const QUrl& file, const QString& presetId);
-    // For the export dialog: id, name, description, width, height, fps, bitrate, estimatedBytes.
-    [[nodiscard]] QVariantList exportPresets() const;
+    // formatId: "h264", "hevc" or "hevc10" (H.265 10-bit), see vstudio::exportFormats().
+    Q_INVOKABLE void exportWithPreset(const QUrl& file, const QString& presetId, const QString& formatId = "h264");
+    // For the export dialog: id, name, description, width, height, fps, bitrate, estimatedBytes
+    // (bitrate and size for that format).
+    [[nodiscard]] QVariantList exportPresets(const QString& formatId = "h264") const;
+    // id, name, description of each video format.
+    [[nodiscard]] QVariantList exportFormats() const;
     Q_INVOKABLE void cancelExport();
 
     QString projectName() const;
@@ -130,6 +134,12 @@ public:
     [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
     [[nodiscard]] QString clipAsset(const QString& clipId) const;
     // Log/HDR -> Rec.709 (vstudio/color_space.hpp): input id ("" = none) and exposure.
+    // Pro grade (grade.hpp). setClipGrade commits one undo step (null/neutral removes);
+    // previewGrade shows uncommitted params on the preview while a control is dragged.
+    void setClipGrade(const QStringList& clipIds, const vstudio::Json& params);
+    [[nodiscard]] vstudio::Json clipGrade(const QString& clipId) const;  // {} when none
+    void previewGrade(const QString& clipId, const vstudio::Json& params);
+    void clearGradePreview();
     void setClipColorSpace(const QStringList& clipIds, const QString& input, double exposure = 0.0);
     [[nodiscard]] QPair<QString, double> clipColorSpace(const QString& clipId) const;
     // What the clip's file says it is (HLG today); "" when unknown.
@@ -293,6 +303,7 @@ private:
     template <class F>
     bool edit(F&& f);  // runs an edit, reports EditError in the status bar
     void published();  // take a new snapshot, hand it to the preview, invalidate QML models
+    bool gradePreviewOn_ = false;
     void setStatus(const QString& s);
     void startExport(const QUrl& file, const vstudio::ExportSettings& es);
     void buildAssetsModel() const;

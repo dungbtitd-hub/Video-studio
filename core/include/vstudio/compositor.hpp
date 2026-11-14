@@ -48,9 +48,15 @@ void compositeOver(VideoFrame& dst, const VideoFrame& src, const Transform& tr);
 // Same for an RGBA16F `dst` (src in either format), in float: the deep reference.
 void compositeOverDeep(VideoFrame& dst, const VideoFrame& src, const Transform& tr);
 
+struct GpuGrade;  // grade.hpp
+
 struct CompositeLayer {
-    std::shared_ptr<const VideoFrame> frame;  // straight-alpha RGBA
+    std::shared_ptr<const VideoFrame> frame;  // straight-alpha RGBA (RGBA16F only when the grade is set)
     Transform transform;
+    // Colour grade to run on this layer's pixels before it is drawn (only handed to
+    // compositors with supportsGrade()). The frame may then be RGBA16F even for an
+    // 8-bit output, so 10-bit sources are graded at full precision on the GPU.
+    std::shared_ptr<const GpuGrade> grade;
 };
 
 class ICompositor {
@@ -61,6 +67,9 @@ public:
     // RGBA16F output and layers. A compositor without it is skipped for deep
     // renders (the Renderer uses the CPU reference), never handed half floats.
     [[nodiscard]] virtual bool supportsDeep() const { return false; }
+    // Runs CompositeLayer::grade itself (in its shader) and accepts RGBA16F layers
+    // for an 8-bit output. Compositors without it are given already-graded 8-bit layers.
+    [[nodiscard]] virtual bool supportsGrade() const { return false; }
     // Fills `out` (already allocated to the output size) with opaque black,
     // then draws `layers` bottom to top. Must be safe to call from several
     // threads (preview and export run at the same time). Returns false (and

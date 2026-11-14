@@ -9,6 +9,8 @@
 class EditorController;
 class PreviewWidget;
 class TimelineWidget;
+class GradePanel;
+class ScopesPanel;
 class LooksPanel;
 class CoverPanel;
 class TransitionsPanel;
@@ -32,6 +34,8 @@ public:
     explicit MainWindow(EditorController* editor, QWidget* parent = nullptr);
     [[nodiscard]] TimelineWidget* timeline() const { return timeline_; }
     [[nodiscard]] LooksPanel* looks() const { return looks_; }
+    [[nodiscard]] GradePanel* grade() const { return grade_; }
+    [[nodiscard]] ScopesPanel* scopes() const { return scopes_; }
     [[nodiscard]] CoverPanel* coverPanel() const { return covers_; }
     [[nodiscard]] TransitionsPanel* transitionsPanel() const { return transitions_; }
     [[nodiscard]] TextPanel* textPanel() const { return text_; }
@@ -57,7 +61,7 @@ private:
     void buildMenus();
     void importMedia();
     void exportVideo();
-    QString choosePreset();  // empty = cancelled
+    QString choosePreset(QString* format = nullptr);  // empty = cancelled; *format = "h264" | "hevc" | "hevc10"
     void showShortcuts();
     bool confirmDiscard();  // false = user cancelled
     void refreshAssets();
@@ -71,6 +75,8 @@ private:
     PreviewWidget* preview_;
     TimelineWidget* timeline_;
     LooksPanel* looks_;
+    GradePanel* grade_;
+    ScopesPanel* scopes_;
     CoverPanel* covers_;
     TransitionsPanel* transitions_;
     TextPanel* text_;

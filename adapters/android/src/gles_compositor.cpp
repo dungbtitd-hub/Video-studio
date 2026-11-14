@@ -11,6 +11,8 @@
 // mutex), so any thread may composite; the context never stays bound.
 #include "vstudio/android/gles_compositor.hpp"
 
+#include "vstudio/grade.hpp"
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
@@ -39,7 +41,89 @@ uniform vec4 uRect;      // layer in output pixels: left, top, right, bottom
 uniform float uOpacity;
 uniform int uExact;
 uniform ivec2 uOffset;
+uniform int uGraded;
+uniform highp sampler2D uGrade;  // RGBA32F, 4098 x 2 (see GpuGrade in grade.hpp); texelFetch only
+uniform vec4 uG[4];
 out vec4 color;
+
+// ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
+// Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
+float tone(float v, vec4 m) {
+    float pos = clamp(v, 0.0, 1.0) * 4096.0;
+    int i = min(int(pos), 4095);
+    float t = pos - float(i);
+    return mix(dot(texelFetch(uGrade, ivec2(i, 0), 0), m), dot(texelFetch(uGrade, ivec2(i + 1, 0), 0), m), t);
+}
+vec4 hueRow(float h) {
+    float pos = h - 360.0 * floor(h / 360.0);  // hue shifts may leave 0..360
+    int i = clamp(int(pos), 0, 359);
+    float t = pos - float(i);
+    return mix(texelFetch(uGrade, ivec2(i, 1), 0), texelFetch(uGrade, ivec2(i + 1, 1), 0), t);
+}
+vec3 rgb2hsv(vec3 c) {
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b)), d = mx - mn;
+    float s = mx > 1e-6 ? d / mx : 0.0;
+    float h = 0.0;
+    if (d > 1e-6) {
+        float k = 60.0 / d;
+        if (mx == c.r) { h = (c.g - c.b) * k; if (h < 0.0) h += 360.0; }
+        else if (mx == c.g) h = (c.b - c.r) * k + 120.0;
+        else h = (c.r - c.g) * k + 240.0;
+    }
+    return vec3(h, s, mx);
+}
+vec3 hsv2rgb(vec3 c) {
+    float h = c.x, s = c.y, v = c.z;
+    if (s <= 0.0) return vec3(v);
+    h = h - 360.0 * floor(h / 360.0);
+    float hp = h / 60.0;
+    int i = min(int(hp), 5);
+    float f = hp - float(i), p = v * (1.0 - s), q = v * (1.0 - s * f), t = v * (1.0 - s * (1.0 - f));
+    if (i == 0) return vec3(v, t, p);
+    if (i == 1) return vec3(q, v, p);
+    if (i == 2) return vec3(p, v, t);
+    if (i == 3) return vec3(p, q, v);
+    if (i == 4) return vec3(t, p, v);
+    return vec3(v, p, q);
+}
+float rangeMask(float v, float lo, float hi, float soft) {
+    if (v >= lo && v <= hi) return 1.0;
+    float d = v < lo ? lo - v : v - hi;
+    if (d >= soft) return 0.0;
+    float t = 1.0 - d / soft;
+    return t * t * (3.0 - 2.0 * t);
+}
+vec3 grade(vec3 c) {
+    if (uG[0].y > 0.5) c = vec3(tone(c.r, vec4(1, 0, 0, 0)), tone(c.g, vec4(0, 1, 0, 0)), tone(c.b, vec4(0, 0, 1, 0)));
+    if (uG[0].x != 1.0) {
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = l + (c - l) * uG[0].x;
+    }
+    bool hsl = uG[0].z > 0.5, qual = uG[0].w > 0.5;
+    if (!hsl && !qual) return c;
+    c = max(c, vec3(0.0));
+    vec3 hsv = rgb2hsv(c);
+    if (hsl && hsv.y > 0.0) {
+        vec4 a = hueRow(hsv.x);
+        float w = min(1.0, hsv.y * 2.0);
+        hsv.x += a.x * w;
+        hsv.z *= 1.0 + a.z * 0.5 * w;
+        hsv.y = clamp(hsv.y * (1.0 + (a.y - 1.0) * w), 0.0, 1.0);
+    }
+    if (qual) {
+        float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        float m = hueRow(hsv.x).w * rangeMask(hsv.y, uG[1].x, uG[1].y, uG[2].x) * rangeMask(luma, uG[1].z, uG[1].w, uG[2].x);
+        if (uG[2].y > 0.5) m = 1.0 - m;
+        if (uG[2].z > 0.5) return vec3(m);
+        if (m > 0.0) {
+            hsv.x += uG[2].w * m;
+            hsv.y = clamp(hsv.y * (1.0 + (uG[3].x - 1.0) * m), 0.0, 1.0);
+            hsv.z *= 1.0 + (uG[3].y - 1.0) * m;
+        }
+    }
+    return hsv2rgb(hsv);
+}
+
 void main() {
     vec2 p = gl_FragCoord.xy;  // pixel centre (x + 0.5, y + 0.5); y counts from the top row
     if (p.x < uRect.x || p.x >= uRect.z || p.y < uRect.y || p.y >= uRect.w) discard;
@@ -49,6 +133,7 @@ void main() {
     } else {
         c = texture(uTex, (p - uRect.xy) / (uRect.zw - uRect.xy));
     }
+    if (uGraded != 0) c.rgb = clamp(grade(c.rgb), 0.0, 1.0);
     c.a *= uOpacity;
     color = c;
 }
@@ -77,6 +162,7 @@ public:
         if (dpy_ == EGL_NO_DISPLAY) return;
         if (ctx_ != EGL_NO_CONTEXT && eglMakeCurrent(dpy_, surf_, surf_, ctx_)) {
             cache_.clear();  // deletes textures while the context is current
+            grades_.clear();
             if (fbo_) glDeleteFramebuffers(1, &fbo_);
             if (target_) glDeleteTextures(1, &target_);
             if (prog_) glDeleteProgram(prog_);
@@ -88,6 +174,7 @@ public:
     }
 
     std::string name() const override { return "android.gles_compositor"; }
+    bool supportsGrade() const override { return true; }
 
     bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string* error) override {
         if (out.empty()) return true;
@@ -140,6 +227,15 @@ private:
             glUniform4f(uRect_, float(r.left), float(r.top), float(r.left + r.width), float(r.top + r.height));
             glUniform1f(uOpacity_, float(std::lround(std::clamp(tr.opacity, 0.0, 1.0) * 255.0) / 255.0));
             glUniform1i(uExact_, r.unscaled ? 1 : 0);
+            if (l.grade) {
+                glActiveTexture(GL_TEXTURE1);  // the upload binds: keep it off the layer's unit
+                const GLuint g = gradeTexture(l.grade);
+                if (g) glBindTexture(GL_TEXTURE_2D, g);
+                glActiveTexture(GL_TEXTURE0);
+                if (!g) return fail(error, "cannot upload a grade table");
+                glUniform4fv(uG_, 4, l.grade->u);
+            }
+            glUniform1i(uGraded_, l.grade ? 1 : 0);
             glUniform2i(uOffset_, GLint(std::lround(r.left)), GLint(std::lround(r.top)));
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         }
@@ -184,6 +280,11 @@ private:
             uOpacity_ = glGetUniformLocation(prog_, "uOpacity");
             uExact_ = glGetUniformLocation(prog_, "uExact");
             uOffset_ = glGetUniformLocation(prog_, "uOffset");
+            uGraded_ = glGetUniformLocation(prog_, "uGraded");
+            uG_ = glGetUniformLocation(prog_, "uG");
+            glUseProgram(prog_);
+            glUniform1i(glGetUniformLocation(prog_, "uGrade"), 1);
+            glUseProgram(0);
             glGenVertexArrays(1, &vao_);
             glGenFramebuffers(1, &fbo_);
             glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex_);
@@ -217,10 +318,10 @@ private:
                 return cache_.front().tex.id;
             }
         }
-        Cached c{f.get(), f, {}, f->width, f->height};
+        Cached c{f.get(), f, {}, f->width, f->height, f->deep()};
         bool reuse = false;
         for (auto it = cache_.begin(); it != cache_.end(); ++it) {
-            if (it->frame.expired() && it->w == f->width && it->h == f->height) {
+            if (it->frame.expired() && it->w == f->width && it->h == f->height && it->deep == f->deep()) {
                 std::swap(c.tex.id, it->tex.id);
                 cache_.erase(it);
                 reuse = true;
@@ -235,15 +336,39 @@ private:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, f->width, f->height);
+            glTexStorage2D(GL_TEXTURE_2D, 1, f->deep() ? GL_RGBA16F : GL_RGBA8, f->width, f->height);
         } else {
             glBindTexture(GL_TEXTURE_2D, c.tex.id);
         }
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f->width, f->height, GL_RGBA, GL_UNSIGNED_BYTE, f->rgba.data());
+        if (f->deep())  // 10-bit sources graded in float: half floats straight from the decoder
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f->width, f->height, GL_RGBA, GL_HALF_FLOAT, f->half.data());
+        else
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f->width, f->height, GL_RGBA, GL_UNSIGNED_BYTE, f->rgba.data());
         if (glGetError() != GL_NO_ERROR) return 0;
         cache_.push_front(std::move(c));
         while (cache_.size() > kMaxTextures) cache_.pop_back();
         return cache_.front().tex.id;
+    }
+
+    // Grade tables by grade identity (gpuGrade() reuses one object per parameter set).
+    GLuint gradeTexture(const std::shared_ptr<const GpuGrade>& g) {
+        for (auto it = grades_.begin(); it != grades_.end(); ++it)
+            if (it->key == g.get() && it->grade.lock() == g) {
+                grades_.splice(grades_.begin(), grades_, it);
+                return grades_.front().tex.id;
+            }
+        GradeTex t{g.get(), g, {}};
+        glGenTextures(1, &t.tex.id);
+        glBindTexture(GL_TEXTURE_2D, t.tex.id);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, GpuGrade::kTableWidth, 2);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GpuGrade::kTableWidth, 2, GL_RGBA, GL_FLOAT, g->table.data());
+        if (glGetError() != GL_NO_ERROR) return 0;
+        grades_.push_front(std::move(t));
+        while (grades_.size() > 8) grades_.pop_back();
+        return grades_.front().tex.id;
     }
 
     struct Tex {  // owns one GL texture; destroyed only while the context is current
@@ -263,6 +388,12 @@ private:
         std::weak_ptr<const VideoFrame> frame;
         Tex tex;
         int w = 0, h = 0;
+        bool deep = false;
+    };
+    struct GradeTex {
+        const GpuGrade* key;
+        std::weak_ptr<const GpuGrade> grade;
+        Tex tex;
     };
     static constexpr std::size_t kMaxTextures = 24;
 
@@ -271,10 +402,11 @@ private:
     EGLSurface surf_ = EGL_NO_SURFACE;
     EGLContext ctx_ = EGL_NO_CONTEXT;
     GLuint prog_ = 0, vao_ = 0, fbo_ = 0, target_ = 0;
-    GLint uTex_ = -1, uQuad_ = -1, uRect_ = -1, uOpacity_ = -1, uExact_ = -1, uOffset_ = -1;
+    GLint uTex_ = -1, uQuad_ = -1, uRect_ = -1, uOpacity_ = -1, uExact_ = -1, uOffset_ = -1, uGraded_ = -1, uG_ = -1;
     GLint maxTex_ = 2048;
     int targetW_ = 0, targetH_ = 0;
     std::list<Cached> cache_;
+    std::list<GradeTex> grades_;
 };
 
 }  // namespace

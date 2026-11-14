@@ -1,5 +1,7 @@
 #include "vstudio/render.hpp"
 
+#include "vstudio/grade.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -286,11 +288,25 @@ void Renderer::warn(std::string w) {
 
 namespace {
 
+// Runs a layer's grade on the CPU (reference compositor, transitions, fallbacks) and
+// brings the frame to the output's format.
+CompositeLayer baked(const CompositeLayer& l, bool deepOut) {
+    if (!l.frame || (!l.grade && l.frame->deep() == deepOut)) return l;
+    auto f = std::make_shared<VideoFrame>(*l.frame);
+    if (l.grade) applyColorGrade(*f, l.grade->params);
+    if (f->deep() && !deepOut) convertFrame(*f, PixelFormat::RGBA8);  // dither down after grading
+    return CompositeLayer{std::move(f), l.transform, nullptr};
+}
+
 class CpuCompositor final : public ICompositor {
 public:
     std::string name() const override { return "builtin.cpu_compositor"; }
     bool supportsDeep() const override { return true; }
-    bool composite(VideoFrame& out, const std::vector<CompositeLayer>& layers, std::string*) override {
+    bool supportsGrade() const override { return true; }
+    bool composite(VideoFrame& out, const std::vector<CompositeLayer>& in, std::string*) override {
+        std::vector<CompositeLayer> layers;
+        layers.reserve(in.size());
+        for (const auto& l : in) layers.push_back(l.grade || (l.frame && l.frame->deep() && !out.deep()) ? baked(l, out.deep()) : l);
         if (out.deep()) {
             const std::uint16_t one = floatToHalf(1.0f);
             std::fill(out.half.begin(), out.half.end(), std::uint16_t{0});
@@ -322,27 +338,68 @@ ICompositor& Renderer::compositor() {
 
 std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const VideoFrame& out,
                                                   const std::string& purpose) {
+    // Live preview of an uncommitted effect change: swap only this clip's effects.
+    std::optional<Clip> live;
+    if (override_ && override_->clipId == layer.clip->id) {
+        live = *layer.clip;
+        live->effects = override_->type == kColorGradeEffect
+                            ? withGradeEffect(live->effects, override_->params, "live")
+                            : Json::array();
+        if (override_->type != kColorGradeEffect) {
+            bool placed = false;
+            for (const auto& e : layer.clip->effects) {
+                if (e.is_object() && e.value("type", std::string{}) == override_->type) {
+                    if (!override_->params.is_null()) {
+                        Json c = e;
+                        c["params"] = override_->params;
+                        live->effects.push_back(std::move(c));
+                    }
+                    placed = true;
+                    continue;
+                }
+                live->effects.push_back(e);
+            }
+            if (!placed && !override_->params.is_null())
+                live->effects.push_back({{"type", override_->type}, {"enabled", true}, {"params", override_->params}});
+        }
+    }
+    const Clip& full = live ? *live : *layer.clip;
+    // A grade at the end of the chain runs in the compositor (GPU shader) when it can:
+    // only the effects before it run here, and the frame stays deep for it.
+    std::shared_ptr<const GpuGrade> gpu;
+    std::optional<Clip> rest;
+    if (!deep_ && full.effects.is_array() && !full.effects.empty() && compositor().supportsGrade()) {
+        int last = -1;
+        for (int i = 0; i < static_cast<int>(full.effects.size()); ++i)
+            if (full.effects[i].is_object() && full.effects[i].value("enabled", true)) last = i;
+        if (last >= 0 && full.effects[last].value("type", std::string{}) == kColorGradeEffect) {
+            gpu = gpuGrade(full.effects[last].value("params", Json::object()));
+            rest = full;
+            rest->effects.erase(rest->effects.begin() + last);
+        }
+    }
+    const Clip& clip = rest ? *rest : full;
     // Deep sources (10-bit, Log) stay deep through grading even in an 8-bit preview,
     // so strong corrections do not band; plain clips skip the cost.
-    const bool graded = layer.clip->effects.is_array() && !layer.clip->effects.empty();
+    const bool graded = full.effects.is_array() && !full.effects.empty();
     auto frame = sourceFrame(layer, out.width, out.height, purpose, deep_ || graded);
     if (!frame) return std::nullopt;
-    if (modules_ && graded) {
+    if (modules_ && clip.effects.is_array() && !clip.effects.empty()) {
         // Effects work on a copy: cached source frames stay untouched.
         auto fx = std::make_shared<VideoFrame>(*frame);
         std::vector<std::string> w;
-        applyClipEffects(*modules_, *layer.clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
+        applyClipEffects(*modules_, clip, *fx, layer.sourceTime - layer.clip->sourceIn, &w, pool_.projectDir());
         for (auto& m : w) warn(std::move(m));
         frame = std::move(fx);
     }
-    if (frame->deep() && !out.deep())  // 8-bit output: dither down once, after grading
+    if (frame->deep() && !out.deep() && !gpu)  // 8-bit output: dither down once, after grading
         frame = std::make_shared<const VideoFrame>(convertedFrame(*frame, PixelFormat::RGBA8));
     Transform tr = animatedTransform(*layer.clip, layer.sourceTime);  // keyframes (zoom, pan, opacity)
     // Scale offsets from canvas pixels to output pixels (preview may be smaller).
     const double k = static_cast<double>(out.width) / project_.canvas.width;
     tr.x *= k;
     tr.y *= k;
-    return CompositeLayer{std::move(frame), tr};
+    return CompositeLayer{std::move(frame), tr, std::move(gpu)};
 }
 
 std::optional<CompositeLayer> Renderer::generatedLayer(const Clip& c, Time src, const VideoFrame& out) {
@@ -408,6 +465,7 @@ std::optional<CompositeLayer> Renderer::transitionLayer(const ActiveTransition& 
         const Time last = a->duration > Time::zero() ? a->duration - Time::fromFrame(1, fps) : c->sourceOut - Time::fromFrame(1, fps);
         src = std::clamp(src, Time::zero(), std::max(Time::zero(), last));
         if (auto l = clipLayer({c, a, src, trackIndex}, out, why); l && l->frame) {
+            *l = baked(*l, out.deep());  // each side is drawn here, not by the compositor
             if (out.deep()) compositeOverDeep(f, *l->frame, l->transform);
             else compositeOver(f, *l->frame, l->transform);
         }
