@@ -850,7 +850,7 @@ class _OverlaySheetState extends State<OverlaySheet> {
   }
 
   @override
-  Widget build(BuildContext context) => _SheetFrame(
+  Widget build(BuildContext context) => SheetFrame(
         tabs: const ['Lớp phủ', 'Chỉnh'],
         initial: widget.content == null ? 0 : 1,
         children: [_library(), _settings()],
