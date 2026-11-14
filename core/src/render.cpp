@@ -592,13 +592,25 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
             IMediaDecoder* d = pool_.decoder(*a, purpose, &err);
             if (!d) continue;
             const std::int64_t n = s1 - s0;
-            const bool unity = c.speed == Rational{1, 1};
+            const bool curved = c.curved();
+            const bool unity = !curved && c.speed == Rational{1, 1};
+            // Speed ramps: the source position of every 32nd output sample, straight lines between
+            // (the curve is smooth, so this is far below a sample of error).
+            constexpr std::int64_t kGrid = 32;
+            std::vector<double> grid;  // source seconds at output samples 0, 32, 64, ..., n
+            if (curved) {
+                grid.reserve(static_cast<std::size_t>(n / kGrid + 2));
+                for (std::int64_t i = 0; i <= n + kGrid - 1; i += kGrid)
+                    grid.push_back(c.toSource(Time::fromSample(s0 + std::min(i, n), sr)).seconds());
+            }
             // For speed != 1 read the corresponding source span and resample linearly (no pitch correction in P0).
-            const std::int64_t need = unity ? n : std::max<std::int64_t>(1, mulDiv(n, c.speed.num, c.speed.den, Rounding::Up));
+            std::int64_t need = unity ? n : std::max<std::int64_t>(1, mulDiv(n, c.speed.num, c.speed.den, Rounding::Up));
+            if (curved) need = std::max<std::int64_t>(1, std::llround(std::abs(grid.back() - grid.front()) * sr) + 2);
             // First source sample of the span read forwards (a reversed clip reads the span
             // that ends where the block starts, then plays it backwards).
             Time src = c.toSource(Time::fromSample(s0, sr));
             if (c.reversed) src = src + Time::fromTicks(1) - Time::fromSample(need, sr);
+            if (src < Time::zero()) src = Time::zero();
             AudioBuffer in;
             const auto fx = audiofx::clipEffects(c);
             if (fx.empty()) {
@@ -660,7 +672,13 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
                     const float* s = &in.samples[static_cast<std::size_t>(i) * ch];
                     for (int k = 0; k < nc; ++k) v[k] = s[k];
                 } else {
-                    const double pos = static_cast<double>(i) * c.speed.num / c.speed.den;
+                    double pos = static_cast<double>(i) * c.speed.num / c.speed.den;
+                    if (curved) {  // samples since the first one played (backwards for reversed clips)
+                        const std::size_t g = static_cast<std::size_t>(i / kGrid);
+                        const double f = static_cast<double>(i % kGrid) / kGrid;
+                        const double at = grid[g] + (grid[std::min(g + 1, grid.size() - 1)] - grid[g]) * f;
+                        pos = std::abs(at - grid.front()) * sr;
+                    }
                     const std::int64_t j = std::min<std::int64_t>(static_cast<std::int64_t>(pos), inFrames - 1);
                     const std::int64_t j1 = std::min<std::int64_t>(j + 1, inFrames - 1);
                     const float f = static_cast<float>(pos - j);

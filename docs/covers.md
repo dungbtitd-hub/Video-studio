@@ -11,16 +11,16 @@ Each cover is one effect on the clip: `{"type": "builtin.cover", "effect_id": ..
 | Param | Meaning |
 |-------|---------|
 | `x, y, w, h` | Region in the **source** frame, 0..1. The cover stays on the subject when the clip is zoomed or moved by keyframes. |
-| `shape` | One of 9: `rect`, `rounded`, `ellipse`, `circle`, `diamond`, `triangle`, `hexagon`, `star`, `heart` |
+| `shape` | One of 11: `rect`, `rounded`, `ellipse`, `circle`, `diamond`, `triangle`, `hexagon`, `star`, `heart`, `line` (split: the side below the line through the region's centre, turned by `rotation`), `band` (a strip of height `h` across the whole frame) |
 | `style` | One of 36 styles in 5 groups (below) |
 | `amount` | Strength, 0..1, independent of resolution |
-| `feather` | Soft edge, 0..1 of the region's smaller half size |
+| `feather` | Soft edge, 0..1 of the region's smaller half size (`line`/`band`: of a quarter of the frame's smaller side) |
 | `rotation` | Degrees about the region's centre |
 | `invert` | `true` covers everything **except** the region |
 | `color` | `#rrggbb` for the solid-colour styles |
 | `anim` | Keyframes for `x, y, w, h, rotation, amount`, in source time (same format as `Clip::keyframes`) |
 
-### The 36 styles
+### The 38 styles
 
 | Group | Styles |
 |-------|--------|
@@ -28,6 +28,7 @@ Each cover is one effect on the clip: `{"type": "builtin.cover", "effect_id": ..
 | Khảm | mosaic, mosaic_large, dots, hex, crystal, triangles, glass_blocks, halftone |
 | Che kín | black, white, color, gradient, stripes, checker |
 | Họa tiết (animated) | noise, glitch, sparkle, hearts, ripple, snow |
+| Mặt nạ (masks) | mask_keep, mask_cut |
 | Nghệ thuật | posterize, sketch, emboss, thermal, invert, night, neon, oil |
 
 The work is done only inside the region's bounding box, plus the blur margin. A small cover on a 4K frame stays
@@ -71,3 +72,11 @@ ML Kit) and one shared model.
 
 Tracking results are applied on the editing thread, by the `vs_track_status` call that first sees the job
 finished.
+
+## Masks
+
+The two styles in the **Mặt nạ** group change only the clip's transparency, so the tracks below show through.
+`mask_keep` keeps the region and makes the rest transparent; `mask_cut` makes the region transparent. `invert`
+swaps the two. Everything else is shared with covers: all 11 shapes, soft edge, rotation, keyframes and following
+a moving subject. Colours are never touched, so a mask commutes with the colour grade, Look and chroma key that run
+in the GPU compositor. On mobile the **Mặt nạ** tool opens the same panel and starts with a soft oval mask.

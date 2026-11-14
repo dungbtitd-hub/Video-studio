@@ -392,11 +392,25 @@ VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_
  *   place_audio {asset, at (ticks), track?}     -> {"clip"}: a voice-over take on a free "Thu âm" track
  *   set_track_mix {track, pan (-1..1), solo}; set_track_volume {track, volume}; set_clip_volume {clip, volume}
  *   set_reversed {clips, on}; freeze_frame {clip, at, duration?} -> {"clip"}
+ *   speed_presets -> {"presets": [{"id","name","points": [[u, v]...]}]}
+ *   clip_speed {clip} -> {"can","why","speed","points": [[u (0..1 of the clip), v]...],"preset","duration" (ticks)}
+ *   set_speed {clips, speed (0.1..10), points?, preset?}  points [] = constant speed; later clips move
  *   set_effect {clips, type, params|null}; effect {clip, type} -> {"params"}  (builtin.chroma_key...)
  *   guess_key_color                             -> {"color": "#rrggbb"} from the last preview frame
  *   start {job: "noise"|"stabilize", clip, value (amount|strength)}; job_status -> {"status","progress",
  *     "error"} (0 idle, 1 running, 2 done and applied as one undo step, -1 failed, -2 cancelled); job_cancel
- *   stabilize_strength {clip, strength}         re-smooths without measuring again */
+ *   start {job: "follow", clip, at (ticks), size?}  a text/sticker follows the object under it in the video
+ *     below, from `at` to the clip's end: x/y (and scale with size) keys, one undo step
+ *   stabilize_strength {clip, strength}         re-smooths without measuring again
+ * User presets (user_presets.hpp), kept in one file shared by all projects:
+ *   presets_init {path}                         the file (until then: in memory only)
+ *   user_presets {kind: "style"|"export"} -> {"presets": [{"name","saved","summary","data"}]} newest first
+ *   save_style_preset {clip, name} -> {"summary"}  the clip's colour and effects, under that name
+ *   apply_style_preset {clips, name}            one undo step; covers, stabilisation and sound stay
+ *   save_export_preset {name, data: {base, format, fps?, video_mbps?, audio_kbps?, audio?}}
+ *   remove_preset {kind, name}; rename_preset {kind, from, to}
+ *   export_preset_info {name | data} -> {"width","height","fps","video_bitrate","audio","estimated_bytes","summary"}
+ *   export_user_preset {name, path}             starts the export (vs_export_status as for presets) */
 VS_API char* vs_tool_command(vs_session* s, const char* command_json);
 
 #ifdef __cplusplus

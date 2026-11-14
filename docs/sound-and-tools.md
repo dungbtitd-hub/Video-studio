@@ -1,4 +1,4 @@
-# Âm thanh, công cụ clip, yêu thích, tablet và plugin
+# Âm thanh, công cụ clip, tốc độ, preset, yêu thích, tablet và plugin
 
 Các phần còn lại của đề án v2.0 được hoàn thiện trong một đợt: FR-011, FR-015, FR-020, FR-022, FR-025..FR-029.
 
@@ -24,6 +24,34 @@ Các phần còn lại của đề án v2.0 được hoàn thiện trong một �
 - **Đóng băng khung** tại playhead: chèn một clip giữ hình 0,5–10 s, phần sau của clip lùi lại.
 - **Tách nền màu (chroma key)**: màu nền (xanh lá, xanh dương, hoặc tự đoán từ preview), độ tương đồng, làm mềm viền, khử ám màu.
 - **Chống rung**: đo độ rung nền một lần; đổi độ mạnh chỉ làm mượt lại đường đã đo, không đo lại. Tự phóng to tối đa 1,25× để che mép.
+
+## Tốc độ và đường cong tốc độ (FR-015, `core/include/vstudio/speed_curve.hpp`)
+
+- **Tốc độ đều** 0,1×–10× cho clip video và âm thanh (ảnh, chữ, sticker, khung đóng băng không đổi tốc độ). Clip phía
+  sau trên cùng track tự dời theo độ dài mới, nên không có khoảng trống hay chồng lấn.
+- **Đường cong tốc độ** (speed ramp): 8 mẫu dựng sẵn (Dồn nhịp, Anh hùng, Đạn bay, Nhảy cóc, Lao vào, Lao ra, Nhanh
+  dần, Chậm dần) hoặc tự vẽ. Desktop: bảng "Công cụ clip", kéo điểm, nhấp đúp để thêm hoặc xoá. Mobile: công cụ
+  "Tốc độ", kéo điểm, chạm để thêm, nhấn giữ để xoá.
+- Mô hình: `Clip::speedCurve` là các khoá `{t (thời gian nguồn), v}`, tuyến tính giữa hai khoá, nhân với tốc độ nền.
+  Thời gian phát và vị trí nguồn tính bằng công thức đóng (logarit, mũ) cho từng đoạn, nên chính xác và rẻ: tua,
+  cắt, tách, phát ngược và keyframe đều đúng với đường cong. Âm thanh đi theo lưới vị trí nguồn mỗi 32 mẫu.
+- Lưu trong dự án dạng `"speed_curve": [{"t": ticks, "v": ...}]`; mẫu đã chọn nằm ở `extra.speed_preset`.
+- C API: `vs_tool_command` `speed_presets`, `clip_speed`, `set_speed`.
+
+## Preset của tôi (FR-018, FR-022, `core/include/vstudio/user_presets.hpp`)
+
+- **Kiểu màu và hiệu ứng**: lưu màu (đầu vào Log, chỉnh màu, look, LUT), tách nền và hiệu ứng video/plugin của clip
+  đang chọn thành một preset có tên, rồi áp dụng cho clip khác bằng một lần chạm (một bước hoàn tác). Che mờ, mặt
+  nạ, chống rung và âm thanh thuộc riêng từng clip nên không nằm trong preset. Desktop: mục "Preset của tôi" ở bảng
+  Bộ lọc (Áp dụng, Lưu…, ⋯ để áp dụng cho tất cả, đổi tên, xoá). Mobile: hàng "Của tôi" trong tấm Bộ lọc (chạm để áp
+  dụng, nhấn giữ để đổi tên, xoá, áp dụng cho tất cả).
+- **Xuất video**: lưu chất lượng, định dạng, khung/giây, bitrate video và âm thanh, có/không tiếng. Preset hiện trong
+  hộp thoại Xuất (dấu ★ trên desktop, mục "Preset của tôi" trên mobile), kèm kích thước và dung lượng ước tính cho dự
+  án đang mở.
+- Lưu trong `presets.json` cạnh `favorites.json`, dùng chung cho mọi dự án, ghi atomic. File hỏng được bỏ qua và ghi
+  lại ở lần lưu sau.
+- C API: `vs_tool_command` `presets_init`, `user_presets`, `save_style_preset`, `apply_style_preset`,
+  `save_export_preset`, `remove_preset`, `rename_preset`, `export_preset_info`, `export_user_preset`.
 
 ## Yêu thích (FR-022)
 

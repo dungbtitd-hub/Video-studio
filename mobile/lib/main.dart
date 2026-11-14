@@ -19,16 +19,19 @@ import 'core/vstudio.dart';
 import 'ui/audio_sheet.dart';
 import 'ui/clip_tools_sheet.dart';
 import 'ui/cover_panel.dart';
+import 'ui/follow_button.dart';
 import 'ui/grade_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/recent_strip.dart';
+import 'ui/speed_sheet.dart';
 import 'ui/subtitle_sheet.dart';
 import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
 import 'ui/transition_sheet.dart';
+import 'ui/user_presets.dart';
 import 'ui/video_fx_sheet.dart';
 import 'ui/workspace_layout.dart';
 
@@ -133,6 +136,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   Future<void> _attach(VStudio vs, String path) async {
     vs.setPreviewSize(720, 1280);
+    final store = _store;
+    if (store != null) vs.initPresets('${store.root.path}/presets.json'); // shared by every project
     setState(() {
       _vs = vs;
       _packagePath = path;
@@ -623,7 +628,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       backgroundColor: VsColors.panel,
       barrierColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => TextSheet(vs: vs, content: clip!.content!, onPatch: (p) => _patchObject(id, p)),
+      builder: (_) => TextSheet(
+        vs: vs,
+        content: clip!.content!,
+        onPatch: (p) => _patchObject(id, p),
+        follow: FollowButton(vs: vs, clipId: () => id, playhead: () => _playhead, onDone: () => _edit((_) {})),
+      ),
     );
   }
 
@@ -662,6 +672,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             return 1.0;
           }
         },
+        follow: FollowButton(vs: vs, clipId: () => target, playhead: () => _playhead, onDone: () => _edit((_) {})),
       ),
     );
   }
@@ -884,6 +895,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     } on VStudioException {
       return const [];
     }
+  }
+
+  /// Masks live with the covers (same region editing, keyframes and tracking); entering
+  /// from the Mặt nạ tool starts with a soft oval mask when the clip has none yet.
+  void _enterMasks() {
+    final ids = _coverIds();
+    setState(() {
+      _gradeMode = false;
+      _coverMode = true;
+      _activeCover = ids.isEmpty ? null : ids.first;
+      _status = 'Mặt nạ: phần ngoài vùng trong suốt để lộ track bên dưới. Chọn hình, kéo vùng, chỉnh viền mềm.';
+    });
+    if (ids.isEmpty) _addCover('mask_keep', 'ellipse');
   }
 
   void _enterCovers() {
@@ -1130,6 +1154,18 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           _edit((vs) => vs.setClipLut([clip.id], ''));
           _vs?.seek(_playhead);
         },
+        myPresets: MyStylePresets(
+          vs: vs,
+          clipId: clip.id,
+          allClips: () => [
+            for (final t in _project!.tracks)
+              if (!t.audio && !t.locked) ...t.clips.where((c) => c.kind.isEmpty).map((c) => c.id)
+          ],
+          onEdit: (f) {
+            _edit(f);
+            _vs?.seek(_playhead);
+          },
+        ),
         onApplyAll: (look, strength) {
           final ids = [
             for (final t in _project!.tracks)
@@ -1157,6 +1193,21 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       builder: (context) => FractionallySizedBox(
         heightFactor: 0.7,
         child: AudioSheet(vs: vs, clipId: _selectedClip?.generated == false ? _selectedClip!.id : null, onEdit: _edit),
+      ),
+    );
+  }
+
+  Future<void> _speed() async {
+    final vs = _vs, clip = _selectedMediaClip;
+    if (vs == null || clip == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.6,
+        child: SpeedSheet(vs: vs, clipId: clip.id, onEdit: _edit),
       ),
     );
   }
@@ -1264,12 +1315,14 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     }
     final formats = vs.exportFormats();
     var format = _exportFormat;
-    final chosen = await showModalBottomSheet<(ExportPresetView, String)>(
+    // (built-in quality, format) or (null, user preset name).
+    final chosen = await showModalBottomSheet<(ExportPresetView?, String)>(
       context: context,
       backgroundColor: VsColors.panel,
       isScrollControlled: true,
       builder: (context) => StatefulBuilder(builder: (context, setSheet) {
         final presets = vs.exportPresets(format);
+        final mine = vs.userPresets('export');
         final note = formats.where((f) => f.id == format).firstOrNull?.description ?? '';
         return SafeArea(
           child: ConstrainedBox(
@@ -1306,21 +1359,61 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                   isThreeLine: true,
                   onTap: () => Navigator.pop(context, (p, format)),
                 ),
+              // The user's own presets (FR-018): their own format, frame rate and bitrate.
+              if (mine.isNotEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: Text('Preset của tôi', style: TextStyle(color: VsColors.fg2, fontSize: 13)),
+                ),
+              for (final m in mine)
+                Builder(builder: (context) {
+                  final info = vs.exportPresetInfo(name: m.name);
+                  return ListTile(
+                    key: ValueKey('user-export-${m.name}'),
+                    leading: const Icon(Icons.star_outline),
+                    title: Text(m.name),
+                    subtitle: Text('${info.width} × ${info.height} · khoảng ${_size(info.estimatedBytes)}\n${m.summary}',
+                        style: const TextStyle(fontSize: 12)),
+                    isThreeLine: true,
+                    onTap: () => Navigator.pop(context, (null, m.name)),
+                    trailing: IconButton(
+                      tooltip: 'Xoá preset',
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      onPressed: () => setSheet(() => vs.removePreset('export', m.name)),
+                    ),
+                  );
+                }),
+              ListTile(
+                key: const ValueKey('save-export-preset'),
+                leading: const Icon(Icons.add),
+                title: const Text('Lưu thành preset của tôi…'),
+                subtitle: const Text('Chất lượng, định dạng đang chọn, khung/giây, bitrate, âm thanh',
+                    style: TextStyle(fontSize: 12)),
+                onTap: () async {
+                  await askExportPreset(context, vs, format, presets);
+                  setSheet(() {});
+                },
+              ),
             ]),
           ),
         );
       }),
     );
     if (chosen == null || !mounted) return;
-    final (preset, fmt) = chosen;
-    _exportFormat = fmt;
+    final (preset, fmtOrName) = chosen;
+    if (preset != null) _exportFormat = fmtOrName;
     // Written to the app's temporary folder, then handed to the photo library.
-    final out = '${Directory.systemTemp.path}/${_safeName(_project?.name ?? 'video')} ${preset.height}p.mp4';
+    final height = preset?.height ?? vs.exportPresetInfo(name: fmtOrName).height;
+    final out = '${Directory.systemTemp.path}/${_safeName(_project?.name ?? 'video')} ${height}p.mp4';
     _exportPath = out;
     _edit((vs) {
-      vs.startExportPresetFormat(out, preset.id, fmt);
+      if (preset != null) {
+        vs.startExportPresetFormat(out, preset.id, fmtOrName);
+      } else {
+        vs.startExportUserPreset(out, fmtOrName);
+      }
       _exportProgress = 0;
-      _status = 'Đang xuất ${preset.name}…';
+      _status = 'Đang xuất ${preset?.name ?? fmtOrName}…';
     });
   }
 
@@ -1676,8 +1769,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 icon: _recording ? Icons.stop_circle : Icons.mic_none,
                 label: _recording ? 'Dừng' : 'Thu âm',
                 onTap: _vs == null ? null : _voiceOver),
+            _Tool(icon: Icons.speed, label: 'Tốc độ', onTap: _selectedMediaClip == null ? null : _speed),
             _Tool(icon: Icons.handyman_outlined, label: 'Công cụ', onTap: _selectedMediaClip == null ? null : _clipTools),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
+            _Tool(icon: Icons.vignette_outlined, label: 'Mặt nạ', onTap: _selectedMediaClip == null ? null : _enterMasks),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(
                 icon: Icons.delete_outline,

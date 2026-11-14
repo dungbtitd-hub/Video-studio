@@ -1349,9 +1349,10 @@ public:
 
 TEST("cover: every style hides the region and leaves the rest untouched") {
     CHECK(coverStyles().size() >= 36);
-    CHECK_EQ(coverShapes().size(), 9u);
+    CHECK_EQ(coverShapes().size(), 11u);
     const VideoFrame base = texturedFrame(320, 180, 140, 70, 40);
     for (const auto& st : coverStyles()) {
+        if (st.category == "Mặt nạ") continue;  // masks change transparency: own test below
         for (const char* shape : {"rect", "heart"}) {
             VideoFrame f = base;
             Json p = defaultCover(st.id, shape);
@@ -1387,6 +1388,94 @@ TEST("cover: every style hides the region and leaves the rest untouched") {
     VideoFrame deep = convertedFrame(base, PixelFormat::RGBA16F);
     applyCover(deep, defaultCover("mosaic", "ellipse"), Time{});
     CHECK(deep.deep());
+}
+
+TEST("mask: keep or cut a shape out of the clip's transparency; line and band reach the edges") {
+    const VideoFrame base = texturedFrame(320, 180, 140, 70, 40);
+    auto alpha = [](const VideoFrame& f, int x, int y) {
+        const std::size_t i = (static_cast<std::size_t>(y) * f.width + x) * 4;
+        return f.deep() ? static_cast<int>(std::lround(halfToFloat(f.half[i + 3]) * 255)) : int(f.rgba[i + 3]);
+    };
+    auto same = [&](const VideoFrame& f) {  // colours never change, only alpha
+        for (std::size_t i = 0; i < f.rgba.size(); i += 4)
+            if (f.rgba[i] != base.rgba[i] || f.rgba[i + 1] != base.rgba[i + 1] || f.rgba[i + 2] != base.rgba[i + 2]) return false;
+        return true;
+    };
+    Json p = defaultCover("mask_keep", "ellipse");
+    p.update(Json{{"x", 0.25}, {"y", 0.25}, {"w", 0.5}, {"h", 0.5}, {"feather", 0.0}});
+    VideoFrame keep = base;
+    applyCover(keep, p, Time{});
+    CHECK_EQ(alpha(keep, 160, 90), 255);  // centre kept
+    CHECK_EQ(alpha(keep, 5, 5), 0);       // corner gone
+    CHECK_EQ(alpha(keep, 315, 175), 0);
+    CHECK(same(keep));
+    p["invert"] = true;  // inverted keep = cut
+    VideoFrame inv = base;
+    applyCover(inv, p, Time{});
+    CHECK_EQ(alpha(inv, 160, 90), 0);
+    CHECK_EQ(alpha(inv, 5, 5), 255);
+    Json cut = p;
+    cut["style"] = "mask_cut";
+    cut["invert"] = false;
+    VideoFrame c = base;
+    applyCover(c, cut, Time{});
+    CHECK(std::memcmp(c.rgba.data(), inv.rgba.data(), c.rgba.size()) == 0);
+    // Soft edge: a ramp, not a step.
+    p = defaultCover("mask_keep", "rect");
+    p.update(Json{{"x", 0.25}, {"y", 0.25}, {"w", 0.5}, {"h", 0.5}, {"feather", 0.5}});
+    VideoFrame soft = base;
+    applyCover(soft, p, Time{});
+    const int edge = alpha(soft, 80, 90);
+    CHECK(edge > 60 && edge < 200);
+    // Line: everything below the middle stays; rotated 90 degrees it splits left/right.
+    p = defaultCover("mask_keep", "line");
+    p.update(Json{{"x", 0.0}, {"y", 0.0}, {"w", 1.0}, {"h", 1.0}, {"feather", 0.0}});
+    VideoFrame line = base;
+    applyCover(line, p, Time{});
+    CHECK_EQ(alpha(line, 160, 170), 255);
+    CHECK_EQ(alpha(line, 160, 10), 0);
+    CHECK_EQ(alpha(line, 2, 170), 255);  // reaches the left and right edges
+    CHECK_EQ(alpha(line, 318, 170), 255);
+    p["rotation"] = 90.0;
+    VideoFrame turned = base;
+    applyCover(turned, p, Time{});
+    CHECK(alpha(turned, 10, 90) != alpha(turned, 310, 90));
+    // Band: a strip across the whole width.
+    p = defaultCover("mask_keep", "band");
+    p.update(Json{{"x", 0.0}, {"y", 0.4}, {"w", 1.0}, {"h", 0.2}, {"feather", 0.0}});
+    VideoFrame band = base;
+    applyCover(band, p, Time{});
+    CHECK_EQ(alpha(band, 1, 90), 255);
+    CHECK_EQ(alpha(band, 318, 90), 255);
+    CHECK_EQ(alpha(band, 160, 20), 0);
+    // Deep frames.
+    VideoFrame deep = convertedFrame(base, PixelFormat::RGBA16F);
+    applyCover(deep, defaultCover("mask_keep", "circle"), Time{});
+    CHECK_EQ(alpha(deep, 2, 2), 0);
+}
+
+TEST("mask: a masked clip shows the track below through the cut") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));  // bottom: red = frame 30 at 1 s
+    const Id v2 = f.ed.addTrack(TrackType::Video, "V2");
+    const Id top = f.ed.appendClip(v2, f.asset, sec(2), sec(6));  // top: frame 90 at 1 s
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    const std::size_t centre = (36 * 128 + 64) * 4, corner = (2 * 128 + 2) * 4;
+    {
+        Renderer r(f.ed.project(), pool, nullptr, true, &mods);
+        const VideoFrame fr = r.renderVideo(sec(1), 128, 72);
+        CHECK_EQ(int(fr.rgba[centre]), 90);
+    }
+    const Id m = f.ed.addCover(top, Json{{"style", "mask_cut"}, {"shape", "ellipse"}});
+    CHECK(f.ed.coverParams(top, m) != nullptr);
+    Renderer r(f.ed.project(), pool, nullptr, true, &mods);
+    const VideoFrame fr = r.renderVideo(sec(1), 128, 72);
+    CHECK_EQ(int(fr.rgba[centre]), 30);  // through the hole: the clip below
+    CHECK_EQ(int(fr.rgba[corner]), 90);  // around it: the top clip
+    CHECK_EQ(int(fr.rgba[centre + 3]), 255);
 }
 
 TEST("cover: keyframed region follows motion; editor add/edit/follow/undo") {
@@ -1474,6 +1563,51 @@ TEST("tracker: follows a moving logo frame by frame, then few keys describe it")
         CHECK(s.box.w <= 0.6 + 1e-9 && s.box.w >= 0.15 - 1e-9);
         CHECK(s.box.x + s.box.w / 2 >= 0 && s.box.x + s.box.w / 2 <= 1);
     }
+}
+
+TEST("tracker: text follows a moving object in the video below; one undo step") {
+    struct MovingBackend final : IMediaBackend {
+        std::string name() const override { return "moving"; }
+        std::optional<ProbeResult> probe(const std::string& p, std::string* e) override { return fake::Backend().probe(p, e); }
+        std::unique_ptr<IMediaDecoder> createDecoder() override { return std::make_unique<MovingBoxDecoder>(); }
+        std::unique_ptr<IMediaEncoder> createEncoder() override { return nullptr; }
+    };
+    Fixture f;
+    MediaAsset a;
+    a.id = "M";
+    a.uri = "synthetic:4:320x180";
+    a.type = MediaType::Video;
+    a.duration = sec(4);
+    a.width = 320;
+    a.height = 180;
+    a.fps = {30, 1};
+    a.hasVideo = true;
+    const Id asset = f.ed.addAsset(a);
+    const Id video = f.ed.appendClip(f.v1, asset, sec(0), sec(3));
+    const Id text = f.ed.addGeneratedClip(Json{{"kind", "text"}, {"text", "Tên"}}, sec(0), sec(3));
+    CHECK_EQ(followTargetAt(f.ed.project(), text, sec(1)), video);
+    MediaPool pool(std::make_shared<MovingBackend>(), "");
+    // The checker box starts at (40, 50) px, 32 px wide, and moves 60 px/s right, 20 px/s down.
+    const FollowTrack ft = trackFollow(f.ed.project(), pool, text, video, TrackBox{40.0 / 320, 50.0 / 180, 32.0 / 320, 32.0 / 180},
+                                       sec(0), sec(2), false);
+    CHECK(ft.result.error.empty());
+    CHECK(ft.keys.size() >= 2u);
+    f.ed.setFollowTrack(text, ft.keys);
+    const Clip& c = *f.ed.project().findClip(text);
+    // Canvas 1280x720 shows the 320x180 source 4x: the text keeps its offset from the object.
+    const Transform at = animatedTransform(c, c.toSource(sec(1.5)));
+    CHECK(std::abs(at.x - 360) < 16);
+    CHECK(std::abs(at.y - 120) < 16);
+    const Transform start = animatedTransform(c, c.toSource(sec(0)));
+    CHECK(std::abs(start.x) < 4 && std::abs(start.y) < 4);
+    CHECK(f.ed.undo());
+    CHECK(!f.ed.project().findClip(text)->keyframes.contains(kf::kX) ||
+          f.ed.project().findClip(text)->keyframes[kf::kX].empty());
+    // Following the size too adds scale keys.
+    const FollowTrack fs = trackFollow(f.ed.project(), pool, text, video, TrackBox{40.0 / 320, 50.0 / 180, 32.0 / 320, 32.0 / 180},
+                                       sec(0), sec(1), true);
+    CHECK(!fs.keys.empty() && fs.keys.front().second.count(kf::kScale) == 1);
+    CHECK(!trackFollow(f.ed.project(), pool, text, "nope", TrackBox{0.1, 0.1, 0.1, 0.1}, sec(0), sec(1), false).result.error.empty());
 }
 
 // ------------------------------------------------------------------ transitions

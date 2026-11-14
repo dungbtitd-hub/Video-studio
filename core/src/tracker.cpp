@@ -1,4 +1,5 @@
 #include "vstudio/tracker.hpp"
+#include "vstudio/keyframes.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -287,6 +288,102 @@ CoverTrack trackCoverInClip(const Project& project, MediaPool& pool, const Id& c
     if (!out.result.error.empty() || out.result.samples.size() < 2) return out;
     for (const auto& s : simplifyTrack(out.result.samples))
         out.keys.push_back({s.sourceTime, {s.box.x, s.box.y, s.box.w, s.box.h}});
+    return out;
+}
+
+
+std::optional<TrackBox> followStartBox(const Project& project, const Id& followerId, const Id& targetClipId, Time t,
+                                       double size) {
+    const Clip* follower = project.findClip(followerId);
+    const Clip* target = project.findClip(targetClipId);
+    const MediaAsset* asset = target ? project.findAsset(target->assetId) : nullptr;
+    if (!follower || !target || !asset || asset->width <= 0 || asset->height <= 0) return std::nullopt;
+    t = std::clamp(t, target->timelineIn, target->timelineOut());
+    const auto r = sourceRectOnCanvas(project, *target, target->toSource(t));
+    if (!r || (*r)[2] <= 0 || (*r)[3] <= 0) return std::nullopt;
+    const Transform f = animatedTransform(*follower, follower->toSource(std::clamp(t, follower->timelineIn, follower->timelineOut())));
+    const double cx = (project.canvas.width / 2.0 + f.x - (*r)[0]) / (*r)[2];
+    const double cy = (project.canvas.height / 2.0 + f.y - (*r)[1]) / (*r)[3];
+    const double side = std::clamp(size, 0.03, 0.6) * std::min(asset->width, asset->height);
+    const double w = side / asset->width, h = side / asset->height;
+    return TrackBox{std::clamp(cx - w / 2, 0.0, 1.0 - w), std::clamp(cy - h / 2, 0.0, 1.0 - h), w, h};
+}
+
+Id followTargetAt(const Project& project, const Id& followerId, Time t) {
+    // Tracks are stacked bottom (index 0) to top: look below the follower's track first.
+    int followerTrack = static_cast<int>(project.tracks.size());
+    for (int i = 0; i < static_cast<int>(project.tracks.size()); ++i)
+        if (project.tracks[static_cast<std::size_t>(i)].findClip(followerId)) followerTrack = i;
+    auto videoAt = [&](const Track& tr) -> const Clip* {
+        if (tr.type != TrackType::Video || !tr.enabled) return nullptr;
+        const Clip* c = tr.clipAt(t);
+        if (!c || c->id == followerId || c->generated()) return nullptr;
+        const MediaAsset* a = project.findAsset(c->assetId);
+        return a && a->type == MediaType::Video ? c : nullptr;
+    };
+    for (int i = followerTrack - 1; i >= 0; --i)
+        if (const Clip* c = videoAt(project.tracks[static_cast<std::size_t>(i)])) return c->id;
+    for (int i = static_cast<int>(project.tracks.size()) - 1; i > followerTrack; --i)
+        if (const Clip* c = videoAt(project.tracks[static_cast<std::size_t>(i)])) return c->id;
+    return {};
+}
+
+FollowTrack trackFollow(const Project& project, MediaPool& pool, const Id& followerId, const Id& targetClipId, TrackBox start,
+                        Time fromTimeline, Time toTimeline, bool followScale, const std::function<bool(double)>& progress) {
+    FollowTrack out;
+    const Clip* follower = project.findClip(followerId);
+    const Clip* target = project.findClip(targetClipId);
+    const MediaAsset* asset = target ? project.findAsset(target->assetId) : nullptr;
+    if (!follower || !target || !asset || follower->id == target->id) {
+        out.result.error = "không tìm thấy clip để bám theo";
+        return out;
+    }
+    const Time a = std::max({fromTimeline, follower->timelineIn, target->timelineIn});
+    const Time b = std::min({toTimeline, follower->timelineOut(), target->timelineOut()});
+    if (b <= a) {
+        out.result.error = "hai clip không cùng xuất hiện ở đoạn này";
+        return out;
+    }
+    std::string err;
+    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480);
+    if (!dec) {
+        out.result.error = err.empty() ? "không mở được media" : err;
+        return out;
+    }
+    Time srcA = target->toSource(a), srcB = target->toSource(b);
+    if (srcB < srcA) std::swap(srcA, srcB);  // reversed clips: track the source forwards
+    const Rational fps = asset->fps.num > 0 ? asset->fps : project.fps;
+    out.result = trackRegion(*dec, srcA, srcB, fps, start, progress);
+    if (!out.result.error.empty() || out.result.samples.size() < 2) return out;
+    // Object centre and size on the canvas (pixels from the canvas centre) at a target source time.
+    const double W = project.canvas.width, H = project.canvas.height;
+    auto onCanvas = [&](const TrackSample& smp) -> std::optional<std::array<double, 3>> {
+        const auto r = sourceRectOnCanvas(project, *target, smp.sourceTime);
+        if (!r) return std::nullopt;
+        const auto& bx = smp.box;
+        return std::array<double, 3>{(*r)[0] + (bx.x + bx.w / 2) * (*r)[2] - W / 2, (*r)[1] + (bx.y + bx.h / 2) * (*r)[3] - H / 2,
+                                     bx.w * (*r)[2]};
+    };
+    const auto first = onCanvas(out.result.samples.front());
+    if (!first) {
+        out.result.error = "clip đích không có kích thước khung hình";
+        return out;
+    }
+    // Where the follower sits relative to the object when tracking starts.
+    const Time t0 = target->toTimeline(out.result.samples.front().sourceTime);
+    const Transform f0 = animatedTransform(*follower, follower->toSource(std::clamp(t0, follower->timelineIn, follower->timelineOut())));
+    const double dx = f0.x - (*first)[0], dy = f0.y - (*first)[1], w0 = std::max(1e-6, (*first)[2]);
+    for (const auto& smp : simplifyTrack(out.result.samples)) {
+        const auto c = onCanvas(smp);
+        if (!c) continue;
+        const Time t = target->toTimeline(smp.sourceTime);
+        if (t < follower->timelineIn || t > follower->timelineOut()) continue;
+        const double k = followScale ? (*c)[2] / w0 : 1.0;
+        std::map<std::string, double> v{{kf::kX, (*c)[0] + dx * k}, {kf::kY, (*c)[1] + dy * k}};
+        if (followScale) v[kf::kScale] = kf::clampValue(kf::kScale, f0.scale * k);
+        out.keys.push_back({follower->toSource(t), std::move(v)});
+    }
+    std::sort(out.keys.begin(), out.keys.end(), [](const auto& l, const auto& r) { return l.first < r.first; });
     return out;
 }
 

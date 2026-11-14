@@ -3,6 +3,7 @@
 #include "vstudio/video_fx.hpp"
 
 #include <cmath>
+#include <set>
 #include <limits>
 
 #include "vstudio/color_space.hpp"
@@ -10,6 +11,7 @@
 #include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
+#include "vstudio/user_presets.hpp"
 
 namespace vstudio {
 
@@ -501,6 +503,33 @@ void Editor::setCoverTrack(const Id& clipId, const Id& effectId,
     });
 }
 
+void Editor::setFollowTrack(const Id& clipId, const std::vector<std::pair<Time, std::map<std::string, double>>>& keys) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    if (keys.empty()) return;
+    run("Follow motion", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Clip& c = editableClip(pr, clipId);
+        if (!c.keyframes.is_object()) c.keyframes = Json::object();
+        const Time a = keys.front().first, b = keys.back().first, tol = keyTolerance(pr);
+        std::set<std::string> props;
+        for (const auto& [t, v] : keys)
+            for (const auto& [name, _] : v) props.insert(name);
+        for (const auto& name : props) {
+            if (!kf::isProperty(name)) continue;
+            Json kept = Json::array();
+            if (c.keyframes[name].is_array())
+                for (const auto& j : c.keyframes[name]) {
+                    const Time t = Time::fromTicks(j.value("t", std::int64_t{0}));
+                    if (t < a - tol || t > b + tol) kept.push_back(j);
+                }
+            c.keyframes[name] = kept;
+            for (const auto& [t, v] : keys)
+                if (auto it = v.find(name); it != v.end())
+                    putKeyIn(c.keyframes, name.c_str(), Keyframe{t, kf::clampValue(name, it->second), Ease::Linear}, tol);
+        }
+    });
+}
+
 namespace {
 Json transitionJson(const std::string& type, Time duration) {
     if (type.empty()) return nullptr;
@@ -668,6 +697,26 @@ void Editor::setClipEffect(const std::vector<Id>& clipIds, const std::string& ty
             if (!first && !fx.is_null()) kept.push_back(fx);
             clip->effects = std::move(kept);
         }
+    });
+}
+
+void Editor::applyClipStyle(const std::vector<Id>& clipIds, const Json& style, const std::string& label) {
+    if (clipIds.empty()) throw EditError("no clip selected");
+    if (!style.is_object() || !style.contains("effects") || !style["effects"].is_array()) throw EditError("not a style preset");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (t->findClip(c)->generated()) throw EditError("presets apply to video and photo clips");
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    // Ids are made here, not inside the command, so redo gives the same project.
+    std::map<Id, Json> next;
+    for (const Id& c : clipIds)
+        next[c] = presets::applyStyle(project_.findClip(c)->effects, style, [] { return newId(); });
+    run(label, EditCommand::Scope::Tracks, tracks, [next](Project& p) {
+        for (const auto& [id, fx] : next) p.trackOfClip(id)->findClip(id)->effects = fx;
     });
 }
 
@@ -1138,6 +1187,35 @@ void Editor::setClipReversed(const std::vector<Id>& clipIds, bool reversed) {
     }
     run(reversed ? "Reverse" : "Play forwards", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
         for (const Id& id : clipIds) p.trackOfClip(id)->findClip(id)->reversed = reversed;
+    });
+}
+
+void Editor::setClipSpeed(const std::vector<Id>& clipIds, double speedValue, const std::vector<speed::CurvePoint>& curve,
+                          const std::string& preset) {
+    if (clipIds.empty()) return;
+    const auto tracks = tracksOf(project_, clipIds);
+    for (const Id& id : clipIds) {
+        const Track* tr = project_.trackOfClip(id);
+        if (tr->locked) throw EditError("track is locked: " + tr->name);
+        std::string why;
+        if (!speed::canChangeSpeed(project_, *tr->findClip(id), &why)) throw EditError(why);
+    }
+    const Rational base = speed::toRational(speedValue);
+    run(curve.empty() ? "Speed" : "Speed curve", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& id : clipIds) {
+            Track* tr = p.trackOfClip(id);
+            Clip* c = tr->findClip(id);
+            const Time oldOut = c->timelineOut();
+            c->speed = base;
+            c->speedCurve = speed::keysFor(*c, curve);
+            if (curve.empty() || preset.empty()) c->extra.erase("speed_preset");
+            else c->extra["speed_preset"] = preset;
+            const Time delta = c->timelineOut() - oldOut;
+            if (delta == Time::zero()) continue;
+            for (Clip& x : tr->clips)  // ripple: the rest of the track follows the new end
+                if (x.id != id && x.timelineIn >= oldOut) x.timelineIn = x.timelineIn + delta;
+            tr->sortClips();
+        }
     });
 }
 

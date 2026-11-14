@@ -764,6 +764,59 @@ void EditorController::trackCover() {
     }, trackCancel_);
 }
 
+bool EditorController::canFollowMotion() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    return c && !followTargetAt(*snapshot_, c->id, std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut())).empty();
+}
+
+void EditorController::followMotion(bool withSize) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (tracking_ || !c || !backend_) return;
+    const Time from = std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut());
+    const Id target = followTargetAt(*snapshot_, c->id, from);
+    const auto box = target.empty() ? std::nullopt : followStartBox(*snapshot_, c->id, target, from);
+    if (!box) {
+        setStatus(tr("Không có video nào bên dưới clip này ở playhead để bám theo"));
+        return;
+    }
+    if (!trackJobs_) trackJobs_ = std::make_unique<JobScheduler>(1);
+    trackCancel_ = CancelToken{};
+    tracking_ = true;
+    trackProgress_ = 0;
+    emit coversChanged();
+    auto snap = snapshot_;
+    const Id clip = c->id;
+    const TrackBox start = *box;
+    const std::string base = mediaBaseDir(s(packageDir_));
+    trackJobs_->submit("track", JobPriority::Normal, [this, snap, clip, target, start, from, withSize, base](const CancelToken& tok) {
+        MediaPool pool(backend_, base);
+        FollowTrack r = trackFollow(*snap, pool, clip, target, start, from, snap->findClip(clip)->timelineOut(), withSize,
+                                    [this, &tok](double p) {
+                                        QMetaObject::invokeMethod(this, [this, p] {
+                                            trackProgress_ = p;
+                                            emit coversChanged();
+                                        }, Qt::QueuedConnection);
+                                        return !tok.cancelled();
+                                    });
+        QMetaObject::invokeMethod(this, [this, r = std::move(r), clip] {
+            tracking_ = false;
+            bool ok = false;
+            QString msg;
+            if (r.result.cancelled) msg = tr("Đã dừng bám theo");
+            else if (!r.result.error.empty()) msg = q(r.result.error);
+            else if (r.keys.size() >= 2 && edit([&] { editor_->setFollowTrack(clip, r.keys); })) {
+                ok = true;
+                msg = r.result.lost ? tr("Mất dấu đối tượng sau %1 s: clip bám theo tới đó")
+                                          .arg(secs(r.result.samples.back().sourceTime - r.result.samples.front().sourceTime), 0, 'f', 1)
+                                    : tr("Clip đang bám theo đối tượng (%1 keyframe)").arg(r.keys.size());
+            } else msg = tr("Không bám theo được đối tượng");
+            setStatus(msg);
+            emit coversChanged();
+            emit trackFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    }, trackCancel_);
+}
+
 void EditorController::cancelTrack() { trackCancel_.cancel(); }
 
 QString EditorController::clipAsset(const QString& clipId) const {

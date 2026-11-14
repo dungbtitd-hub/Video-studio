@@ -19,6 +19,7 @@
 #include "vstudio/history.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
+#include "vstudio/speed_curve.hpp"
 #include "vstudio/subtitles.hpp"
 #include "vstudio/timeline.hpp"
 #include "vstudio/transitions.hpp"
@@ -89,6 +90,9 @@ public:
     // Tracking result: replaces the region keys between the first and last sample
     // with these (linear in between, so the cover moves exactly like the subject).
     void setCoverTrack(const Id& clipId, const Id& effectId, const std::vector<std::pair<Time, std::array<double, 4>>>& boxes);
+    // Writes tracked motion (tracker.hpp trackFollow) as picture keys on a clip: keys of the same
+    // properties inside the tracked span are replaced, the others kept. One undo step.
+    void setFollowTrack(const Id& clipId, const std::vector<std::pair<Time, std::map<std::string, double>>>& keys);
     [[nodiscard]] const Json* coverParams(const Id& clipId, const Id& effectId) const;
 
     // ---- transitions (transitions.hpp); each call is one undo step ----
@@ -141,6 +145,10 @@ public:
     void setClipEffect(const std::vector<Id>& clipIds, const std::string& type, const Json& params, bool first = false,
                        const std::string& label = "Set effect");
     void setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength = 1.0);
+    // A saved style (user_presets.hpp captureStyle) on one or many media clips, as one undo step:
+    // replaces their colour space, grade, look, LUT, key and video/plugin effects; covers,
+    // stabilisation and sound stay. Text, stickers and clips on locked tracks are refused.
+    void applyClipStyle(const std::vector<Id>& clipIds, const Json& style, const std::string& label = "Apply preset");
     // Log/HDR footage -> Rec.709 (color_space.hpp), always the first effect; "" removes.
     void setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure = 0.0);
     // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.
@@ -173,6 +181,11 @@ public:
     // Holds the frame shown at timeline time `t` for `duration`: splits the clip there, inserts
     // the still and pushes the rest of the track right. Returns the freeze clip's id.
     Id freezeFrame(const Id& clipId, Time t, Time duration = Time::fromSeconds(3.0));
+    // Speed (speed_curve.hpp): `speed` 0.1..10 x, and a ramp drawn over each clip (empty = none;
+    // `preset` names a ready-made one for the UI). The clips after each one on its track move by
+    // the change in length, so nothing overlaps and no gap opens.
+    void setClipSpeed(const std::vector<Id>& clipIds, double speed, const std::vector<speed::CurvePoint>& curve = {},
+                      const std::string& preset = "");
 
     bool undo();
     bool redo();

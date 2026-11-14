@@ -13,8 +13,11 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
+#include <cmath>
 
 #include "EditorController.h"
+#include "SpeedCurveEditor.h"
+#include "vstudio/speed_curve.hpp"
 #include "vstudio/clip_tools.hpp"
 
 using vstudio::Json;
@@ -40,6 +43,31 @@ ClipToolsPanel::ClipToolsPanel(EditorController* editor, QWidget* parent) : QWid
 
     auto* speedBox = new QGroupBox("Thời gian", body_);
     auto* sl = new QVBoxLayout(speedBox);
+    // Speed: a log slider (0.1x .. 10x, 1x in the middle) and a ramp.
+    auto* spRow = new QHBoxLayout();
+    spRow->addWidget(new QLabel("Tốc độ", speedBox));
+    speed_ = new QSlider(Qt::Horizontal, speedBox);
+    speed_->setObjectName("clipSpeed");
+    speed_->setRange(-100, 100);  // 10^(v/100)
+    speed_->setValue(0);
+    spRow->addWidget(speed_, 1);
+    speedLabel_ = new QLabel("1.00x", speedBox);
+    speedLabel_->setMinimumWidth(92);
+    spRow->addWidget(speedLabel_);
+    sl->addLayout(spRow);
+    auto* cvRow = new QHBoxLayout();
+    cvRow->addWidget(new QLabel("Đường cong", speedBox));
+    curveList_ = new QComboBox(speedBox);
+    curveList_->setObjectName("speedCurve");
+    curveList_->addItem("Không (tốc độ đều)", QString());
+    for (const auto& pr : vstudio::speed::curvePresets())
+        curveList_->addItem(QString::fromStdString(pr.name), QString::fromStdString(pr.id));
+    curveList_->addItem("Tự vẽ", QString("custom"));
+    cvRow->addWidget(curveList_, 1);
+    sl->addLayout(cvRow);
+    curve_ = new SpeedCurveEditor(speedBox);
+    curve_->setVisible(false);
+    sl->addWidget(curve_);
     reverse_ = new QCheckBox("Phát ngược (reverse)", speedBox);
     reverse_->setObjectName("reverseClip");
     sl->addWidget(reverse_);
@@ -112,6 +140,23 @@ ClipToolsPanel::ClipToolsPanel(EditorController* editor, QWidget* parent) : QWid
     connect(reverse_, &QCheckBox::toggled, this, [this](bool on) {
         if (!editor_->selectedClip().isEmpty()) editor_->setReversed({editor_->selectedClip()}, on);
     });
+    auto speedOf = [this] { return std::pow(10.0, speed_->value() / 100.0); };
+    connect(speed_, &QSlider::valueChanged, this, [this, speedOf] { speedLabel_->setText(QString("%1x").arg(speedOf(), 0, 'f', 2)); });
+    connect(speed_, &QSlider::sliderReleased, this, [this] {
+        commitSpeed(curve_->isVisible() ? curve_->points() : QVector<QPointF>{}, curveList_->currentData().toString());
+    });
+    connect(curveList_, &QComboBox::activated, this, [this](int) {
+        const QString id = curveList_->currentData().toString();
+        QVector<QPointF> pts;
+        if (id == "custom") {
+            pts = curve_->points();
+            if (pts.size() < 3) pts = {QPointF(0, 1), QPointF(0.5, 1), QPointF(1, 1)};
+        } else if (const auto* pr = vstudio::speed::findCurvePreset(id.toStdString())) {
+            for (const auto& q : pr->points) pts.push_back(QPointF(q.u, q.v));
+        }
+        commitSpeed(pts, id == "custom" ? QString() : id);
+    });
+    connect(curve_, &SpeedCurveEditor::edited, this, [this](const QVector<QPointF>& pts) { commitSpeed(pts, {}); });
     connect(freeze_, &QPushButton::clicked, this, [this] { editor_->freezeFrame(freezeSecs_->value()); });
     connect(chroma_, &QCheckBox::toggled, this, &ClipToolsPanel::commitChroma);
     for (QSlider* s : {similarity_, smoothness_, spill_}) connect(s, &QSlider::sliderReleased, this, &ClipToolsPanel::commitChroma);
@@ -143,6 +188,12 @@ ClipToolsPanel::ClipToolsPanel(EditorController* editor, QWidget* parent) : QWid
     connect(editor_, &EditorController::projectChanged, this, &ClipToolsPanel::refresh);
     connect(editor_, &EditorController::toolsChanged, this, &ClipToolsPanel::refresh);
     refresh();
+}
+
+void ClipToolsPanel::commitSpeed(const QVector<QPointF>& points, const QString& preset) {
+    const QString sel = editor_->selectedClip();
+    if (sel.isEmpty()) return;
+    editor_->setClipSpeed({sel}, std::pow(10.0, speed_->value() / 100.0), points, preset);
 }
 
 void ClipToolsPanel::commitChroma() {
@@ -194,6 +245,22 @@ void ClipToolsPanel::refresh() {
     reverse_->setEnabled(isVideo);
     freeze_->setEnabled(isVideo && !vstudio::cliptools::isFreeze(*c));
     reverse_->setChecked(c->reversed);
+    const QVariantMap sp = editor_->clipSpeed(sel);
+    const bool canSpeed = sp.value("can").toBool();
+    for (QWidget* w : std::initializer_list<QWidget*>{speed_, curveList_, curve_}) w->setEnabled(canSpeed);
+    {
+        QSignalBlocker bs(speed_), bc(curveList_);
+        if (!speed_->isSliderDown()) speed_->setValue(int(std::lround(std::log10(sp.value("speed", 1.0).toDouble()) * 100)));
+        QVector<QPointF> pts;
+        for (const QVariant& v : sp.value("points").toList()) pts.push_back(v.toPointF());
+        const QString preset = sp.value("preset").toString();
+        const int idx = pts.isEmpty() ? 0 : preset.isEmpty() ? curveList_->count() - 1 : curveList_->findData(preset);
+        curveList_->setCurrentIndex(std::max(0, idx));
+        curve_->setVisible(!pts.isEmpty());
+        if (!pts.isEmpty()) curve_->setPoints(pts);
+        speedLabel_->setText(QString("%1x · %2 s").arg(sp.value("speed", 1.0).toDouble(), 0, 'f', 2)
+                                 .arg(sp.value("seconds").toDouble(), 0, 'f', 1));
+    }
     const Json key = editor_->chromaKey(sel);
     chroma_->setChecked(!key.is_null());
     if (!key.is_null()) {

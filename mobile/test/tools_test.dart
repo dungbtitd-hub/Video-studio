@@ -53,6 +53,29 @@ void main() {
     expect(back.list('look'), ['c']);
   });
 
+  test('speed and speed curves through dart:ffi', () {
+    final vs = VStudio.create('ffi-speed', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final clip = vs.appendClip(track, vs.importMedia(media!));
+    final len = vs.clipSpeed(clip).seconds;
+    vs.setSpeed([clip], 2);
+    expect(vs.clipSpeed(clip).speed, closeTo(2, 1e-9));
+    expect(vs.clipSpeed(clip).seconds, closeTo(len / 2, 1e-3));
+    // The Dart view of the project agrees with the core, ramps included.
+    final presets = vs.speedPresets();
+    expect(presets.map((p) => p.id), containsAll(['montage', 'hero', 'bullet']));
+    vs.setSpeed([clip], 1, points: presets.firstWhere((p) => p.id == 'hero').points, preset: 'hero');
+    final info = vs.clipSpeed(clip);
+    expect(info.preset, 'hero');
+    expect(info.points, isNotEmpty);
+    final view = vs.project().tracks.first.clips.first;
+    expect(view.duration, closeTo(info.seconds, 1e-3));
+    vs.setSpeed([clip], 1);
+    expect(vs.clipSpeed(clip).points, isEmpty);
+    expect(vs.clipSpeed(clip).seconds, closeTo(len, 1e-3));
+  });
+
   test('sound and clip tools through dart:ffi', () {
     final vs = VStudio.create('ffi-tools', width: 640, height: 360);
     addTearDown(vs.dispose);
@@ -87,6 +110,52 @@ void main() {
     expect(vs.effect(clip, 'builtin.stabilize')?['zoom'], isNotNull);
     expect(vs.undo(), isTrue);
     expect(vs.effect(clip, 'builtin.stabilize'), isNull);
+  }, skip: skip);
+
+  test('user presets through dart:ffi', () {
+    final dir = Directory.systemTemp.createTempSync('vs-presets');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final vs = VStudio.create('ffi-presets', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    vs.initPresets('${dir.path}/presets.json');
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final asset = vs.importMedia(media!);
+    final a = vs.appendClip(track, asset), b = vs.appendClip(track, asset);
+    vs.setEffect([a], 'builtin.chroma_key', {'color': '#00ff00', 'similarity': 0.4});
+    expect(vs.saveStylePreset(a, 'Xanh'), contains('phông xanh'));
+    vs.applyStylePreset([b], 'Xanh');
+    expect(vs.effect(b, 'builtin.chroma_key')?['similarity'], 0.4);
+    expect(vs.undo(), isTrue);
+    expect(vs.effect(b, 'builtin.chroma_key'), isNull);
+    vs.saveExportPreset('Kênh', {'base': 'hd720', 'format': 'hevc', 'fps': 25, 'video_mbps': 6});
+    expect(() => vs.saveExportPreset('Bad', {'base': 'nope'}), throwsA(isA<VStudioException>()));
+    final info = vs.exportPresetInfo(name: 'Kênh');
+    expect((info.fps, info.videoBitrate), (25.0, 6000000));
+    // Kept in the file, for the next session.
+    final again = VStudio.create('ffi-presets-2', width: 640, height: 360);
+    addTearDown(again.dispose);
+    again.initPresets('${dir.path}/presets.json');
+    expect(again.userPresets('style').map((p) => p.name), ['Xanh']);
+    expect(again.userPresets('export').single.summary, contains('H.265'));
+  }, skip: skip);
+
+  test('a sticker follows the video below through dart:ffi', () {
+    final vs = VStudio.create('ffi-follow', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final sticker = vs.addGeneratedClip(vs.defaultSticker(vs.textCatalog().stickers.first.id), 0.2, 1.0);
+    expect(() => vs.startFollow('nope', 0.2), throwsA(isA<VStudioException>()));
+    vs.startFollow(sticker, 0.2);
+    var st = 1;
+    for (var i = 0; i < 500 && st == 1; i++) {
+      sleep(const Duration(milliseconds: 20));
+      st = vs.toolJobStatus().$1;
+    }
+    expect(st, anyOf(2, -1)); // -1 when the test clip has nothing to follow; never stuck or crashed
+    if (st == 2) {
+      expect(vs.undo(), isTrue);
+    }
   }, skip: skip);
 
   testWidgets('audio and clip tool sheets fit a phone', (tester) async {

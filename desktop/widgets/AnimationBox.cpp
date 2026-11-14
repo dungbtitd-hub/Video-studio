@@ -1,10 +1,12 @@
 #include "AnimationBox.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTimer>
@@ -76,6 +78,23 @@ AnimationBox::AnimationBox(EditorController* editor, QWidget* parent) : QWidget(
     form->addRow(tr("Biến mất"), row(out_, outLen_));
     form->addRow(tr("Lặp lại"), row(loop_, nullptr));
     l->addLayout(form);
+    // FR-028: put the text or sticker on an object in the video below, then let it follow.
+    auto* fr = new QHBoxLayout();
+    follow_ = new QPushButton(tr("Bám theo đối tượng"), this);
+    follow_->setObjectName("followMotion");
+    follow_->setToolTip(tr("Đặt chữ/sticker lên vật cần bám trong video bên dưới, rồi bấm: từ playhead tới cuối clip, "
+                           "nó sẽ di chuyển theo vật đó (tạo keyframe vị trí, sửa tay được)."));
+    followSize_ = new QCheckBox(tr("cả kích thước"), this);
+    fr->addWidget(follow_, 1);
+    fr->addWidget(followSize_);
+    l->addLayout(fr);
+    connect(follow_, &QPushButton::clicked, this, [this] {
+        if (editor_->tracking()) editor_->cancelTrack();
+        else editor_->followMotion(followSize_->isChecked());
+    });
+    connect(editor_, &EditorController::coversChanged, this, [this] {
+        follow_->setText(editor_->tracking() ? tr("Dừng %1%").arg(qRound(editor_->trackProgress() * 100)) : tr("Bám theo đối tượng"));
+    });
 
     connect(in_, &QComboBox::activated, this, [this] { commit("in", in_, inLen_); });
     connect(out_, &QComboBox::activated, this, [this] { commit("out", out_, outLen_); });

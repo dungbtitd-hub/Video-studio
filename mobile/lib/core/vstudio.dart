@@ -76,6 +76,30 @@ class ExportPresetView {
   final double fps;
 }
 
+/// A preset the user saved (FR-018, FR-022): kind "style" (colour and effects) or "export".
+class UserPresetView {
+  UserPresetView.fromJson(Map<String, dynamic> j)
+      : name = j['name'] as String,
+        summary = (j['summary'] ?? '') as String,
+        data = (j['data'] as Map<String, dynamic>?) ?? const {};
+  final String name, summary;
+  final Map<String, dynamic> data;
+}
+
+/// What exporting with an export preset gives this project.
+class ExportInfo {
+  ExportInfo.fromJson(Map<String, dynamic> j)
+      : width = j['width'] as int,
+        height = j['height'] as int,
+        fps = (j['fps'] as num).toDouble(),
+        videoBitrate = j['video_bitrate'] as int,
+        estimatedBytes = j['estimated_bytes'] as int,
+        summary = j['summary'] as String;
+  final int width, height, videoBitrate, estimatedBytes;
+  final double fps;
+  final String summary;
+}
+
 class ExportFormatView {
   ExportFormatView.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -101,13 +125,38 @@ class CoverState {
   double get h => _d('h', 0.3);
   double get amount => _d('amount', 0.5);
   double get feather => _d('feather', 0.15);
+  double get rotation => _d('rotation', 0);
   String get style => (json['style'] ?? 'blur') as String;
   String get shape => (json['shape'] ?? 'rect') as String;
   bool get invert => json['invert'] == true;
   bool get following => json['following'] == true;
+  /// Masks change the clip's transparency instead of drawing over it.
+  bool get isMask => style.startsWith('mask_');
 }
 
 enum TrackState { idle, running, done, lost, cancelled, failed }
+
+class SpeedPreset {
+  const SpeedPreset(this.id, this.name, this.points);
+  final String id, name;
+  final List<(double, double)> points;
+}
+
+class ClipSpeed {
+  const ClipSpeed(
+      {required this.can,
+      required this.why,
+      required this.speed,
+      required this.points,
+      required this.preset,
+      required this.seconds});
+  final bool can;
+  final String why;
+  final double speed;
+  final List<(double, double)> points;
+  final String preset;
+  final double seconds;
+}
 
 class TransitionInfo {
   const TransitionInfo(this.id, this.name, this.category);
@@ -1037,6 +1086,36 @@ class VStudio {
       tool({'cmd': 'set_track_volume', 'track': trackId, 'volume': volume});
   void setClipVolume(String clipId, double volume) => tool({'cmd': 'set_clip_volume', 'clip': clipId, 'volume': volume});
   void setReversed(List<String> clipIds, bool on) => tool({'cmd': 'set_reversed', 'clips': clipIds, 'on': on});
+
+  /// Ready-made speed ramps: (id, name, points as (u 0..1 of the clip, speed)).
+  List<SpeedPreset> speedPresets() => [
+        for (final e in (tool({'cmd': 'speed_presets'})['presets'] as List).cast<Map<String, dynamic>>())
+          SpeedPreset(e['id'] as String, e['name'] as String, _points(e['points'] as List))
+      ];
+  ClipSpeed clipSpeed(String clipId) {
+    final o = tool({'cmd': 'clip_speed', 'clip': clipId});
+    return ClipSpeed(
+      can: o['can'] == true,
+      why: o['why'] as String? ?? '',
+      speed: (o['speed'] as num).toDouble(),
+      points: _points(o['points'] as List),
+      preset: o['preset'] as String? ?? '',
+      seconds: ticksToSeconds((o['duration'] as num).toInt()),
+    );
+  }
+
+  /// [speed] 0.1..10; [points] empty = constant. The clips after it move with its end.
+  void setSpeed(List<String> clipIds, double speed, {List<(double, double)> points = const [], String preset = ''}) =>
+      tool({
+        'cmd': 'set_speed',
+        'clips': clipIds,
+        'speed': speed,
+        'points': [for (final (u, v) in points) [u, v]],
+        'preset': preset,
+      });
+  static List<(double, double)> _points(List raw) => [
+        for (final p in raw.cast<List>()) ((p[0] as num).toDouble(), (p[1] as num).toDouble())
+      ];
   String freezeFrame(String clipId, double at, {double seconds = 3}) => tool({
         'cmd': 'freeze_frame',
         'clip': clipId,
@@ -1052,6 +1131,38 @@ class VStudio {
   /// Background job: "noise" (then noise reduction at [value]) or "stabilize" (strength [value]).
   void startToolJob(String job, String clipId, double value) =>
       tool({'cmd': 'start', 'job': job, 'clip': clipId, 'value': value});
+
+  /// FR-028: the text/sticker [clipId] follows the object under it in the video below, from
+  /// [atSeconds] to its end (x/y keys, and scale with [size]); applied by [toolJobStatus], one undo step.
+  void startFollow(String clipId, double atSeconds, {bool size = false}) =>
+      tool({'cmd': 'start', 'job': 'follow', 'clip': clipId, 'at': secondsToTicks(atSeconds), 'size': size});
+
+  // ---- user presets (core user_presets.hpp), one file shared by every project ----
+
+  /// Where the presets live; until then they are kept in memory only.
+  void initPresets(String path) => tool({'cmd': 'presets_init', 'path': path});
+
+  List<UserPresetView> userPresets(String kind) => [
+        for (final p in (tool({'cmd': 'user_presets', 'kind': kind})['presets'] as List).cast<Map<String, dynamic>>())
+          UserPresetView.fromJson(p)
+      ];
+
+  /// Saves [clipId]'s colour and effects as [name]; returns the summary.
+  String saveStylePreset(String clipId, String name) =>
+      tool({'cmd': 'save_style_preset', 'clip': clipId, 'name': name})['summary'] as String;
+  void applyStylePreset(List<String> clipIds, String name) =>
+      tool({'cmd': 'apply_style_preset', 'clips': clipIds, 'name': name});
+
+  /// [data]: base (quality id), format, fps?, video_mbps?, audio_kbps?, audio?
+  void saveExportPreset(String name, Map<String, dynamic> data) =>
+      tool({'cmd': 'save_export_preset', 'name': name, 'data': data});
+  void removePreset(String kind, String name) => tool({'cmd': 'remove_preset', 'kind': kind, 'name': name});
+  void renamePreset(String kind, String from, String to) =>
+      tool({'cmd': 'rename_preset', 'kind': kind, 'from': from, 'to': to});
+  ExportInfo exportPresetInfo({String? name, Map<String, dynamic>? data}) =>
+      ExportInfo.fromJson(tool({'cmd': 'export_preset_info', if (name != null) 'name': name, if (data != null) 'data': data}));
+  void startExportUserPreset(String outPath, String name) =>
+      tool({'cmd': 'export_user_preset', 'name': name, 'path': outPath});
 
   /// (status, progress, error): 1 running, 2 done (applied, one undo step), -1 failed, -2 cancelled.
   (int, double, String) toolJobStatus() {

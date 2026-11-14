@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <numbers>
 
+#include "detail/parallel.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/pixel.hpp"
 
@@ -54,6 +55,9 @@ const std::vector<CoverStyle>& coverStyles() {
         {"night", "Nhìn đêm", "Nghệ thuật"},
         {"neon", "Viền neon", "Nghệ thuật"},
         {"oil", "Sơn dầu", "Nghệ thuật"},
+        // Masks: change only the clip's transparency, so the tracks below show through.
+        {"mask_keep", "Giữ trong vùng", "Mặt nạ"},
+        {"mask_cut", "Khoét vùng", "Mặt nạ"},
     };
     return styles;
 }
@@ -68,6 +72,7 @@ const std::vector<CoverShape>& coverShapes() {
     static const std::vector<CoverShape> shapes = {
         {"rect", "Chữ nhật"}, {"rounded", "Bo góc"},  {"ellipse", "Elip"},   {"circle", "Tròn"},  {"diamond", "Thoi"},
         {"triangle", "Tam giác"}, {"hexagon", "Lục giác"}, {"star", "Ngôi sao"}, {"heart", "Trái tim"},
+        {"line", "Đường chia"}, {"band", "Dải"},
     };
     return shapes;
 }
@@ -280,6 +285,8 @@ struct Region {
             return (k - 1) * std::min(hw, hh);
         }
         if (shape == "circle") return std::hypot(lx, ly) - std::min(hw, hh);
+        if (shape == "line") return -ly;  // the side below the line (before rotation) is inside
+        if (shape == "band") return std::abs(ly) - hh;  // a strip across the whole frame
         if (shape == "rect" || shape == "rounded") {
             const double r = shape == "rounded" ? 0.3 * std::min(hw, hh) : 0.0;
             const double qx = std::abs(lx) - (hw - r), qy = std::abs(ly) - (hh - r);
@@ -642,6 +649,43 @@ Img styled(const std::string& style, const Ctx& c) {
     return blurred(src, 0.035 * c.S * c.amount);  // unknown style: never leave a region uncovered
 }
 
+// Masks multiply the alpha by the region's coverage (keepInside) or by its complement, so
+// the picture is cut to a shape and whatever is below it on the timeline shows through.
+// Rows run on every core; outside the region's box the answer is known without the shape.
+void applyMask(VideoFrame& frame, const Region& reg, bool keepInside, bool unbounded) {
+    const double ex = unbounded ? 1e9 : std::abs(reg.hw * reg.cosr) + std::abs(reg.hh * reg.sinr) + reg.feather;
+    const double ey = unbounded ? 1e9 : std::abs(reg.hw * reg.sinr) + std::abs(reg.hh * reg.cosr) + reg.feather;
+    const int bx0 = static_cast<int>(std::clamp(std::floor(reg.cx - ex), 0.0, double(frame.width)));
+    const int bx1 = static_cast<int>(std::clamp(std::ceil(reg.cx + ex), 0.0, double(frame.width)));
+    const int by0 = static_cast<int>(std::clamp(std::floor(reg.cy - ey), 0.0, double(frame.height)));
+    const int by1 = static_cast<int>(std::clamp(std::ceil(reg.cy + ey), 0.0, double(frame.height)));
+    const bool deep = frame.deep();
+    const int W = frame.width;
+    auto scale = [&](int x, int y, float k) {
+        const std::size_t i = (static_cast<std::size_t>(y) * W + x) * 4 + 3;
+        if (deep) {
+            if (k <= 0) frame.half[i] = 0;
+            else if (k < 1) frame.half[i] = floatToHalf(halfToFloat(frame.half[i]) * k);
+        } else {
+            if (k <= 0) frame.rgba[i] = 0;
+            else if (k < 1) frame.rgba[i] = static_cast<std::uint8_t>(frame.rgba[i] * k + 0.5f);
+        }
+    };
+    detail::parallelRows(frame.height, static_cast<std::size_t>(W) * frame.height, [&](int r0, int r1) {
+        for (int y = r0; y < r1; ++y) {
+            const bool rowIn = y >= by0 && y < by1;
+            for (int x = 0; x < W; ++x) {
+                if (!rowIn || x < bx0 || x >= bx1) {  // outside the box: coverage 0
+                    if (keepInside) scale(x, y, 0);
+                    continue;
+                }
+                const float m = reg.mask(x + 0.5, y + 0.5);
+                scale(x, y, keepInside ? m : 1 - m);
+            }
+        }
+    });
+}
+
 }  // namespace
 
 void applyCover(VideoFrame& frame, const Json& raw, Time t) {
@@ -655,15 +699,22 @@ void applyCover(VideoFrame& frame, const Json& raw, Time t) {
     Region reg{(x + w / 2) * W, (y + h / 2) * H, w * W / 2, h * H / 2, std::cos(rot), std::sin(rot), 0,
                p.value("shape", std::string("rect")), {}};
     if (!isCoverShape(reg.shape)) reg.shape = "rect";
-    reg.feather = std::max(0.75, std::clamp(p.value("feather", 0.15), 0.0, 1.0) * std::min(reg.hw, reg.hh));
-    if (reg.shape != "rect" && reg.shape != "rounded" && reg.shape != "ellipse" && reg.shape != "circle")
+    const bool unbounded = reg.shape == "line" || reg.shape == "band";  // reach the frame edges
+    const double softness = std::clamp(p.value("feather", 0.15), 0.0, 1.0);
+    reg.feather = std::max(0.75, softness * (unbounded ? 0.25 * S : std::min(reg.hw, reg.hh)));
+    if (!unbounded && reg.shape != "rect" && reg.shape != "rounded" && reg.shape != "ellipse" && reg.shape != "circle")
         for (const auto& v : unitShape(reg.shape)) reg.poly.push_back({v[0] * reg.hw, v[1] * reg.hh});
+    const std::string style = p.value("style", std::string("blur"));
+    if (style == "mask_keep" || style == "mask_cut") {
+        applyMask(frame, reg, (style == "mask_keep") != invert, unbounded);
+        return;
+    }
 
     // Covered area (frame pixels): the rotated box plus feather, or the whole frame when inverted.
     const double ex = std::abs(reg.hw * reg.cosr) + std::abs(reg.hh * reg.sinr) + reg.feather;
     const double ey = std::abs(reg.hw * reg.sinr) + std::abs(reg.hh * reg.cosr) + reg.feather;
     int x0 = 0, y0 = 0, x1 = frame.width, y1 = frame.height;
-    if (!invert) {
+    if (!invert && !unbounded) {
         x0 = std::max(0, static_cast<int>(std::floor(reg.cx - ex)));
         y0 = std::max(0, static_cast<int>(std::floor(reg.cy - ey)));
         x1 = std::min(frame.width, static_cast<int>(std::ceil(reg.cx + ex)));

@@ -3,10 +3,15 @@
 // Heavy work (noise analysis, shake measurement, probing a recording) runs on toolJobs_;
 // results come back to the UI thread and become one undo step.
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QStandardPaths>
 
 #include "EditorController.h"
+#include "vstudio/speed_curve.hpp"
+#include "vstudio/user_presets.hpp"
+#include "vstudio/export_presets.hpp"
 #include "VoiceRecorder.h"
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/plugins.hpp"
@@ -184,6 +189,30 @@ void EditorController::freezeFrame(double seconds) {
     }
 }
 
+void EditorController::setClipSpeed(const QStringList& clipIds, double speedValue, const QVector<QPointF>& points,
+                                    const QString& preset) {
+    std::vector<vstudio::speed::CurvePoint> pts;
+    for (const QPointF& p : points) pts.push_back({p.x(), p.y()});
+    if (VS_EDIT(editor_->setClipSpeed(ids(clipIds), speedValue, pts, preset.toStdString())))
+        setStatus(pts.empty() ? tr("Tốc độ %1x").arg(speedValue, 0, 'f', 2) : tr("Đã đặt đường cong tốc độ"));
+}
+
+QVariantMap EditorController::clipSpeed(const QString& clipId) const {
+    QVariantMap m;
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c) return m;
+    std::string why;
+    m["can"] = vstudio::speed::canChangeSpeed(*snapshot_, *c, &why);
+    m["why"] = QString::fromStdString(why);
+    m["speed"] = vstudio::speed::baseSpeed(*c);
+    QVariantList pts;
+    for (const auto& p : vstudio::speed::pointsOf(*c)) pts.push_back(QPointF(p.u, p.v));
+    m["points"] = pts;
+    m["preset"] = QString::fromStdString(c->extra.value("speed_preset", std::string()));
+    m["seconds"] = c->duration().seconds();
+    return m;
+}
+
 void EditorController::setChromaKey(const QStringList& clipIds, const Json& params) {
     VS_EDIT(editor_->setClipEffect(ids(clipIds), cliptools::kChromaKeyEffect, params, false,
                                    params.is_null() ? "Remove chroma key" : "Chroma key"));
@@ -291,6 +320,130 @@ QStringList EditorController::favorites(const QString& category) const {
     QStringList out;
     for (const auto& id : favoriteStore().list(s(category))) out << q(id);
     return out;
+}
+
+// ---------------------------------------------------------------- user presets
+
+namespace {
+QVariantMap toVariant(const Json& j) {
+    return QJsonDocument::fromJson(QByteArray::fromStdString(j.dump())).object().toVariantMap();
+}
+Json fromVariant(const QVariantMap& m) {
+    return Json::parse(QJsonDocument(QJsonObject::fromVariantMap(m)).toJson(QJsonDocument::Compact).toStdString());
+}
+}  // namespace
+
+presets::UserPresetStore& EditorController::presetStore() const {
+    if (!userPresets_) {
+        const QString file = userPresetsFile_.isEmpty()
+                                 ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/presets.json"
+                                 : userPresetsFile_;
+        userPresets_ = std::make_unique<presets::UserPresetStore>(s(file));
+    }
+    return *userPresets_;
+}
+
+void EditorController::setUserPresetsFile(const QString& file) {
+    userPresetsFile_ = file;
+    userPresets_.reset();
+}
+
+QVariantList EditorController::userPresets(const QString& kind) const {
+    QVariantList out;
+    for (const auto& p : presetStore().list(s(kind))) {
+        QString summary;
+        if (kind == presets::kStyle) summary = q(presets::describeStyle(p.data));
+        else if (auto e = presets::userExportFromJson(p.data)) summary = q(presets::describeExport(*e));
+        out.push_back(QVariantMap{{"name", q(p.name)}, {"summary", summary}, {"saved", qint64(p.saved)}, {"data", toVariant(p.data)}});
+    }
+    return out;
+}
+
+bool EditorController::saveStylePreset(const QString& clipId, const QString& name) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c || c->generated()) {
+        setStatus(tr("Chọn một clip video hoặc ảnh để lưu preset"));
+        return false;
+    }
+    std::string err;
+    if (!presetStore().put(presets::kStyle, s(name), presets::captureStyle(*c), &err)) {
+        setStatus(tr("Không lưu được preset: %1").arg(q(err)));
+        return false;
+    }
+    setStatus(tr("Đã lưu preset \"%1\"").arg(name.trimmed()));
+    emit userPresetsChanged();
+    return true;
+}
+
+void EditorController::applyStylePreset(const QStringList& clipIds, const QString& name) {
+    const presets::UserPreset* p = presetStore().find(presets::kStyle, s(name));
+    if (!p) return setStatus(tr("Không tìm thấy preset"));
+    const Json data = p->data;
+    const std::string label = "Preset: " + p->name;
+    if (VS_EDIT(editor_->applyClipStyle(ids(clipIds), data, label)))
+        setStatus(tr("Đã áp dụng preset \"%1\"").arg(name));
+}
+
+bool EditorController::saveExportPreset(const QString& name, const QVariantMap& data) {
+    std::string err;
+    Json j;
+    try {
+        j = fromVariant(data);
+    } catch (const std::exception& e) {
+        err = e.what();
+    }
+    const auto e = err.empty() ? presets::userExportFromJson(j, &err) : std::nullopt;
+    if (!e || !presetStore().put(presets::kExport, s(name), presets::toJson(*e), &err)) {
+        setStatus(tr("Không lưu được preset: %1").arg(q(err)));
+        return false;
+    }
+    setStatus(tr("Đã lưu preset xuất \"%1\"").arg(name.trimmed()));
+    emit userPresetsChanged();
+    return true;
+}
+
+bool EditorController::removeUserPreset(const QString& kind, const QString& name) {
+    std::string err;
+    if (!presetStore().remove(s(kind), s(name), &err)) {
+        setStatus(q(err));
+        return false;
+    }
+    emit userPresetsChanged();
+    return true;
+}
+
+bool EditorController::renameUserPreset(const QString& kind, const QString& from, const QString& to) {
+    std::string err;
+    if (!presetStore().rename(s(kind), s(from), s(to), &err)) {
+        setStatus(err.find("already exists") != std::string::npos ? tr("Đã có preset tên này") : q(err));
+        return false;
+    }
+    emit userPresetsChanged();
+    return true;
+}
+
+QVariantMap EditorController::exportPresetInfo(const QVariantMap& data) const {
+    try {
+        const auto e = presets::userExportFromJson(fromVariant(data));
+        if (!e) return {};
+        const ExportSettings es = presets::exportSettingsFor(editor_->project(), *e);
+        return {{"width", es.width},
+                {"height", es.height},
+                {"fps", double(es.fps.num) / es.fps.den},
+                {"bitrate", double(es.videoBitrate)},
+                {"audio", es.includeAudio},
+                {"estimatedBytes", double(estimateExportBytes(es, editor_->project().duration().seconds()))},
+                {"summary", q(presets::describeExport(*e))}};
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+void EditorController::exportWithUserPreset(const QUrl& file, const QString& name) {
+    const presets::UserPreset* p = presetStore().find(presets::kExport, s(name));
+    const auto e = p ? presets::userExportFromJson(p->data) : std::nullopt;
+    if (!e) return setStatus(tr("Không tìm thấy preset xuất"));
+    startExport(file, presets::exportSettingsFor(editor_->project(), *e));
 }
 
 // ---- plugins (Plugin API beta) ----

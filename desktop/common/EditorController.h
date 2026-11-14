@@ -6,6 +6,8 @@
 
 #include <QImage>
 #include <QObject>
+#include <QPointF>
+#include <QVector>
 #include <QRectF>
 #include <QVariantMap>
 #include <QPointer>
@@ -26,6 +28,7 @@
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/scheduler.hpp"
+#include "vstudio/user_presets.hpp"
 
 class AudioOutput;
 class TranslationClient;
@@ -184,6 +187,11 @@ public:
     // Follows the subject from the playhead to the clip's end (background job, one undo step).
     void trackCover();
     void cancelTrack();
+    // The selected clip (text, sticker, picture-in-picture) follows the object it sits on in the
+    // video below, from the playhead to its end; `withSize` also follows how big the object gets.
+    // Uses the same background job and progress as cover tracking (trackFinished at the end).
+    void followMotion(bool withSize = false);
+    [[nodiscard]] bool canFollowMotion() const;
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] double trackProgress() const { return trackProgress_; }
 
@@ -286,6 +294,12 @@ public:
     [[nodiscard]] bool clipReversed(const QString& clipId) const;
     // Holds the frame at the playhead on the selected clip for `seconds`.
     void freezeFrame(double seconds = 3.0);
+    // Speed (speed_curve.hpp): base speed 0.1..10 and a ramp as points (u 0..1 of the clip,
+    // speed); no points = constant. The clips after it on the track move with its new end.
+    void setClipSpeed(const QStringList& clipIds, double speed, const QVector<QPointF>& points = {},
+                      const QString& preset = {});
+    // {"can", "why", "speed", "points" (QVariantList of QPointF), "preset", "seconds"}
+    [[nodiscard]] QVariantMap clipSpeed(const QString& clipId) const;
     // Chroma key on the selected clip: params (null removes); current params or null.
     void setChromaKey(const QStringList& clipIds, const vstudio::Json& params);
     [[nodiscard]] vstudio::Json chromaKey(const QString& clipId) const;
@@ -315,6 +329,20 @@ public:
     void toggleFavorite(const QString& category, const QString& id);
     [[nodiscard]] QStringList favorites(const QString& category) const;
     void setFavoritesFile(const QString& file);  // tests
+
+    // ---- user presets (vstudio/user_presets.hpp): named styles and export settings ----
+    // kind "style" or "export": name, summary, saved (unix s), data; newest first.
+    [[nodiscard]] QVariantList userPresets(const QString& kind) const;
+    bool saveStylePreset(const QString& clipId, const QString& name);  // the clip's colour and effects
+    void applyStylePreset(const QStringList& clipIds, const QString& name);  // one undo step
+    // data: base (quality id), format, fps, video_mbps, audio_kbps, audio (0 = automatic).
+    bool saveExportPreset(const QString& name, const QVariantMap& data);
+    bool removeUserPreset(const QString& kind, const QString& name);
+    bool renameUserPreset(const QString& kind, const QString& from, const QString& to);
+    // What exporting with `data` gives this project: width, height, fps, bitrate, estimatedBytes, summary.
+    [[nodiscard]] QVariantMap exportPresetInfo(const QVariantMap& data) const;
+    void exportWithUserPreset(const QUrl& file, const QString& name);
+    void setUserPresetsFile(const QString& file);  // tests
 
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
@@ -358,6 +386,7 @@ signals:
     void translationFinished(bool ok, const QString& message);
     void toolsChanged();      // noise analysis, stabilisation or voice-over state changed
     void favoritesChanged();
+    void userPresetsChanged();
 
 private:
     template <class F>
@@ -436,4 +465,7 @@ private:
     std::vector<vstudio::plugins::PluginEffect> pluginEffects_;
     QStringList pluginErrors_;
     vstudio::cliptools::Favorites& favoriteStore() const;
+    mutable std::unique_ptr<vstudio::presets::UserPresetStore> userPresets_;
+    QString userPresetsFile_;
+    vstudio::presets::UserPresetStore& presetStore() const;
 };

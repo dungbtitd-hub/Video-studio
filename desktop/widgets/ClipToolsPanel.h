@@ -3,6 +3,8 @@
 // re-smooths without measuring again) for the selected video clip.
 #pragma once
 
+#include <QPointF>
+#include <QVector>
 #include <QWidget>
 
 class EditorController;
@@ -14,12 +16,16 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class SpeedCurveEditor;
 
 class ClipToolsPanel : public QWidget {
     Q_OBJECT
 public:
     explicit ClipToolsPanel(EditorController* editor, QWidget* parent = nullptr);
     [[nodiscard]] QCheckBox* reverse() const { return reverse_; }  // for tests
+    [[nodiscard]] QSlider* speedSlider() const { return speed_; }
+    [[nodiscard]] QComboBox* speedCurve() const { return curveList_; }
+    [[nodiscard]] SpeedCurveEditor* curveEditor() const { return curve_; }
     [[nodiscard]] QPushButton* freezeButton() const { return freeze_; }
     [[nodiscard]] QCheckBox* chroma() const { return chroma_; }
     [[nodiscard]] QPushButton* stabilizeButton() const { return stab_; }
@@ -29,11 +35,16 @@ public:
 private:
     void refresh();
     void commitChroma();
+    void commitSpeed(const QVector<QPointF>& points, const QString& preset);
 
     EditorController* editor_;
     QLabel* hint_;
     QWidget* body_;
     QCheckBox* reverse_;
+    QSlider* speed_;
+    QLabel* speedLabel_;
+    QComboBox* curveList_;
+    SpeedCurveEditor* curve_;
     QDoubleSpinBox* freezeSecs_;
     QPushButton* freeze_;
     QCheckBox* chroma_;

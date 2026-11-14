@@ -13,6 +13,7 @@
 
 #include "EditorController.h"
 #include "Favorites.h"
+#include "UserPresetBox.h"
 #include "vstudio/color_space.hpp"
 #include "vstudio/looks.hpp"
 
@@ -90,6 +91,8 @@ LooksPanel::LooksPanel(EditorController* editor, QWidget* parent) : QWidget(pare
     buttons->addWidget(applyAll_);
     buttons->addWidget(clear_);
     l->addLayout(buttons);
+    userPresets_ = new UserPresetBox(editor_, this);
+    l->addWidget(userPresets_);
 
     auto* none = new QListWidgetItem("Gốc", list_);
     none->setData(Qt::UserRole, QString());

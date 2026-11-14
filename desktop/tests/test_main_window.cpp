@@ -28,6 +28,7 @@
 #include "ScopesPanel.h"
 #include "GradeWidgets.h"
 #include "LooksPanel.h"
+#include "UserPresetBox.h"
 #include "MainWindow.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -42,6 +43,7 @@
 #include "AudioPanel.h"
 #include "MixerPanel.h"
 #include "ClipToolsPanel.h"
+#include "SpeedCurveEditor.h"
 #include "vstudio/audio_fx.hpp"
 #include <QDoubleSpinBox>
 #include <QTableView>
@@ -280,6 +282,26 @@ private slots:
         const auto& v1 = ctrl_->project()->tracks.front();
         const QString clip = QString::fromStdString(v1.clips.front().id);
         ctrl_->setSelectedClip(clip);
+        // Speed: 2x halves the clip; a preset curve shows the editor; back to normal.
+        {
+            const double len = ctrl_->clipSpeed(clip).value("seconds").toDouble();
+            QSlider* sp = panel->speedSlider();
+            sp->setValue(30);  // 10^0.3 = 2x
+            emit sp->sliderReleased();
+            QCOMPARE(qRound(ctrl_->clipSpeed(clip).value("speed").toDouble() * 100), 200);
+            QVERIFY(std::abs(ctrl_->clipSpeed(clip).value("seconds").toDouble() - len / 2) < 0.01);
+            QComboBox* cv = panel->speedCurve();
+            cv->setCurrentIndex(cv->findData("hero"));
+            emit cv->activated(cv->currentIndex());
+            QCOMPARE(ctrl_->clipSpeed(clip).value("preset").toString(), QString("hero"));
+            QTRY_VERIFY(panel->curveEditor()->isVisibleTo(panel));
+            cv->setCurrentIndex(0);
+            emit cv->activated(0);
+            QVERIFY(ctrl_->clipSpeed(clip).value("points").toList().isEmpty());
+            sp->setValue(0);
+            emit sp->sliderReleased();
+            QVERIFY(std::abs(ctrl_->clipSpeed(clip).value("seconds").toDouble() - len) < 0.01);
+        }
         panel->reverse()->setChecked(true);
         QVERIFY(ctrl_->clipReversed(clip));
         panel->chroma()->setChecked(true);
@@ -358,6 +380,48 @@ private slots:
         QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
         emit list->itemClicked(list->item(0));  // "Gốc": no look
         QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
+    }
+
+    void userPresets() {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        ctrl_->setUserPresetsFile(tmp.filePath("presets.json"));
+        emit ctrl_->userPresetsChanged();
+        UserPresetBox* box = win_->looks()->userPresets();
+        QVERIFY(box);
+        QCOMPARE(box->list()->count(), 0);
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString a = QString::fromStdString(v1.clips[0].id), b = QString::fromStdString(v1.clips[1].id);
+        ctrl_->setSelectedClip(a);
+        ctrl_->setClipLook({a}, "teal_orange", 0.6);
+        ctrl_->setClipColorSpace({a}, "slog3");
+        QVERIFY(ctrl_->saveStylePreset(a, QString::fromUtf8("Phim của tôi")));
+        QCOMPARE(box->list()->count(), 1);  // the panel follows
+        QVERIFY(box->list()->itemData(0, Qt::ToolTipRole).toString().contains("Log"));
+        // Apply to the other clip from the panel: one undo step.
+        ctrl_->setSelectedClip(b);
+        QCoreApplication::processEvents();
+        QVERIFY(box->applyButton()->isEnabled());
+        box->applyButton()->click();
+        QCOMPARE(ctrl_->clipLook(b), qMakePair(QString("teal_orange"), 0.6));
+        QCOMPARE(ctrl_->clipColorSpace(b).first, QString("slog3"));
+        ctrl_->undo();
+        QVERIFY(ctrl_->clipLook(b).first.isEmpty());
+        QVERIFY(ctrl_->renameUserPreset("style", QString::fromUtf8("Phim của tôi"), "Film"));
+        QCOMPARE(box->list()->itemText(0), QString("Film"));
+        // Export presets: own frame rate and bitrate, listed and sized for this project.
+        QVERIFY(ctrl_->saveExportPreset("Kênh", {{"base", "hd720"}, {"format", "hevc"}, {"fps", 25.0}, {"video_mbps", 6.0}}));
+        QVERIFY(!ctrl_->saveExportPreset("Bad", {{"base", "nope"}}));
+        const QVariantList ex = ctrl_->userPresets("export");
+        QCOMPARE(ex.size(), 1);
+        const QVariantMap info = ctrl_->exportPresetInfo(ex[0].toMap()["data"].toMap());
+        QCOMPARE(info["width"].toInt(), 1280);
+        QCOMPARE(info["fps"].toDouble(), 25.0);
+        QCOMPARE(info["bitrate"].toDouble(), 6e6);
+        QVERIFY(ex[0].toMap()["summary"].toString().contains("H.265"));
+        QVERIFY(ctrl_->removeUserPreset("export", "Kênh"));
+        QVERIFY(ctrl_->userPresets("export").isEmpty());
+        ctrl_->setUserPresetsFile({});
     }
 
     void proGrade() {
@@ -686,6 +750,19 @@ private slots:
         QVERIFY(c && c->value("kind", std::string{}) == "sticker");
         QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
         QVERIFY(sp->animations()->isEnabled());
+        // Follow motion (FR-028): runs in the background and reports back. The synthetic project has no
+        // media files, so here it only fails cleanly, without an edit; the tracking itself is tested in core.
+        {
+            QVERIFY(ctrl_->canFollowMotion());
+            QVERIFY(sp->animations()->followButton()->isEnabled());
+            const QString undoBefore = ctrl_->undoLabel();
+            sp->animations()->followButton()->click();
+            QVERIFY(ctrl_->tracking());
+            QTRY_VERIFY_WITH_TIMEOUT(!ctrl_->tracking(), 20000);
+            QVERIFY(!ctrl_->status().isEmpty());
+            QCOMPARE(ctrl_->undoLabel(), undoBefore);
+            QCOMPARE(sp->animations()->followButton()->text(), QString::fromUtf8("Bám theo đối tượng"));
+        }
         // Resizing follows the mouse live: nothing is edited until release, then one undo step.
         {
             const QRectF from = ctrl_->objectCanvasRect();

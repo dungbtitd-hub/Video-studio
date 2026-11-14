@@ -286,6 +286,10 @@ jobs:
           path: dist
       - name: Checksums
         run: |
+          # Artifacts keep their folders when their paths have different roots (Linux: build/...):
+          # flatten them so the release lists plain files.
+          find dist -mindepth 2 -type f -exec mv -t dist {} +
+          find dist -mindepth 1 -type d -empty -delete
           cd dist && rm -f *.png
           sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2

@@ -13,3 +13,8 @@ mobile/.flutter-plugins*
 mobile/.packages
 # Test media generated locally
 /testdata/generated/
+
+# Output of capi tests when run from the repository root
+capi_test_unpack/
+capi_test_recent/
+capi_test*.vstudiopkg
