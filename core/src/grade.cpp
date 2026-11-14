@@ -417,10 +417,10 @@ void applyColorGrade(VideoFrame& f, const Json& p) {
     });
 }
 
-std::shared_ptr<const GpuGrade> gpuGrade(const Json& params) {
+std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookParams) {
     static std::mutex mu;
     static std::vector<std::pair<std::string, std::shared_ptr<const GpuGrade>>> cache;  // most recent first
-    const std::string key = params.dump();
+    const std::string key = params.dump() + "|" + lookParams.dump();
     {
         std::lock_guard lk(mu);
         for (std::size_t i = 0; i < cache.size(); ++i)
@@ -431,11 +431,13 @@ std::shared_ptr<const GpuGrade> gpuGrade(const Json& params) {
             }
     }
     constexpr int kSteps = 4096;
-    const Plan pl = makePlan(params, kSteps);
+    const bool graded = !params.is_null();
+    const Plan pl = makePlan(graded ? params : Json::object(), kSteps);
     auto g = std::make_shared<GpuGrade>();
     g->params = params;
+    g->lookParams = lookParams;
     constexpr int W = GpuGrade::kTableWidth;
-    g->table.assign(static_cast<std::size_t>(W) * 2 * 4, 0.0f);
+    g->table.assign(static_cast<std::size_t>(W) * GpuGrade::kTableRows * 4, 0.0f);
     for (int x = 0; x < W; ++x) {
         float* t = g->table.data() + static_cast<std::size_t>(x) * 4;
         const int i = std::min(x, kSteps + 1);
@@ -451,11 +453,20 @@ std::shared_ptr<const GpuGrade> gpuGrade(const Json& params) {
         t[2] = pl.hsl ? pl.hLum[i] : 0.0f;
         t[3] = pl.qual ? pl.qHue[i] : 0.0f;
     }
+    const LookGpu look = lookParams.is_null() ? LookGpu{} : lookGpu(lookParams, kSteps);
+    for (int x = 0; x < W; ++x) {
+        float* t = g->table.data() + (static_cast<std::size_t>(W) * 2 + x) * 4;
+        const int i = std::min(x, kSteps);
+        for (int c = 0; c < 3; ++c)
+            t[c] = look.active ? look.curve[c][static_cast<std::size_t>(i)] : static_cast<float>(i) / kSteps;
+        t[3] = 1.0f;
+    }
     const float u[16] = {pl.saturation, pl.tone ? 1.0f : 0.0f, pl.hsl ? 1.0f : 0.0f, pl.qual ? 1.0f : 0.0f,
                          pl.sLo, pl.sHi, pl.lLo, pl.lHi,
                          pl.soft, pl.invert ? 1.0f : 0.0f, pl.showMask ? 1.0f : 0.0f, pl.qShift,
-                         pl.qSat, pl.qExp, 0.0f, 0.0f};
+                         pl.qSat, pl.qExp, graded ? 1.0f : 0.0f, 0.0f};
     std::copy(u, u + 16, g->u);
+    if (look.active) std::copy(look.u, look.u + 16, g->u + 16);
     std::lock_guard lk(mu);
     cache.insert(cache.begin(), {key, g});
     if (cache.size() > 16) cache.pop_back();

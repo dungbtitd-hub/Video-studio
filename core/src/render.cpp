@@ -2,6 +2,7 @@
 #include "vstudio/audio_fx.hpp"
 
 #include "vstudio/grade.hpp"
+#include "vstudio/looks.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -322,7 +323,8 @@ namespace {
 CompositeLayer baked(const CompositeLayer& l, bool deepOut) {
     if (!l.frame || (!l.grade && l.frame->deep() == deepOut)) return l;
     auto f = std::make_shared<VideoFrame>(*l.frame);
-    if (l.grade) applyColorGrade(*f, l.grade->params);
+    if (l.grade && !l.grade->params.is_null()) applyColorGrade(*f, l.grade->params);
+    if (l.grade && !l.grade->lookParams.is_null()) applyColorLook(*f, l.grade->lookParams);
     if (f->deep() && !deepOut) convertFrame(*f, PixelFormat::RGBA8);  // dither down after grading
     return CompositeLayer{std::move(f), l.transform, nullptr};
 }
@@ -393,18 +395,33 @@ std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const
         }
     }
     const Clip& full = live ? *live : *layer.clip;
-    // A grade at the end of the chain runs in the compositor (GPU shader) when it can:
-    // only the effects before it run here, and the frame stays deep for it.
+    // A grade and/or a one-tap look at the end of the chain run in the compositor (GPU
+    // shader) when it can: only the effects before them run here, and the frame stays deep.
     std::shared_ptr<const GpuGrade> gpu;
     std::optional<Clip> rest;
     if (!deep_ && full.effects.is_array() && !full.effects.empty() && compositor().supportsGrade()) {
-        int last = -1;
+        std::vector<int> on;  // enabled effects, in order
         for (int i = 0; i < static_cast<int>(full.effects.size()); ++i)
-            if (full.effects[i].is_object() && full.effects[i].value("enabled", true)) last = i;
-        if (last >= 0 && full.effects[last].value("type", std::string{}) == kColorGradeEffect) {
-            gpu = gpuGrade(full.effects[last].value("params", Json::object()));
+            if (full.effects[i].is_object() && full.effects[i].value("enabled", true)) on.push_back(i);
+        auto typeAt = [&](std::size_t k) { return full.effects[on[k]].value("type", std::string{}); };
+        auto paramsAt = [&](std::size_t k) { return full.effects[on[k]].value("params", Json::object()); };
+        std::vector<int> moved;
+        Json grade, look;
+        if (!on.empty() && typeAt(on.size() - 1) == kColorLookEffect) {
+            look = paramsAt(on.size() - 1);
+            moved.push_back(on.back());
+            if (on.size() >= 2 && typeAt(on.size() - 2) == kColorGradeEffect) {
+                grade = paramsAt(on.size() - 2);
+                moved.push_back(on[on.size() - 2]);
+            }
+        } else if (!on.empty() && typeAt(on.size() - 1) == kColorGradeEffect) {
+            grade = paramsAt(on.size() - 1);
+            moved.push_back(on.back());
+        }
+        if (!moved.empty()) {
+            gpu = gpuGrade(grade, look);
             rest = full;
-            rest->effects.erase(rest->effects.begin() + last);
+            for (int i : moved) rest->effects.erase(rest->effects.begin() + i);  // highest index first
         }
     }
     const Clip& clip = rest ? *rest : full;

@@ -18,6 +18,7 @@
 
 #include "vstudio/compositor.hpp"
 #include "vstudio/grade.hpp"
+#include "vstudio/looks.hpp"
 #include "vstudio/pixel.hpp"
 #include "vtest.hpp"
 
@@ -236,6 +237,34 @@ struct CompositorSuite {
                     CHECK(c->composite(out, {l}, &err));
                     expectClose(out, reference(320, 180, {l}), (std::string(deep ? "10-bit " : "8-bit ") + g.dump()).c_str());
                 }
+        });
+        add(name + ": one-tap looks in the compositor match the CPU look (alone, after a grade, scaled)", [get] {
+            auto c = get();
+            if (!c || !c->supportsGrade()) return;
+            const char* looks[] = {"teal_orange", "vintage", "vivid", "bleach"};
+            const Json grade = {{"saturation", 1.2}, {"contrast", 1.1}};
+            for (int deep = 0; deep < 2; ++deep)
+                for (const char* id : looks)
+                    for (int variant = 0; variant < 3; ++variant) {
+                        const ColorLook* lk = findColorLook(id);
+                        CHECK(lk != nullptr);
+                        Json lp = lk->params;
+                        if (variant == 2) lp["strength"] = 0.6;
+                        auto src = pattern(320, 180, 13, false);
+                        if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
+                        CompositeLayer l{src, {}, gpuGrade(variant == 1 ? grade : Json(), lp)};
+                        if (variant == 2) {
+                            l.transform.scale = 0.75;  // sampled path: the vignette follows the texture
+                        } else {
+                            l.transform.x = 16;
+                        }
+                        VideoFrame out;
+                        out.allocate(320, 180);
+                        std::string err;
+                        CHECK(c->composite(out, {l}, &err));
+                        expectClose(out, reference(320, 180, {l}),
+                                    (std::string(deep ? "10-bit " : "8-bit ") + id + " v" + std::to_string(variant)).c_str());
+                    }
         });
         add(name + ": 1080p, 4 layers (timing)", [get, name] {
             auto c = get();

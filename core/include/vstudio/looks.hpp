@@ -32,4 +32,15 @@ const ColorLook* findColorLook(const std::string& id);
 // look thumbnails from a small frame without touching the project.
 void applyColorLook(VideoFrame& frame, const Json& params);
 
+// The look in the form GPU compositors run it, right after the grade (grade.hpp GpuGrade):
+// the tone curve per channel at steps + 1 inputs, and 4 vec4 uniforms:
+//   [on, strength, saturation (0 for mono), vibrance (0 for mono)], [colourOn, splitOn, vignette, 0],
+//   [shadows r, g, b, 0], [highlights r, g, b, 0].
+struct LookGpu {
+    bool active = false;
+    std::vector<float> curve[3];
+    float u[16] = {};
+};
+LookGpu lookGpu(const Json& params, int steps);
+
 }  // namespace vstudio

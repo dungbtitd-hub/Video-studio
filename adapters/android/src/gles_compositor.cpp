@@ -42,18 +42,19 @@ uniform float uOpacity;
 uniform int uExact;
 uniform ivec2 uOffset;
 uniform int uGraded;
-uniform highp sampler2D uGrade;  // RGBA32F, 4098 x 2 (see GpuGrade in grade.hpp); texelFetch only
-uniform vec4 uG[4];
+uniform highp sampler2D uGrade;  // RGBA32F, 4098 x 3 (see GpuGrade in grade.hpp); texelFetch only
+uniform vec4 uG[8];
 out vec4 color;
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
 // Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
-float tone(float v, vec4 m) {
+float toneRow(float v, vec4 m, int row) {
     float pos = clamp(v, 0.0, 1.0) * 4096.0;
     int i = min(int(pos), 4095);
     float t = pos - float(i);
-    return mix(dot(texelFetch(uGrade, ivec2(i, 0), 0), m), dot(texelFetch(uGrade, ivec2(i + 1, 0), 0), m), t);
+    return mix(dot(texelFetch(uGrade, ivec2(i, row), 0), m), dot(texelFetch(uGrade, ivec2(i + 1, row), 0), m), t);
 }
+float tone(float v, vec4 m) { return toneRow(v, m, 0); }
 vec4 hueRow(float h) {
     float pos = h - 360.0 * floor(h / 360.0);  // hue shifts may leave 0..360
     int i = clamp(int(pos), 0, 359);
@@ -124,16 +125,44 @@ vec3 grade(vec3 c) {
     return hsv2rgb(hsv);
 }
 
+// ---- one-tap look after the grade: the same steps as applyColorLook() on the CPU ----
+// pos: the pixel centre in the layer texture's own pixels (the vignette's coordinates).
+vec3 look(vec3 c, vec2 pos) {
+    vec3 o = vec3(toneRow(c.r, vec4(1, 0, 0, 0), 2), toneRow(c.g, vec4(0, 1, 0, 0), 2), toneRow(c.b, vec4(0, 0, 1, 0), 2));
+    if (uG[5].x > 0.5) {
+        float l = dot(o, vec3(0.2126, 0.7152, 0.0722));
+        float s = uG[4].z;
+        if (uG[4].w != 0.0) s *= 1.0 + uG[4].w * (1.0 - (max(o.r, max(o.g, o.b)) - min(o.r, min(o.g, o.b))));
+        o = l + (o - l) * s;
+        if (uG[5].y > 0.5) o += (1.0 - l) * (1.0 - l) * uG[6].rgb + l * l * uG[7].rgb;
+    }
+    if (uG[5].z > 0.0) {
+        vec2 sz = vec2(textureSize(uTex, 0));
+        vec2 d = (pos - sz * 0.5) / length(sz * 0.5);
+        float t = clamp((sqrt(min(1.0, dot(d, d))) - 0.45) / 0.55, 0.0, 1.0);
+        o *= 1.0 - uG[5].z * t * t * (3.0 - 2.0 * t);
+    }
+    return c + (clamp(o, 0.0, 1.0) - c) * uG[4].y;
+}
+
 void main() {
     vec2 p = gl_FragCoord.xy;  // pixel centre (x + 0.5, y + 0.5); y counts from the top row
     if (p.x < uRect.x || p.x >= uRect.z || p.y < uRect.y || p.y >= uRect.w) discard;
     vec4 c;
+    vec2 pos;
     if (uExact != 0) {
-        c = texelFetch(uTex, ivec2(floor(p)) - uOffset, 0);
+        ivec2 xy = ivec2(floor(p)) - uOffset;
+        c = texelFetch(uTex, xy, 0);
+        pos = vec2(xy) + 0.5;
     } else {
-        c = texture(uTex, (p - uRect.xy) / (uRect.zw - uRect.xy));
+        vec2 uv = (p - uRect.xy) / (uRect.zw - uRect.xy);
+        c = texture(uTex, uv);
+        pos = uv * vec2(textureSize(uTex, 0));
     }
-    if (uGraded != 0) c.rgb = clamp(grade(c.rgb), 0.0, 1.0);
+    if (uGraded != 0) {
+        if (uG[3].z > 0.5) c.rgb = clamp(grade(c.rgb), 0.0, 1.0);
+        if (uG[4].x > 0.5) c.rgb = look(c.rgb, pos);
+    }
     c.a *= uOpacity;
     color = c;
 }
@@ -233,7 +262,7 @@ private:
                 if (g) glBindTexture(GL_TEXTURE_2D, g);
                 glActiveTexture(GL_TEXTURE0);
                 if (!g) return fail(error, "cannot upload a grade table");
-                glUniform4fv(uG_, 4, l.grade->u);
+                glUniform4fv(uG_, 8, l.grade->u);
             }
             glUniform1i(uGraded_, l.grade ? 1 : 0);
             glUniform2i(uOffset_, GLint(std::lround(r.left)), GLint(std::lround(r.top)));
@@ -362,9 +391,9 @@ private:
         glBindTexture(GL_TEXTURE_2D, t.tex.id);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, GpuGrade::kTableWidth, 2);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, GpuGrade::kTableWidth, GpuGrade::kTableRows);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GpuGrade::kTableWidth, 2, GL_RGBA, GL_FLOAT, g->table.data());
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GpuGrade::kTableWidth, GpuGrade::kTableRows, GL_RGBA, GL_FLOAT, g->table.data());
         if (glGetError() != GL_NO_ERROR) return 0;
         grades_.push_front(std::move(t));
         while (grades_.size() > 8) grades_.pop_back();
