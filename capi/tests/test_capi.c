@@ -342,7 +342,9 @@ int main(void) {
     vs_preview_set_size(s, 64, 36);
     vs_preview_set_sink(s, sink, &st);
     vs_preview_seek(s, 0);
-    for (int i = 0; i < 200 && atomic_get(&st.calls) == 0; ++i) sleep_ms(10);
+    /* A frame requested before the resize (vs_set_effect_preview above made the preview at its
+       default size) may still be in flight: wait for one at the new size. */
+    for (int i = 0; i < 300 && !(atomic_get(&st.calls) > 0 && st.w == 64); ++i) sleep_ms(10);
     EXPECT(st.calls > 0);
     EXPECT(st.w == 64 && st.h == 36 && st.stride == 64 * 4);
     EXPECT(st.first == 255); /* opaque canvas */

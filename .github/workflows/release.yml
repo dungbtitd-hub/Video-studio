@@ -85,7 +85,7 @@ jobs:
       - name: Installer (NSIS) and portable zip
         shell: pwsh
         run: |
-          makensis /DVERSION=$env:VERSION /DSTAGE="$pwd\stage" /DOUT="$pwd\VideoStudio-$env:VERSION-windows-x64-setup.exe" packaging\windows\installer.nsi
+          makensis /DVERSION=$env:VERSION /DSTAGE="$pwd\stage" /DOUT="$pwd\VideoStudio-$env:VERSION-windows-x64-setup.exe" /DICON="$pwd\packaging\icons\videostudio.ico" packaging\windows\installer.nsi
           Compress-Archive -Path stage\* -DestinationPath "VideoStudio-$env:VERSION-windows-x64-portable.zip"
       - name: Sign (when a certificate is configured)
         if: ${{ env.WIN_CERT != '' }}

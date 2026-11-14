@@ -1,5 +1,5 @@
 ; Video Studio installer for Windows (NSIS 3, preinstalled on the GitHub Windows runners).
-; makensis /DVERSION=1.2.3 /DSTAGE=<folder with VideoStudio.exe and its DLLs> /DOUT=<setup.exe> installer.nsi
+; makensis /DVERSION=1.2.3 /DSTAGE=<folder with VideoStudio.exe and its DLLs> /DOUT=<setup.exe> /DICON=<videostudio.ico> installer.nsi
 Unicode true
 !include "MUI2.nsh"
 
@@ -9,8 +9,13 @@ InstallDir "$PROGRAMFILES64\Video Studio"
 InstallDirRegKey HKLM "Software\VideoStudio" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
-!define MUI_ICON "${__FILEDIR__}\..\icons\videostudio.ico"
-!define MUI_UNICON "${__FILEDIR__}\..\icons\videostudio.ico"
+; ICON: absolute path of videostudio.ico (makensis resolves ${__FILEDIR__} against the working
+; folder when the script is given by a relative path, so the workflow passes it).
+!ifndef ICON
+  !define ICON "${__FILEDIR__}\..\icons\videostudio.ico"
+!endif
+!define MUI_ICON "${ICON}"
+!define MUI_UNICON "${ICON}"
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "Video Studio"
 VIAddVersionKey "CompanyName" "ITD Viet Nam"
