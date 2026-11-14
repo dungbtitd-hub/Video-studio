@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 
+#include "detail/parallel.hpp"
 #include "detail/paths.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/pixel.hpp"
@@ -72,8 +73,10 @@ void applyChromaKey(VideoFrame& f, const Json& p) {
     const double sim = std::clamp(p.value("similarity", 0.4), 0.0, 1.0) * klen;
     const double smooth = std::clamp(p.value("smoothness", 0.1), 0.0, 1.0) * klen;
     const double spill = std::clamp(p.value("spill", 0.5), 0.0, 1.0);
-    std::uint8_t* px = f.rgba.data();
-    const std::size_t n = static_cast<std::size_t>(f.width) * f.height;
+    const std::size_t w = static_cast<std::size_t>(f.width);
+    detail::parallelRows(f.height, w * f.height, [&](int y0, int y1) {
+    std::uint8_t* px = f.rgba.data() + static_cast<std::size_t>(y0) * w * 4;
+    const std::size_t n = static_cast<std::size_t>(y1 - y0) * w;
     for (std::size_t i = 0; i < n; ++i, px += 4) {
         const double r = px[0] / 255.0, g = px[1] / 255.0, b = px[2] / 255.0;
         double cb, cr;
@@ -98,6 +101,7 @@ void applyChromaKey(VideoFrame& f, const Json& p) {
         px[2] = static_cast<std::uint8_t>(std::clamp(nb, 0.0, 1.0) * 255 + 0.5);
         px[3] = static_cast<std::uint8_t>(px[3] * a + 0.5);
     }
+    });
 }
 
 std::string guessKeyColor(const VideoFrame& f) {
@@ -316,7 +320,8 @@ public:
         const int w = f.width, h = f.height;
         std::vector<std::uint8_t> out(f.rgba.size());
         const double cx = w / 2.0, cy = h / 2.0;
-        for (int y = 0; y < h; ++y) {
+        detail::parallelRows(h, static_cast<std::size_t>(w) * h, [&](int ya, int yb) {
+        for (int y = ya; y < yb; ++y) {
             const double sy = cy + (y + 0.5 - cy) / c.zoom + c.dy * h - 0.5;
             const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, h - 1), y1 = std::min(y0 + 1, h - 1);
             const double fy = std::clamp(sy - y0, 0.0, 1.0);
@@ -335,6 +340,7 @@ public:
                 }
             }
         }
+        });
         f.rgba.swap(out);
     }
 };
