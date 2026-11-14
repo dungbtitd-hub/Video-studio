@@ -146,6 +146,7 @@ CoverPanel::CoverPanel(EditorController* editor, QWidget* parent) : QWidget(pare
 void CoverPanel::slider(QSlider*& s, QLabel*& label, const QString& name, int max, const char* key, double scale) {
     auto* row = new QHBoxLayout();
     auto* n = new QLabel(name, this);
+    n->setObjectName(QString("name_") + key);
     n->setMinimumWidth(70);
     row->addWidget(n);
     s = new QSlider(Qt::Horizontal, this);
@@ -188,6 +189,17 @@ void CoverPanel::rebuildIcons() {
         p.update(vstudio::Json{{"x", 0.15}, {"y", 0.12}, {"w", 0.7}, {"h", 0.76}, {"feather", 0.08}});
         vstudio::applyCover(f, p, vstudio::Time::fromSeconds(0.5));
         std::memcpy(img.bits(), f.rgba.data(), f.rgba.size());
+        if (styles_->item(i)->data(Qt::UserRole).toString().startsWith("mask_")) {
+            // Masks make the clip transparent: show what is cut away as a checkerboard.
+            QImage shown(img.size(), QImage::Format_RGBA8888);
+            QPainter pt(&shown);
+            for (int y = 0; y < shown.height(); y += 8)
+                for (int x = 0; x < shown.width(); x += 8)
+                    pt.fillRect(x, y, 8, 8, ((x + y) / 8) % 2 ? QColor(200, 200, 200) : QColor(245, 245, 245));
+            pt.drawImage(0, 0, img);
+            pt.end();
+            img = shown;
+        }
         styles_->item(i)->setIcon(QPixmap::fromImage(img));
     }
 }
@@ -251,6 +263,11 @@ void CoverPanel::refresh() {
         follow_->setChecked(st.value("following", false).toBool());
         const QString style = st["style"].toString();
         color_->setVisible(style == "color" || style == "gradient");
+        const bool mask = style.startsWith("mask_");  // masks have no strength
+        amount_->setVisible(!mask);
+        amountLabel_->setVisible(!mask);
+        if (auto* n = findChild<QLabel*>("name_amount")) n->setVisible(!mask);
+        invert_->setText(mask ? "Đảo vùng" : "Che phần bên ngoài");
     } else {
         color_->setVisible(false);
     }

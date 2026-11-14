@@ -886,6 +886,19 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     }
   }
 
+  /// Masks live with the covers (same region editing, keyframes and tracking); entering
+  /// from the Mặt nạ tool starts with a soft oval mask when the clip has none yet.
+  void _enterMasks() {
+    final ids = _coverIds();
+    setState(() {
+      _gradeMode = false;
+      _coverMode = true;
+      _activeCover = ids.isEmpty ? null : ids.first;
+      _status = 'Mặt nạ: phần ngoài vùng trong suốt để lộ track bên dưới. Chọn hình, kéo vùng, chỉnh viền mềm.';
+    });
+    if (ids.isEmpty) _addCover('mask_keep', 'ellipse');
+  }
+
   void _enterCovers() {
     final ids = _coverIds();
     setState(() {
@@ -1678,6 +1691,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 onTap: _vs == null ? null : _voiceOver),
             _Tool(icon: Icons.handyman_outlined, label: 'Công cụ', onTap: _selectedMediaClip == null ? null : _clipTools),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
+            _Tool(icon: Icons.vignette_outlined, label: 'Mặt nạ', onTap: _selectedMediaClip == null ? null : _enterMasks),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(
                 icon: Icons.delete_outline,

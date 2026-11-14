@@ -1,0 +1,278 @@
+{
+  "assets": [],
+  "audio": {
+    "channels": 2,
+    "sample_rate": 48000
+  },
+  "canvas": {
+    "height": 720,
+    "width": 1280
+  },
+  "created_at": "2026-11-14T08:25:13Z",
+  "created_by_platform": "linux",
+  "format": "vstudio",
+  "fps": "30/1",
+  "modified_at": "2026-11-14T08:25:13Z",
+  "name": "C test",
+  "project_id": "8db947ed00b32ec01c715681c6072bf9",
+  "required_capabilities": [],
+  "schema_version": 0,
+  "timebase": "1/705600000",
+  "tracks": [
+    {
+      "clips": [],
+      "enabled": true,
+      "locked": false,
+      "muted": false,
+      "name": "Titles",
+      "order": 0,
+      "track_id": "06749b93c80f1dee34b9ed3b3582e598",
+      "type": "video",
+      "volume": 1.0
+    },
+    {
+      "clips": [],
+      "enabled": true,
+      "locked": false,
+      "muted": false,
+      "name": "V1",
+      "order": 1,
+      "track_id": "5dd10f983e4dae98756ee7b411eeb1f0",
+      "type": "video",
+      "volume": 1.0
+    },
+    {
+      "clips": [
+        {
+          "asset_id": "",
+          "clip_id": "7f847c30321690f15d8a957572e1bb0a",
+          "content": {
+            "kind": "subtitle",
+            "text": "Xin chào"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 705600000,
+          "speed": "1/1",
+          "timeline_in": 1411200000,
+          "track_id": "ae3fdc575e8423d72524b85100adede1",
+          "transform": {},
+          "volume": 1.0
+        },
+        {
+          "asset_id": "",
+          "clip_id": "74b95625bc04961eb91b89f9a735e568",
+          "content": {
+            "kind": "subtitle",
+            "text": "Tạm biệt"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 705600000,
+          "speed": "1/1",
+          "timeline_in": 2822400000,
+          "track_id": "ae3fdc575e8423d72524b85100adede1",
+          "transform": {},
+          "volume": 1.0
+        },
+        {
+          "asset_id": "",
+          "clip_id": "3c026994c14549f7de49a6095f204cce",
+          "content": {
+            "kind": "subtitle",
+            "text": "Thêm"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 1411200000,
+          "speed": "1/1",
+          "timeline_in": 4233600000,
+          "track_id": "ae3fdc575e8423d72524b85100adede1",
+          "transform": {},
+          "volume": 1.0
+        }
+      ],
+      "enabled": true,
+      "locked": false,
+      "muted": false,
+      "name": "Gốc",
+      "order": 2,
+      "subtitle": {
+        "lang": "vi",
+        "max_width": 0.88,
+        "position": {
+          "anchor": "top",
+          "h": "center",
+          "margin": 0.06,
+          "x": 0.5,
+          "y": 0.85
+        },
+        "style": {
+          "align": "center",
+          "box": {
+            "color": "#000000",
+            "opacity": 0.0,
+            "padding": 0.22,
+            "radius": 0.1
+          },
+          "color": "#ffffff",
+          "color2": null,
+          "font": "be-vietnam-pro-bold",
+          "glow": {
+            "color": "#ffffff",
+            "opacity": 0.0,
+            "radius": 0.25
+          },
+          "in": {
+            "duration": 0.12,
+            "type": "fade"
+          },
+          "italic": false,
+          "letter_spacing": 0.0,
+          "line_height": 1.22,
+          "loop": {
+            "speed": 1.0,
+            "type": ""
+          },
+          "out": {
+            "duration": 0.12,
+            "type": "fade"
+          },
+          "rotation": 0.0,
+          "shadow": {
+            "blur": 0.05,
+            "color": "#000000",
+            "opacity": 0.45,
+            "x": 0.02,
+            "y": 0.04
+          },
+          "size": 37.0,
+          "stroke": {
+            "color": "#000000",
+            "width": 0.07
+          }
+        }
+      },
+      "track_id": "ae3fdc575e8423d72524b85100adede1",
+      "type": "video",
+      "volume": 1.0
+    },
+    {
+      "clips": [
+        {
+          "asset_id": "",
+          "clip_id": "6e3971010989a63d7eb75c1461fd4aee",
+          "content": {
+            "kind": "subtitle",
+            "text": "Hello"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 705600000,
+          "speed": "1/1",
+          "timeline_in": 1411200000,
+          "track_id": "b77f521ea3d8bd7985770ddf4770dc46",
+          "transform": {},
+          "volume": 1.0
+        },
+        {
+          "asset_id": "",
+          "clip_id": "f4259e9e4cfc9061162bafce43a1bc95",
+          "content": {
+            "kind": "subtitle",
+            "text": "Bye"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 705600000,
+          "speed": "1/1",
+          "timeline_in": 2822400000,
+          "track_id": "b77f521ea3d8bd7985770ddf4770dc46",
+          "transform": {},
+          "volume": 1.0
+        },
+        {
+          "asset_id": "",
+          "clip_id": "d83cd7142abfd6d70519de02f211711f",
+          "content": {
+            "kind": "subtitle",
+            "text": "Added"
+          },
+          "effects": [],
+          "source_in": 0,
+          "source_out": 1411200000,
+          "speed": "1/1",
+          "timeline_in": 4233600000,
+          "track_id": "b77f521ea3d8bd7985770ddf4770dc46",
+          "transform": {},
+          "volume": 1.0
+        }
+      ],
+      "enabled": true,
+      "locked": false,
+      "muted": false,
+      "name": "Phụ đề Tiếng Anh",
+      "order": 3,
+      "subtitle": {
+        "lang": "en",
+        "max_width": 0.88,
+        "position": {
+          "anchor": "above",
+          "h": "center",
+          "margin": 0.06,
+          "track": "ae3fdc575e8423d72524b85100adede1",
+          "x": 0.5,
+          "y": 0.85
+        },
+        "style": {
+          "align": "center",
+          "box": {
+            "color": "#000000",
+            "opacity": 0.0,
+            "padding": 0.22,
+            "radius": 0.1
+          },
+          "color": "#ffffff",
+          "color2": null,
+          "font": "be-vietnam-pro-bold",
+          "glow": {
+            "color": "#ffffff",
+            "opacity": 0.0,
+            "radius": 0.25
+          },
+          "in": {
+            "duration": 0.12,
+            "type": "fade"
+          },
+          "italic": false,
+          "letter_spacing": 0.0,
+          "line_height": 1.22,
+          "loop": {
+            "speed": 1.0,
+            "type": ""
+          },
+          "out": {
+            "duration": 0.12,
+            "type": "fade"
+          },
+          "rotation": 0.0,
+          "shadow": {
+            "blur": 0.05,
+            "color": "#000000",
+            "opacity": 0.45,
+            "x": 0.02,
+            "y": 0.04
+          },
+          "size": 33.0,
+          "stroke": {
+            "color": "#000000",
+            "width": 0.07
+          }
+        }
+      },
+      "track_id": "b77f521ea3d8bd7985770ddf4770dc46",
+      "type": "video",
+      "volume": 1.0
+    }
+  ]
+}

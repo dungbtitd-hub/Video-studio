@@ -101,10 +101,13 @@ class CoverState {
   double get h => _d('h', 0.3);
   double get amount => _d('amount', 0.5);
   double get feather => _d('feather', 0.15);
+  double get rotation => _d('rotation', 0);
   String get style => (json['style'] ?? 'blur') as String;
   String get shape => (json['shape'] ?? 'rect') as String;
   bool get invert => json['invert'] == true;
   bool get following => json['following'] == true;
+  /// Masks change the clip's transparency instead of drawing over it.
+  bool get isMask => style.startsWith('mask_');
 }
 
 enum TrackState { idle, running, done, lost, cancelled, failed }

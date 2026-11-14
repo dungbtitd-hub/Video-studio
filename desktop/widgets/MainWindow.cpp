@@ -260,7 +260,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     videoFxDock->setWidget(videoFx_);
     addDockWidget(Qt::RightDockWidgetArea, videoFxDock);
     tabifyDockWidget(looksDock, videoFxDock);
-    auto* coverDock = new QDockWidget("Che mờ", this);
+    auto* coverDock = new QDockWidget("Che mờ & mặt nạ", this);
     coverDock->setObjectName("covers");
     covers_ = new CoverPanel(editor_, coverDock);
     coverDock->setWidget(covers_);

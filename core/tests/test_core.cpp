@@ -1349,9 +1349,10 @@ public:
 
 TEST("cover: every style hides the region and leaves the rest untouched") {
     CHECK(coverStyles().size() >= 36);
-    CHECK_EQ(coverShapes().size(), 9u);
+    CHECK_EQ(coverShapes().size(), 11u);
     const VideoFrame base = texturedFrame(320, 180, 140, 70, 40);
     for (const auto& st : coverStyles()) {
+        if (st.category == "Mặt nạ") continue;  // masks change transparency: own test below
         for (const char* shape : {"rect", "heart"}) {
             VideoFrame f = base;
             Json p = defaultCover(st.id, shape);
@@ -1387,6 +1388,94 @@ TEST("cover: every style hides the region and leaves the rest untouched") {
     VideoFrame deep = convertedFrame(base, PixelFormat::RGBA16F);
     applyCover(deep, defaultCover("mosaic", "ellipse"), Time{});
     CHECK(deep.deep());
+}
+
+TEST("mask: keep or cut a shape out of the clip's transparency; line and band reach the edges") {
+    const VideoFrame base = texturedFrame(320, 180, 140, 70, 40);
+    auto alpha = [](const VideoFrame& f, int x, int y) {
+        const std::size_t i = (static_cast<std::size_t>(y) * f.width + x) * 4;
+        return f.deep() ? static_cast<int>(std::lround(halfToFloat(f.half[i + 3]) * 255)) : int(f.rgba[i + 3]);
+    };
+    auto same = [&](const VideoFrame& f) {  // colours never change, only alpha
+        for (std::size_t i = 0; i < f.rgba.size(); i += 4)
+            if (f.rgba[i] != base.rgba[i] || f.rgba[i + 1] != base.rgba[i + 1] || f.rgba[i + 2] != base.rgba[i + 2]) return false;
+        return true;
+    };
+    Json p = defaultCover("mask_keep", "ellipse");
+    p.update(Json{{"x", 0.25}, {"y", 0.25}, {"w", 0.5}, {"h", 0.5}, {"feather", 0.0}});
+    VideoFrame keep = base;
+    applyCover(keep, p, Time{});
+    CHECK_EQ(alpha(keep, 160, 90), 255);  // centre kept
+    CHECK_EQ(alpha(keep, 5, 5), 0);       // corner gone
+    CHECK_EQ(alpha(keep, 315, 175), 0);
+    CHECK(same(keep));
+    p["invert"] = true;  // inverted keep = cut
+    VideoFrame inv = base;
+    applyCover(inv, p, Time{});
+    CHECK_EQ(alpha(inv, 160, 90), 0);
+    CHECK_EQ(alpha(inv, 5, 5), 255);
+    Json cut = p;
+    cut["style"] = "mask_cut";
+    cut["invert"] = false;
+    VideoFrame c = base;
+    applyCover(c, cut, Time{});
+    CHECK(std::memcmp(c.rgba.data(), inv.rgba.data(), c.rgba.size()) == 0);
+    // Soft edge: a ramp, not a step.
+    p = defaultCover("mask_keep", "rect");
+    p.update(Json{{"x", 0.25}, {"y", 0.25}, {"w", 0.5}, {"h", 0.5}, {"feather", 0.5}});
+    VideoFrame soft = base;
+    applyCover(soft, p, Time{});
+    const int edge = alpha(soft, 80, 90);
+    CHECK(edge > 60 && edge < 200);
+    // Line: everything below the middle stays; rotated 90 degrees it splits left/right.
+    p = defaultCover("mask_keep", "line");
+    p.update(Json{{"x", 0.0}, {"y", 0.0}, {"w", 1.0}, {"h", 1.0}, {"feather", 0.0}});
+    VideoFrame line = base;
+    applyCover(line, p, Time{});
+    CHECK_EQ(alpha(line, 160, 170), 255);
+    CHECK_EQ(alpha(line, 160, 10), 0);
+    CHECK_EQ(alpha(line, 2, 170), 255);  // reaches the left and right edges
+    CHECK_EQ(alpha(line, 318, 170), 255);
+    p["rotation"] = 90.0;
+    VideoFrame turned = base;
+    applyCover(turned, p, Time{});
+    CHECK(alpha(turned, 10, 90) != alpha(turned, 310, 90));
+    // Band: a strip across the whole width.
+    p = defaultCover("mask_keep", "band");
+    p.update(Json{{"x", 0.0}, {"y", 0.4}, {"w", 1.0}, {"h", 0.2}, {"feather", 0.0}});
+    VideoFrame band = base;
+    applyCover(band, p, Time{});
+    CHECK_EQ(alpha(band, 1, 90), 255);
+    CHECK_EQ(alpha(band, 318, 90), 255);
+    CHECK_EQ(alpha(band, 160, 20), 0);
+    // Deep frames.
+    VideoFrame deep = convertedFrame(base, PixelFormat::RGBA16F);
+    applyCover(deep, defaultCover("mask_keep", "circle"), Time{});
+    CHECK_EQ(alpha(deep, 2, 2), 0);
+}
+
+TEST("mask: a masked clip shows the track below through the cut") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));  // bottom: red = frame 30 at 1 s
+    const Id v2 = f.ed.addTrack(TrackType::Video, "V2");
+    const Id top = f.ed.appendClip(v2, f.asset, sec(2), sec(6));  // top: frame 90 at 1 s
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    const std::size_t centre = (36 * 128 + 64) * 4, corner = (2 * 128 + 2) * 4;
+    {
+        Renderer r(f.ed.project(), pool, nullptr, true, &mods);
+        const VideoFrame fr = r.renderVideo(sec(1), 128, 72);
+        CHECK_EQ(int(fr.rgba[centre]), 90);
+    }
+    const Id m = f.ed.addCover(top, Json{{"style", "mask_cut"}, {"shape", "ellipse"}});
+    CHECK(f.ed.coverParams(top, m) != nullptr);
+    Renderer r(f.ed.project(), pool, nullptr, true, &mods);
+    const VideoFrame fr = r.renderVideo(sec(1), 128, 72);
+    CHECK_EQ(int(fr.rgba[centre]), 30);  // through the hole: the clip below
+    CHECK_EQ(int(fr.rgba[corner]), 90);  // around it: the top clip
+    CHECK_EQ(int(fr.rgba[centre + 3]), 255);
 }
 
 TEST("cover: keyframed region follows motion; editor add/edit/follow/undo") {

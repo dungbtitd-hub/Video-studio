@@ -101,7 +101,14 @@ class _CoverPainter extends CustomPainter {
       ..color = VsColors.accent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6;
-    if (shape == 'ellipse' || shape == 'circle') {
+    if (shape == 'line' || shape == 'band') {
+      // Unbounded shapes reach the frame edges: show their lines across the whole preview.
+      final ys = shape == 'line' ? [r.center.dy] : [r.top, r.bottom];
+      for (final y in ys) {
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), line..strokeWidth = 2);
+      }
+      if (shape == 'band') canvas.drawRect(Rect.fromLTRB(0, r.top, size.width, r.bottom), fill);
+    } else if (shape == 'ellipse' || shape == 'circle') {
       final e =
           shape == 'circle' ? Rect.fromCenter(center: r.center, width: r.shortestSide, height: r.shortestSide) : r;
       canvas.drawOval(e, fill);
@@ -165,6 +172,7 @@ class _CoverPanelState extends State<CoverPanel> {
   final Map<String, ui.Image> _thumbs = {};
   String _shape = 'rect';
   double? _amount; // while the slider is held
+  double? _feather, _rotation;
 
   static const tw = 64, th = 40;
 
@@ -282,7 +290,15 @@ class _CoverPanelState extends State<CoverPanel> {
                         border: Border.all(color: st?.style == s.id ? VsColors.accent : Colors.transparent, width: 2),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: _thumbs[s.id] == null ? null : RawImage(image: _thumbs[s.id], fit: BoxFit.cover),
+                      child: _thumbs[s.id] == null
+                          ? null
+                          : s.id.startsWith('mask_')
+                              // Cut-away parts are transparent: a checkerboard shows them.
+                              ? CustomPaint(
+                                  painter: _Checker(),
+                                  child: RawImage(image: _thumbs[s.id], fit: BoxFit.cover),
+                                )
+                              : RawImage(image: _thumbs[s.id], fit: BoxFit.cover),
                     ),
                     Text(s.name, style: const TextStyle(fontSize: 10, color: VsColors.fg2)),
                   ]),
@@ -309,7 +325,7 @@ class _CoverPanelState extends State<CoverPanel> {
               ),
           ]),
         ),
-        Row(children: [
+        if (!(st?.isMask ?? false)) Row(children: [
           const Text('Độ mạnh', style: TextStyle(fontSize: 12, color: VsColors.fg2)),
           Expanded(
             child: Slider(
@@ -320,6 +336,38 @@ class _CoverPanelState extends State<CoverPanel> {
                   ? (v) {
                       setState(() => _amount = null);
                       widget.onAmount(v);
+                    }
+                  : null,
+            ),
+          ),
+        ]),
+        Row(children: [
+          const Text('Viền mềm', style: TextStyle(fontSize: 12, color: VsColors.fg2)),
+          Expanded(
+            child: Slider(
+              key: const Key('cover-feather'),
+              value: (_feather ?? st?.feather ?? 0.15).clamp(0, 1).toDouble(),
+              onChanged: active ? (v) => setState(() => _feather = v) : null,
+              onChangeEnd: active
+                  ? (v) {
+                      setState(() => _feather = null);
+                      widget.onPatch({'feather': v});
+                    }
+                  : null,
+            ),
+          ),
+          const Text('Xoay', style: TextStyle(fontSize: 12, color: VsColors.fg2)),
+          Expanded(
+            child: Slider(
+              key: const Key('cover-rotation'),
+              min: -180,
+              max: 180,
+              value: (_rotation ?? st?.rotation ?? 0).clamp(-180, 180).toDouble(),
+              onChanged: active ? (v) => setState(() => _rotation = v) : null,
+              onChangeEnd: active
+                  ? (v) {
+                      setState(() => _rotation = null);
+                      widget.onPatch({'rotation': v.roundToDouble()});
                     }
                   : null,
             ),
@@ -341,7 +389,7 @@ class _CoverPanelState extends State<CoverPanel> {
             onSelected: active ? widget.onFollow : null,
           ),
           FilterChip(
-            label: const Text('Che bên ngoài', style: TextStyle(fontSize: 12)),
+            label: Text((st?.isMask ?? false) ? 'Đảo vùng' : 'Che bên ngoài', style: const TextStyle(fontSize: 12)),
             selected: st?.invert ?? false,
             visualDensity: VisualDensity.compact,
             onSelected: active ? (v) => widget.onPatch({'invert': v}) : null,
@@ -356,4 +404,21 @@ class _CoverPanelState extends State<CoverPanel> {
       ]),
     );
   }
+}
+
+class _Checker extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = Paint()..color = const Color(0xFFF2F2F2);
+    final b = Paint()..color = const Color(0xFFC8C8C8);
+    const c = 6.0;
+    for (var y = 0.0; y < size.height; y += c) {
+      for (var x = 0.0; x < size.width; x += c) {
+        canvas.drawRect(Rect.fromLTWH(x, y, c, c), ((x + y) / c).round().isEven ? a : b);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_Checker old) => false;
 }
