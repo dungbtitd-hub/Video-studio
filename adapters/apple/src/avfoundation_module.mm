@@ -4,16 +4,20 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <utility>
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "vstudio/pixel.hpp"
@@ -77,10 +81,121 @@ Rational rateFromFloat(float f) {
     return {static_cast<int>(std::lround(f * 1000)), 1000};
 }
 
+
+// ---- photos (JPEG, HEIC, PNG, ...): ImageIO, upright from their EXIF orientation ----
+// AVFoundation reads only audio and video; the core's photo clips need these too.
+
+bool isImagePath(const std::string& path) {
+    const auto dot = path.find_last_of('.');
+    if (dot == std::string::npos || path.find_first_of("/\\", dot) != std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* e : {"jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "bmp", "tif", "tiff", "avif"})
+        if (ext == e) return true;
+    return false;
+}
+
+struct CFDel {
+    void operator()(CFTypeRef r) const {
+        if (r) CFRelease(r);
+    }
+};
+template <class T>
+using CFPtr = std::unique_ptr<std::remove_pointer_t<T>, CFDel>;
+
+CFPtr<CGImageSourceRef> openImage(const std::string& path, std::string* error) {
+    CFPtr<CGImageSourceRef> src(CGImageSourceCreateWithURL((__bridge CFURLRef)urlFor(path), nullptr));
+    if (!src || CGImageSourceGetCount(src.get()) < 1) {
+        setErr(error, "unsupported or corrupt media: " + path);
+        return nullptr;
+    }
+    return src;
+}
+
+int dictInt(CFDictionaryRef d, CFStringRef key, int fallback) {
+    auto n = d ? static_cast<CFNumberRef>(CFDictionaryGetValue(d, key)) : nullptr;
+    int v = fallback;
+    if (n && CFGetTypeID(n) == CFNumberGetTypeID()) CFNumberGetValue(n, kCFNumberIntType, &v);
+    return v;
+}
+
+std::optional<ProbeResult> probeImage(const std::string& path, std::string* error) {
+    @autoreleasepool {
+        auto src = openImage(path, error);
+        if (!src) return std::nullopt;
+        CFPtr<CFDictionaryRef> props(CGImageSourceCopyPropertiesAtIndex(src.get(), 0, nullptr));
+        int w = dictInt(props.get(), kCGImagePropertyPixelWidth, 0), h = dictInt(props.get(), kCGImagePropertyPixelHeight, 0);
+        if (w <= 0 || h <= 0) {
+            setErr(error, "unsupported or corrupt media: " + path);
+            return std::nullopt;
+        }
+        // Frames come out already turned upright (decodeImage), so the size is the upright one.
+        if (dictInt(props.get(), kCGImagePropertyOrientation, 1) >= 5) std::swap(w, h);
+        ProbeResult r;
+        r.hasVideo = true;
+        r.isStillImage = true;
+        r.duration = Time::zero();
+        r.fps = {30, 1};
+        r.width = w;
+        r.height = h;
+        r.videoCodec = "image";
+        r.bitDepth = 8;
+        return r;
+    }
+}
+
+// The photo, upright, fitted inside maxW x maxH (0 = full size), straight-alpha RGBA8.
+std::optional<VideoFrame> decodeImage(const std::string& path, int fullW, int fullH, int maxW, int maxH, std::string* error) {
+    @autoreleasepool {
+        auto src = openImage(path, error);
+        if (!src) return std::nullopt;
+        int maxSide = std::max(fullW, fullH);
+        if (maxW > 0 && maxH > 0 && (fullW > maxW || fullH > maxH)) {
+            const double k = std::min(static_cast<double>(maxW) / fullW, static_cast<double>(maxH) / fullH);
+            maxSide = std::max(1, static_cast<int>(std::lround(std::max(fullW, fullH) * k)));
+        }
+        NSDictionary* opts = @{
+            (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
+            (__bridge NSString*)kCGImageSourceCreateThumbnailWithTransform : @YES,  // EXIF orientation
+            (__bridge NSString*)kCGImageSourceShouldCacheImmediately : @YES,
+            (__bridge NSString*)kCGImageSourceThumbnailMaxPixelSize : @(maxSide),
+        };
+        CFPtr<CGImageRef> img(CGImageSourceCreateThumbnailAtIndex(src.get(), 0, (__bridge CFDictionaryRef)opts));
+        if (!img) {
+            setErr(error, "unsupported or corrupt media: " + path);
+            return std::nullopt;
+        }
+        const int w = static_cast<int>(CGImageGetWidth(img.get())), h = static_cast<int>(CGImageGetHeight(img.get()));
+        VideoFrame out;
+        out.allocate(w, h);
+        CFPtr<CGColorSpaceRef> srgb(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+        CFPtr<CGContextRef> ctx(CGBitmapContextCreate(out.rgba.data(), w, h, 8, static_cast<size_t>(w) * 4, srgb.get(),
+                                                      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big));
+        if (!ctx) {
+            setErr(error, "out of memory decoding " + path);
+            return std::nullopt;
+        }
+        CGContextDrawImage(ctx.get(), CGRectMake(0, 0, w, h), img.get());
+        // CoreGraphics only draws premultiplied; the core works with straight alpha.
+        for (size_t i = 0; i < out.rgba.size(); i += 4) {
+            const int a = out.rgba[i + 3];
+            if (a == 255 || a == 0) continue;
+            for (int c = 0; c < 3; ++c) out.rgba[i + c] = static_cast<std::uint8_t>(std::min(255, out.rgba[i + c] * 255 / a));
+        }
+        return out;
+    }
+}
+
 std::optional<ProbeResult> probeFile(const std::string& path, std::string* error) {
+    if (isImagePath(path)) return probeImage(path, error);
     @autoreleasepool {
         AVURLAsset* asset = openAsset(path, error);
-        if (!asset) return std::nullopt;
+        if (!asset) {
+            // No extension to go by (a picker's copy): it may still be a photo.
+            std::string imageError;
+            if (auto r = probeImage(path, &imageError)) return r;
+            return std::nullopt;
+        }
         AVAssetTrack* v = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
         AVAssetTrack* a = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
         if (!v && !a) {
@@ -144,6 +259,8 @@ public:
         auto pr = probeFile(path, error);
         if (!pr) return false;
         probe_ = *pr;
+        path_ = path;
+        if (probe_.isStillImage) return true;  // a photo: ImageIO, decoded once (stillFrame)
         asset_ = openAsset(path, error);
         return asset_ != nil;
     }
@@ -151,11 +268,22 @@ public:
     void setMaxOutputSize(int w, int h) override {
         maxW_ = w;
         maxH_ = h;
+        still_.reset();
     }
     void setDeepOutput(bool on) override { deep_ = on; }
 
     std::optional<VideoFrame> videoFrameAt(Time t) override {
         if (!probe_.hasVideo) return std::nullopt;
+        if (probe_.isStillImage) {
+            if (!still_) {
+                std::string err;
+                still_ = decodeImage(path_, probe_.width, probe_.height, maxW_, maxH_, &err);
+                if (!still_) return std::nullopt;
+            }
+            VideoFrame f = *still_;
+            f.pts = t;
+            return f;
+        }
         @autoreleasepool {
             if (cur_ && t >= curPts_ && (!pendingValid_ || t < pendingPts_)) return *cur_;
             if (!vout_ || !cur_ || t < curPts_ || t - curPts_ > Time::fromSeconds(2)) {
@@ -369,6 +497,8 @@ private:
     }
 
     ProbeResult probe_;
+    std::string path_;
+    std::optional<VideoFrame> still_;  // a photo, at the current output size
     AVURLAsset* asset_ = nil;
     int maxW_ = 0, maxH_ = 0;
     bool deep_ = false;
