@@ -123,6 +123,10 @@ private:
     QDockWidget* gradeDock_ = nullptr;
     QDockWidget* videoFxDock_ = nullptr;
     QDockWidget* looksDock_ = nullptr;
+    QDockWidget* mediaDock_ = nullptr;
+    QDockWidget* inspectorDock_ = nullptr;
+    bool restoredLayout_ = false;    // the user's own saved layout was restored
+    bool sidePanelsFitted_ = false;  // first wide resize gives the side panels the demo widths
     void refreshRange();
     QByteArray defaultState_;  // dock layout as built, for "reset layout"
     QHash<QString, QIcon> icons_;  // key: asset id + missing flag

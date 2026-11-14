@@ -55,6 +55,9 @@
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
 
+// Bumped when the default dock arrangement changes, so an older saved layout is not restored.
+static constexpr int kLayoutVersion = 2;
+
 namespace {
 QToolButton* toolButton(const QString& text, QWidget* parent, bool primary = false) {
     auto* b = new QToolButton(parent);
@@ -198,6 +201,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     kfVolumeLabel_->setMinimumWidth(44);
     keys->addWidget(kfVolumeLabel_);
     kfInfo_ = new QLabel(centre);
+    kfInfo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);  // a hint never widens the window
     kfInfo_->setStyleSheet("color: #6e7685; font-size: 11px;");
     keys->addWidget(kfInfo_, 1);
     cl->addLayout(keys);
@@ -276,7 +280,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     connect(preview_, &PreviewWidget::previewSizeChanged, editor_, &EditorController::setPreviewSize);
 
     // ---- docks ----
-    auto* mediaDock = new QDockWidget("Thư viện media", this);
+    auto* mediaDock = mediaDock_ = new QDockWidget("Media", this);
     mediaDock->setObjectName("media");
     auto* mediaBox = new QWidget(mediaDock);
     auto* ml = new QVBoxLayout(mediaBox);
@@ -320,7 +324,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
             if (assets_->item(i)->data(Qt::UserRole).toString() == id) assets_->item(i)->setIcon(assetIcon(id));
     });
 
-    auto* inspectorDock = new QDockWidget("Thuộc tính", this);
+    auto* inspectorDock = inspectorDock_ = new QDockWidget("Cơ bản", this);
     inspectorDock->setObjectName("inspector");
     auto* ib = new QWidget(inspectorDock);
     auto* il = new QVBoxLayout(ib);
@@ -363,7 +367,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
-    auto* gradeDock = gradeDock_ = new QDockWidget("Chỉnh màu", this);
+    auto* gradeDock = gradeDock_ = new QDockWidget("Màu", this);
     gradeDock->setObjectName("grade");
     grade_ = new GradePanel(editor_, gradeDock);
     gradeDock->setWidget(grade_);
@@ -379,7 +383,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
     connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);
     // Zoom, rotate and reflection effects for the selected clip.
-    auto* videoFxDock = videoFxDock_ = new QDockWidget("Hiệu ứng video", this);
+    auto* videoFxDock = videoFxDock_ = new QDockWidget("Hiệu ứng", this);
     videoFxDock->setObjectName("videoFx");
     videoFx_ = new VideoFxPanel(editor_, videoFxDock);
     videoFxDock->setWidget(videoFx_);
@@ -433,13 +437,46 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     mixerDock->setWidget(mixer_);
     addDockWidget(Qt::RightDockWidgetArea, mixerDock);
     tabifyDockWidget(audioDock, mixerDock);
-    auto* toolsDock = new QDockWidget("Công cụ clip", this);
+    auto* toolsDock = new QDockWidget("Tốc độ", this);
     toolsDock->setObjectName("clipTools");
     clipTools_ = new ClipToolsPanel(editor_, toolsDock);
     toolsDock->setWidget(clipTools_);
     addDockWidget(Qt::RightDockWidgetArea, toolsDock);
     tabifyDockWidget(looksDock, toolsDock);
-    looksDock->raise();
+    // Default arrangement per the approved desktop demo: things to add on the left
+    // (Media / Âm thanh / Chữ / Sticker / Lớp phủ / Chuyển cảnh), the selected clip's
+    // settings on the right (Cơ bản / Tốc độ / Màu / Bộ lọc / Hiệu ứng / ...).
+    {
+        QDockWidget* left[] = {audioDock, textDock, stickerDock, overlayDock, transitionsDock};
+        QDockWidget* prev = mediaDock;
+        for (QDockWidget* d : left) {
+            tabifyDockWidget(prev, d);
+            prev = d;
+        }
+        QDockWidget* right[] = {toolsDock, gradeDock, looksDock, videoFxDock, coverDock,
+                                subtitleDock, mixerDock, scopesDock};
+        prev = inspectorDock;
+        for (QDockWidget* d : right) {
+            tabifyDockWidget(prev, d);
+            prev = d;
+        }
+    }
+    mediaDock->raise();
+    inspectorDock->raise();
+    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);  // tabs on top, as in the demo
+    // Side panels scroll instead of forcing the window wider than the screen.
+    for (QDockWidget* d : {mediaDock, audioDock, textDock, stickerDock, overlayDock, transitionsDock, inspectorDock,
+                           toolsDock, gradeDock, looksDock, videoFxDock, coverDock, subtitleDock, mixerDock,
+                           scopesDock}) {
+        QWidget* content = d->widget();
+        auto* scroll = new QScrollArea(d);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scroll->setWidget(content);
+        scroll->setMinimumWidth(220);
+        d->setWidget(scroll);
+    }
     // Selecting a text, sticker, overlay or subtitle line on the timeline brings its panel forward.
     connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock, subtitleDock] {
         const auto c = editor_->selectedContent();
@@ -477,7 +514,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     timelineDock->setWidget(tlBox);
     addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
     resizeDocks({timelineDock}, {280}, Qt::Vertical);
-    resizeDocks({mediaDock, inspectorDock}, {280, 260}, Qt::Horizontal);
+    resizeDocks({mediaDock, inspectorDock}, {300, 340}, Qt::Horizontal);
 
     buildMenus();
     // Tabbed panels: full names with scroll arrows instead of "Th…", "Bộ…".
@@ -488,11 +525,11 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
         }
     });
     // Layout as built is the default; then the user's saved layout, if any.
-    defaultState_ = saveState();
+    defaultState_ = saveState(kLayoutVersion);
     QSettings settings;
     settings.beginGroup("workspace");
     restoreGeometry(settings.value("geometry").toByteArray());
-    restoreState(settings.value("state").toByteArray());
+    restoredLayout_ = restoreState(settings.value("state").toByteArray(), kLayoutVersion);
 
     // Unfinished projects slide up at the bottom on start; they slide away once work begins.
     recent_ = new RecentStrip(this);
@@ -600,8 +637,10 @@ void MainWindow::refreshAssets() {
         const QVariantMap a = v.toMap();
         const QString id = a["id"].toString();
         const bool missing = editor_->assetMissing(id);
-        auto* it = new QListWidgetItem(assetIcon(id), QString("%1\n%2 s").arg(a["name"].toString())
-                                                          .arg(a["duration"].toDouble(), 0, 'f', 1));
+        const double secs = a["duration"].toDouble();
+        // A photo has no length of its own (it gets 5 s on the timeline): label it as a photo.
+        const QString len = secs > 0 ? QString("%1 s").arg(secs, 0, 'f', 1) : QString("Ảnh");
+        auto* it = new QListWidgetItem(assetIcon(id), QString("%1\n%2").arg(a["name"].toString(), len));
         it->setData(Qt::UserRole, id);
         it->setToolTip(missing ? "Không tìm thấy file. Nhấp đúp để tìm trong một thư mục."
                                : QString("%1  %2\nNhấp đúp để thêm vào Timeline").arg(a["type"].toString(), a["resolution"].toString()));
@@ -1054,11 +1093,11 @@ void MainWindow::saveLayout() const {
     QSettings settings;
     settings.beginGroup("workspace");
     settings.setValue("geometry", saveGeometry());
-    settings.setValue("state", saveState());
+    settings.setValue("state", saveState(kLayoutVersion));
 }
 
 void MainWindow::resetLayout() {
-    restoreState(defaultState_);
+    restoreState(defaultState_, kLayoutVersion);
     for (QDockWidget* d : findChildren<QDockWidget*>()) d->show();
 }
 
@@ -1087,6 +1126,13 @@ void MainWindow::showRecentProjects() {
 void MainWindow::resizeEvent(QResizeEvent* e) {
     QMainWindow::resizeEvent(e);
     if (home_) home_->setGeometry(rect());
+    // Once the window is wide enough (and no saved layout set the widths), give the side panels
+    // about the widths of the approved demo: library on the left, clip settings on the right.
+    if (!sidePanelsFitted_ && width() >= 1200 && mediaDock_ && inspectorDock_) {
+        sidePanelsFitted_ = true;
+        if (!restoredLayout_)
+            resizeDocks({mediaDock_, inspectorDock_}, {width() * 24 / 100, width() * 23 / 100}, Qt::Horizontal);
+    }
     if (recent_) recent_->place();
 }
 
