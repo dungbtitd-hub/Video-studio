@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 
 #include <memory>
@@ -105,6 +106,9 @@ public:
     Id addGeneratedClip(const Json& content, Time at, Time duration, const Id& trackId = {});
     // Merges `patch` into the clip's content (JSON merge patch: null removes a key). Undoable.
     void updateClipContent(const Id& clipId, const Json& patch);
+    // Sets the region an overlay effect covers to the canvas box {x, y, w, h} (canvas px) as seen
+    // at `sourceTime`: its "w"/"h" and its position, scale kept (keyed when animated). One undo step.
+    void setOverlayRegion(const Id& clipId, Time sourceTime, double x, double y, double w, double h);
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null
@@ -117,6 +121,11 @@ public:
     void setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure = 0.0);
     // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.
     void setClipLut(const std::vector<Id>& clipIds, const std::string& path, double strength = 1.0);
+    // Video effects (video_fx.hpp): zoom, rotate or reflection; one of each group per clip, kept after
+    // colour effects and covers in the order zoom -> rotate -> reflect. `fxId` "" removes `group`'s.
+    // `line` (reflections) < 0 keeps the default. One undo step.
+    void setClipVideoFx(const std::vector<Id>& clipIds, const std::string& group, const std::string& fxId,
+                        double amount = 1.0, double speed = 1.0, double line = -1.0);
 
     // Colour grade (grade.hpp) on one or many clips, one undo step: replaces the clips'
     // grade, keeping its place in the effect chain; null or neutral params remove it.
@@ -128,6 +137,12 @@ public:
     [[nodiscard]] bool canRedo() const { return history_.canRedo(); }
     [[nodiscard]] std::string undoLabel() const { return history_.undoLabel(); }
     [[nodiscard]] std::string redoLabel() const { return history_.redoLabel(); }
+
+    // Live preview during a gesture (dragging a corner, pinching, moving a slider): runs `edit` on a
+    // scratch copy and returns the result for the preview engine. The project and the undo history
+    // are untouched; the gesture's end commits with the normal edit (one undo step). Returns nullptr
+    // when the edit is refused.
+    [[nodiscard]] std::shared_ptr<const Project> preview(const std::function<void(Editor&)>& edit) const;
 
     [[nodiscard]] const Project& project() const { return project_; }
     // Immutable copy for render threads; re-created only when the revision changed.

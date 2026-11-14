@@ -35,6 +35,9 @@
 #include "StickerPanel.h"
 #include "GradePanel.h"
 #include "ScopesPanel.h"
+#include "OverlayPanel.h"
+#include "RecentStrip.h"
+#include "VideoFxPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -246,6 +249,13 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     // Eyedropper: the qualifier asks the preview for one click.
     connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
     connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);
+    // Zoom, rotate and reflection effects for the selected clip.
+    auto* videoFxDock = new QDockWidget("Hiệu ứng video", this);
+    videoFxDock->setObjectName("videoFx");
+    videoFx_ = new VideoFxPanel(editor_, videoFxDock);
+    videoFxDock->setWidget(videoFx_);
+    addDockWidget(Qt::RightDockWidgetArea, videoFxDock);
+    tabifyDockWidget(looksDock, videoFxDock);
     auto* coverDock = new QDockWidget("Che mờ", this);
     coverDock->setObjectName("covers");
     covers_ = new CoverPanel(editor_, coverDock);
@@ -270,16 +280,25 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     stickerDock->setWidget(stickers_);
     addDockWidget(Qt::RightDockWidgetArea, stickerDock);
     tabifyDockWidget(textDock, stickerDock);
+    auto* overlayDock = new QDockWidget("Lớp phủ", this);
+    overlayDock->setObjectName("overlays");
+    overlays_ = new OverlayPanel(editor_, overlayDock);
+    overlayDock->setWidget(overlays_);
+    addDockWidget(Qt::RightDockWidgetArea, overlayDock);
+    tabifyDockWidget(stickerDock, overlayDock);
     looksDock->raise();
-    // Selecting a text or sticker on the timeline brings its panel forward.
-    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock] {
+    // Selecting a text, sticker or overlay on the timeline brings its panel forward.
+    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock] {
         const auto c = editor_->selectedContent();
         if (!c) return;
-        QDockWidget* d = c->value("kind", std::string{}) == "text" ? textDock : stickerDock;
+        const std::string kind = c->value("kind", std::string{});
+        QDockWidget* d = kind == "text" ? textDock : kind == "overlay" ? overlayDock : stickerDock;
         d->show();
         d->raise();
     });
     connect(preview_, &PreviewWidget::objectRectChanged, editor_, &EditorController::setObjectCanvasRect);
+    connect(preview_, &PreviewWidget::objectRectChanging, editor_, &EditorController::previewObjectCanvasRect);
+    connect(preview_, &PreviewWidget::objectRectCancelled, editor_, &EditorController::endLive);
     // Region on the preview follows the active cover; dragging it there edits the cover.
     connect(editor_, &EditorController::coversChanged, this, &MainWindow::refreshCoverOverlay);
     connect(preview_, &PreviewWidget::coverRectChanged, editor_, &EditorController::setCoverCanvasRect);
@@ -312,9 +331,28 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("state").toByteArray());
 
+    // Unfinished projects slide up at the bottom on start; they slide away once work begins.
+    recent_ = new RecentStrip(this);
+    connect(recent_, &RecentStrip::openRequested, this, [this](const QString& path) {
+        if (!confirmDiscard()) return;
+        recent_->slideOut();
+        editor_->openProject(QUrl::fromLocalFile(path));
+    });
+    connect(recent_, &RecentStrip::forgetRequested, this, [this](const QString& path) {
+        editor_->forgetRecent(path);
+        showRecentProjects();
+    });
+    connect(recent_, &RecentStrip::browseRequested, this, [this] {
+        if (!confirmDiscard()) return;
+        const QString d = QFileDialog::getExistingDirectory(this, "Mở project (.vstudio)");
+        if (d.isEmpty()) return;
+        recent_->slideOut();
+        editor_->openProject(QUrl::fromLocalFile(d));
+    });
     connect(editor_, &EditorController::projectChanged, this, [this] {
         refreshAssets();
         refreshState();
+        if (recent_->shown() && editor_->dirty()) recent_->slideOut();  // editing started
     });
     connect(editor_, &EditorController::playheadChanged, this, &MainWindow::refreshState);
     connect(editor_, &EditorController::playingChanged, this, &MainWindow::refreshState);
@@ -397,7 +435,11 @@ void MainWindow::refreshCoverOverlay() {
     const QRectF r = editor_->coverCanvasRect();
     preview_->setCoverRect(editor_->playing() ? QRectF() : r, editor_->coverState().value("shape").toString());
     // No cover being edited: the selected text/sticker gets move/scale handles.
-    if (r.isNull()) preview_->setObjectRect(editor_->playing() ? QRectF() : editor_->objectCanvasRect());
+    if (r.isNull()) {
+        const auto c = editor_->selectedContent();
+        preview_->setObjectRect(editor_->playing() ? QRectF() : editor_->objectCanvasRect(),
+                                c && c->value("kind", std::string{}) == "overlay");
+    }
 }
 
 void MainWindow::refreshKeyframes() {
@@ -686,6 +728,17 @@ void MainWindow::saveLayout() const {
 void MainWindow::resetLayout() {
     restoreState(defaultState_);
     for (QDockWidget* d : findChildren<QDockWidget*>()) d->show();
+}
+
+void MainWindow::showRecentProjects() {
+    recent_->setCards(editor_->recentProjects(true, 12), &EditorController::projectPoster);
+    if (recent_->cardCount() > 0) recent_->slideIn();
+    else recent_->slideOut();
+}
+
+void MainWindow::resizeEvent(QResizeEvent* e) {
+    QMainWindow::resizeEvent(e);
+    if (recent_) recent_->place();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {

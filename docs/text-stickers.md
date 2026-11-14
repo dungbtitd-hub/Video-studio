@@ -1,6 +1,6 @@
 # Text and stickers
 
-Text and stickers are clips without media. The core draws them itself, as vectors, at the output size, so they stay
+Text and stickers are clips without media (overlay effects work the same way: see [overlays.md](overlays.md)). The core draws them itself, as vectors, at the output size, so they stay
 sharp at any zoom and look the same in the preview and the export, on all four OSes. Every one comes in and goes out
 with an eased animation: nothing pops on or off the picture.
 
@@ -74,8 +74,27 @@ Projects store the font id, so the same font must be registered on every device 
 
 ## Stickers
 
-About 135 stickers in 9 groups, all drawn in-house as vectors: Mặt cười, Trái tim, Hoa lá, Sao lấp lánh, Thời tiết,
-Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật.
+About 340 stickers in 24 groups, all drawn in-house as vectors: Mặt cười, Mạng xã hội, Trái tim, Hoa lá, Sao lấp
+lánh, Thời tiết, Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật, Nhãn khuyến mãi, Chữ hiệu ứng, Vẽ tay, Video & kênh, Thể
+thao & game, Tết & mùa lễ, Du lịch & đời sống, Game 8-bit, Thập niên 80, Động vật biểu cảm, Đồ uống & đời sống, Sinh
+nhật, Giáng sinh, Ngày lễ trong năm. The groups follow what video apps commonly offer.
+
+* **Game 8-bit** stickers are drawn on a pixel grid with a 5x7 pixel font (coins, chests, "PRESS START", "K.O.",
+  a counting high score); **Thập niên 80** adds the neon sunset, boombox, cassette and disco ball.
+* **Động vật biểu cảm** are reaction faces (a "wow" cat, a laughing dog, a crying hamster...) built from one head
+  and face kit, so eyes blink, mouths move and tears, hearts or sweat drops play in a loop.
+* **Đồ uống & đời sống** (phin coffee, trà đá, matcha, bánh mì, phở...) and the event groups (birthdays, Christmas,
+  Valentine, 8/3, 20/10, 20/11, 1/6, Trung thu, Halloween, graduation, weddings, New Year, Mother's Day) mix
+  drawings with Vietnamese or English greetings in the bundled fonts.
+
+* **Mạng xã hội** buttons (Đăng ký, Thích, Theo dõi, Chia sẻ, Thả tim, in Vietnamese and English) play a click once:
+  a hand taps, the button changes colour and text smoothly, the icon reacts, then it holds. They are generic designs
+  with no platform logos or names (decided 2026-11-14, to keep store releases safe).
+* Text inside stickers (labels, comic words, Tết greetings) uses the bundled fonts, so Vietnamese renders the same
+  everywhere.
+* Self-drawing stickers (hand-drawn marks, the countdown, the clapper) play once and hold their last frame.
+* The drawing kit shared by the groups is `core/src/sticker_kit.hpp`; new groups go in their own file (`stickers_more.cpp`,
+  `stickers_extra.cpp`) and register through `kit::Add`.
 
 ## Using it
 
@@ -84,7 +103,8 @@ Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật.
   - Font, size, colour, alignment, outline, shadow and label sliders, and the preset grid.
   - Sticker panel: pick a group, hover an icon to see it move, click to add. Size, flip and "alive".
   - Both panels have the animation box: in, out and loop, the two lengths, and a preview that plays in → rest → out.
-  - On the preview, drag the selected text or sticker to move it, or pull a corner to scale it about its centre.
+  - On the preview, drag the selected text or sticker to move it, or pull a corner to scale it about its centre;
+    it follows the mouse live (see below).
 - **Mobile:** the "Chữ" and "Sticker" tools in the bottom bar.
   - "Chữ" edits the selected text, or adds one. The sheet has three tabs: Chữ (text, font, size, alignment), Kiểu
     (presets, colours, outline, shadow, label) and Hiệu ứng (in, out, loop with a playing preview).
@@ -92,6 +112,17 @@ Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật.
     "alive" and the animations.
   - On the preview, drag the box to move, pinch or pull the corner to scale, double-tap to edit. The change is one
     edit when the fingers lift (a keyframe when the clip's picture is animated).
+
+### Resizing follows the hand
+
+Stickers and text grow, shrink and move with the mouse or fingers while the gesture runs, and the size, outline,
+shadow and label sliders change the picture while they move: nothing jumps on release. During the gesture the core
+renders the result of the edit on a scratch copy (`Editor::preview`, C API `vs_live_*`); the project and the undo
+history change only when the gesture ends, as one undo step. Esc (desktop) or a refused edit drops the live preview.
+
+The sticker "Cỡ" slider shows the size as seen on the canvas (content size × scale at the playhead, 20 to 2000 px),
+so it matches a corner drag or a pinch; moving it sets the content size for the current scale. Stickers are vectors
+drawn at the output resolution, so they stay sharp at any size.
 
 ## C API
 

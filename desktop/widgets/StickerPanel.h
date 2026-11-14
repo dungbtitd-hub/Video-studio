@@ -35,6 +35,7 @@ private:
     QListWidget* list_;
     QWidget* editorBox_;
     QSlider* size_;
+    QLabel* sizeLabel_;
     QCheckBox* flip_;
     QCheckBox* alive_;
     AnimationBox* anim_;

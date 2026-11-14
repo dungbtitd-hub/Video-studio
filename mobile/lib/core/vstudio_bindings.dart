@@ -172,6 +172,13 @@ class VStudioBindings {
             Int32 Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, Int32, Int32, Double),
             int Function(
                 CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double)>('vs_transition_preview'),
+        videoFxJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_video_fx_json'),
+        setClipVideoFx = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, CStr, CStr, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr, double, double, double)>('vs_set_clip_video_fx'),
+        videoFxIcon = lib.lookupFunction<
+            Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, Pointer<Uint8>, int, int, Pointer<Uint8>, int, int)>('vs_video_fx_icon'),
         fontsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_fonts_json'),
         registerFont = lib.lookupFunction<Int32 Function(CStr, CStr, Pointer<Uint8>, Int64),
             int Function(CStr, CStr, Pointer<Uint8>, int)>('vs_register_font'),
@@ -188,6 +195,26 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, Pointer<Double>)>('vs_generated_rect'),
         stickerIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_sticker_icon'),
+        overlaysJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_overlays_json'),
+        livePropertyAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64, CStr),
+            int Function(Pointer<VsSession>, CStr, int, CStr)>('vs_live_property_at'),
+        liveOverlayRegion = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Int64, Double, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_live_overlay_region'),
+        liveClipContent = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_live_clip_content'),
+        liveEnd =
+            lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_live_end'),
+        recentProjectsJson = lib.lookupFunction<CStr Function(CStr, CStr, Int32, Int32, CStr),
+            CStr Function(CStr, CStr, int, int, CStr)>('vs_recent_projects_json'),
+        projectPoster = lib.lookupFunction<Int32 Function(CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>),
+            int Function(CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>)>('vs_project_poster'),
+        defaultOverlayJson = lib.lookupFunction<CStr Function(CStr), CStr Function(CStr)>('vs_default_overlay_json'),
+        overlayIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_overlay_icon'),
+        setOverlayRegion = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Int64, Double, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_set_overlay_region'),
         contentPreview = lib.lookupFunction<Int32 Function(CStr, Double, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, double, Pointer<Uint8>, int, int)>('vs_content_preview'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
@@ -326,6 +353,9 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int) setTransitionEverywhere;
   final CStr Function(Pointer<VsSession>) cutPointsJson;
   final int Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double) transitionPreview;
+  final CStr Function() videoFxJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr, double, double, double) setClipVideoFx;
+  final int Function(CStr, double, Pointer<Uint8>, int, int, Pointer<Uint8>, int, int) videoFxIcon;
   final CStr Function() fontsJson;
   final int Function(CStr, CStr, Pointer<Uint8>, int) registerFont;
   final CStr Function() textAnimationsJson;
@@ -338,6 +368,16 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int, Pointer<Double>) generatedRect;
   final int Function(CStr, double, Pointer<Uint8>, int, int) stickerIcon;
   final int Function(CStr, double, double, Pointer<Uint8>, int, int) contentPreview;
+  final CStr Function() overlaysJson;
+  final CStr Function(CStr, CStr, int, int, CStr) recentProjectsJson;
+  final int Function(Pointer<VsSession>, CStr, int, CStr) livePropertyAt;
+  final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) liveOverlayRegion;
+  final int Function(Pointer<VsSession>, CStr, CStr) liveClipContent;
+  final void Function(Pointer<VsSession>) liveEnd;
+  final int Function(CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>) projectPoster;
+  final CStr Function(CStr) defaultOverlayJson;
+  final int Function(CStr, double, Pointer<Uint8>, int, int) overlayIcon;
+  final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) setOverlayRegion;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;

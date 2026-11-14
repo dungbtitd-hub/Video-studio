@@ -23,6 +23,7 @@ class ClipView {
       this.grade,
       this.pictureKeys = const [],
       this.audioKeys = const [],
+      this.videoFx = const {},
       this.content});
   final String id;
   final String assetId;
@@ -40,6 +41,8 @@ class ClipView {
   // opacity) and audio (volume) keys are independent.
   final List<double> pictureKeys;
   final List<double> audioKeys;
+  // Video effects by group ("zoom", "rotate", "reflect"): their params {"fx", "amount", "speed", "line"}.
+  final Map<String, Map<String, dynamic>> videoFx;
   // Text and sticker clips have no media: what they draw ({"kind": "text" | "sticker", ...}).
   final Map<String, dynamic>? content;
   String get kind => (content?['kind'] ?? '') as String;
@@ -51,6 +54,9 @@ class ClipView {
 /// Sticker id -> Vietnamese name, filled from the core's catalog (for clip labels).
 final Map<String, String> stickerNames = {};
 
+/// Overlay effect names by id (filled from the core's catalog), for clip labels.
+final Map<String, String> overlayNames = {};
+
 /// The label drawn on a text or sticker clip.
 String generatedLabel(Map<String, dynamic> content) {
   switch (content['kind']) {
@@ -60,6 +66,9 @@ String generatedLabel(Map<String, dynamic> content) {
     case 'sticker':
       final id = (content['sticker'] ?? '') as String;
       return '★  ${stickerNames[id] ?? 'Sticker'}';
+    case 'overlay':
+      final id = (content['overlay'] ?? '') as String;
+      return '✦  ${overlayNames[id] ?? 'Lớp phủ'}';
   }
   return (content['kind'] ?? '?') as String;
 }
@@ -176,6 +185,10 @@ class ProjectView {
           grade: effect('builtin.color_grade'),
           pictureKeys: keys(const ['scale', 'x', 'y', 'opacity']),
           audioKeys: keys(const ['volume']),
+          videoFx: {
+            for (final g in const ['zoom', 'rotate', 'reflect'])
+              if (effect('builtin.fx_$g') case final p? when (p['fx'] ?? '') != '') g: p,
+          },
           content: content,
         ));
       }

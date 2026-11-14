@@ -200,6 +200,16 @@ int main(void) {
             EXPECT(vs_content_preview(content, 1.0, 2.0, px, 64, 32) == 0);
             for (int i = 3; i < 64 * 32 * 4; i += 4) lit += px[i] > 128;
             EXPECT(lit > 30);
+            /* Live preview of a pinch / slider: shown, nothing edited, no undo step. */
+            char* before = vs_project_json(s);
+            EXPECT(vs_live_property_at(s, tc, 0, "{\"scale\":2}") == 0);
+            EXPECT(vs_live_clip_content(s, tc, "{\"size\":200}") == 0);
+            EXPECT(vs_live_property_at(s, tc, 0, "{\"nope\":2}") != 0);
+            char* after = vs_project_json(s);
+            EXPECT(before && after && strcmp(before, after) == 0);
+            vs_live_end(s);
+            vs_free(before);
+            vs_free(after);
             EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1);
             vs_free(tc);
         }
@@ -209,6 +219,32 @@ int main(void) {
         EXPECT(vs_sticker_icon("nope", 0.5, icon, 32, 32) != 0);
         EXPECT(vs_content_preview("{\"kind\":\"nope\"}", 0, 1, icon, 32, 32) != 0);
         EXPECT(vs_register_font("mine", "Mine", icon, 16) != 0);
+    }
+    /* Overlay effects: catalog, a full-frame snowfall clip, a region, a thumbnail. */
+    {
+        char* ovs = vs_overlays_json();
+        EXPECT(ovs && strstr(ovs, "\"snow\"") && strstr(ovs, "\"fireworks\""));
+        vs_free(ovs);
+        EXPECT(vs_default_overlay_json("nope") == NULL);
+        char* snow = vs_default_overlay_json("snow");
+        EXPECT(snow && strstr(snow, "\"kind\":\"overlay\""));
+        char* oc = vs_add_generated_clip(s, snow, 0, 3 * 705600000LL, NULL);
+        EXPECT(oc != NULL);
+        if (oc) {
+            double r[4] = {0, 0, 0, 0};
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[0] < 1e-6 && r[2] > 0.999 && r[3] > 0.999);
+            EXPECT(vs_update_clip_content(s, oc, "{\"w\":640,\"h\":360}") == 0);
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[2] < 0.6);
+            EXPECT(vs_set_overlay_region(s, oc, 0, 0.5, 0.25, 0.5, 0.5) == 0);
+            EXPECT(vs_generated_rect(s, oc, 0, r) == 0 && r[0] > 0.499 && r[0] < 0.501 && r[1] > 0.249 && r[3] < 0.501);
+            EXPECT(vs_set_overlay_region(s, oc, 0, 0.5, 0.25, 0, 0.5) != 0);
+            EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1 && vs_undo(s) == 1);
+            vs_free(oc);
+        }
+        vs_free(snow);
+        uint8_t icon[48 * 27 * 4];
+        EXPECT(vs_overlay_icon("snow", 1.0, icon, 48, 27) == 0 && icon[3] == 255);
+        EXPECT(vs_overlay_icon("nope", 1.0, icon, 48, 27) != 0);
     }
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
@@ -284,6 +320,48 @@ int main(void) {
     EXPECT(refused && strstr(refused, "\"ok\":false"));
     vs_free(refused);
     remove("capi_test.vstudiopkg");
+
+    /* Live preview during a gesture: no edit, no undo step; vs_live_end drops it. */
+    {
+        char* undo_before = vs_project_json(s);
+        EXPECT(vs_live_property_at(s, "missing", 0, "{\"scale\":2}") != 0);
+        vs_live_end(s);
+        char* undo_after = vs_project_json(s);
+        EXPECT(undo_before && undo_after && strcmp(undo_before, undo_after) == 0);
+        vs_free(undo_before);
+        vs_free(undo_after);
+    }
+
+    /* Video effects: catalog, a thumbnail, a bad id refused. */
+    {
+        char* vfx = vs_video_fx_json();
+        EXPECT(vfx && strstr(vfx, "\"reflect_water\"") && strstr(vfx, "\"zoom_in\"") && strstr(vfx, "\"rot_90\""));
+        vs_free(vfx);
+        uint8_t px[48 * 27 * 4];
+        EXPECT(vs_video_fx_icon("reflect_water", 1.0, NULL, 0, 0, px, 48, 27) == 0 && px[3] == 255);
+        EXPECT(vs_video_fx_icon("nope", 1.0, NULL, 0, 0, px, 48, 27) != 0);
+        EXPECT(vs_set_clip_video_fx(s, "[\"missing\"]", "zoom", "zoom_in", 1, 1, -1) != 0);
+        EXPECT(vs_set_clip_video_fx(s, "[]", "nope", "zoom_in", 1, 1, -1) != 0);
+    }
+
+    /* Recent projects: a save writes the card, the start screen lists it, the recent list orders it. */
+    EXPECT(vs_save(s, "capi_test_recent/Recent.vstudio") == 0);
+    char* cards = vs_recent_projects_json(NULL, "capi_test_recent", 1, 10, NULL);
+    EXPECT(cards && strstr(cards, "Recent.vstudio") && strstr(cards, "\"exported\":false"));
+    vs_free(cards);
+    cards = vs_recent_projects_json(NULL, "capi_test_recent", 1, 10, "capi_test_recent/Recent.vstudio");
+    EXPECT(cards && strcmp(cards, "[]") == 0); /* the open project is left out */
+    vs_free(cards);
+    EXPECT(vs_recent_touch("capi_test_recent/recent.json", "capi_test_recent/Recent.vstudio") == 0);
+    cards = vs_recent_projects_json("capi_test_recent/recent.json", NULL, 0, 10, NULL);
+    EXPECT(cards && strstr(cards, "Recent.vstudio"));
+    vs_free(cards);
+    EXPECT(vs_recent_remove("capi_test_recent/recent.json", "capi_test_recent/Recent.vstudio") == 0);
+    cards = vs_recent_projects_json("capi_test_recent/recent.json", NULL, 0, 10, NULL);
+    EXPECT(cards && strcmp(cards, "[]") == 0);
+    vs_free(cards);
+    int pw = 0, ph = 0;
+    EXPECT(vs_project_poster("capi_test_recent/nothing.vstudio", NULL, 0, &pw, &ph) == 0);
 
     vs_free(v);
     vs_session_destroy(s);

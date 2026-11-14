@@ -24,6 +24,7 @@
 #include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/motion.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 #include "vstudio/vector.hpp"
@@ -1796,6 +1797,70 @@ TEST("stickers: a large library, each drawing inside its box at every moment") {
     CHECK(draw(3) < 1);
 }
 
+TEST("overlays: every effect draws, fades in and out, stays in its region, and repeats exactly") {
+    const auto& cat = overlays::overlayCatalog();
+    CHECK(cat.size() >= 20u);
+    std::set<std::string> ids;
+    for (const auto& o : cat) ids.insert(o.id);
+    CHECK_EQ(ids.size(), cat.size());
+    CHECK(overlays::overlayCategories().size() >= 4u);
+    const vec::Affine place = vec::Affine::translate(160, 90) * vec::Affine::scale(320.0 / 1920);
+    for (const auto& o : cat) {
+        const Json c = overlays::defaultOverlayContent(o.id, 1920, 1080);
+        auto draw = [&](const Json& content, double t) {
+            VideoFrame f;
+            f.allocate(320, 180);
+            overlays::drawOverlay(content, t, 6, place, f);
+            return f;
+        };
+        CHECK(alphaSum(draw(c, 0)) < 1);  // fades in from nothing
+        CHECK(alphaSum(draw(c, 6)) < 1);  // and out to nothing
+        const VideoFrame a = draw(c, 2.5);
+        if (alphaSum(a) <= 20) std::printf("  %s draws %.1f\n", o.id.c_str(), alphaSum(a));
+        CHECK(alphaSum(a) > 20);
+        CHECK(draw(c, 2.5).rgba == a.rgba);  // a pure function of time: seeking shows the same frame
+        // A region (the left third, centred vertically): nothing outside it.
+        Json part = c;
+        part["w"] = 640;
+        part["h"] = 540;
+        VideoFrame r;
+        r.allocate(320, 180);
+        overlays::drawOverlay(part, 2.5, 6, vec::Affine::translate(160 - 640.0 / 6, 90) * vec::Affine::scale(320.0 / 1920), r);
+        double outside = 0;
+        for (int y = 0; y < 180; ++y)
+            for (int x = 0; x < 320; ++x)
+                if (x >= 108 || y < 44 || y >= 136) outside += r.rgba[(y * 320 + x) * 4 + 3];
+        CHECK(outside == 0);
+        VideoFrame icon;
+        icon.allocate(96, 54);
+        overlays::drawOverlayIcon(o.id, 1.5, icon);
+        CHECK(icon.rgba[3] == 255);
+    }
+    // Through the editor: a full-frame overlay on a "Lớp phủ" track, drawn by the renderer.
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    Json snow = overlays::defaultOverlayContent("snow");
+    snow.erase("w");
+    snow.erase("h");
+    const Id id = f.ed.addGeneratedClip(snow, sec(0), sec(4));
+    const Clip* clip = f.ed.project().findClip(id);
+    CHECK_EQ(clip->content.value("w", 0), f.ed.project().canvas.width);
+    CHECK_EQ(clip->content.value("h", 0), f.ed.project().canvas.height);
+    CHECK(f.ed.project().trackOfClip(id)->name == "Lớp phủ");
+    const auto rect = generatedRectOnCanvas(f.ed.project(), *clip, sec(1));
+    CHECK(std::abs(rect[0]) < 1e-6 && std::abs(rect[2] - f.ed.project().canvas.width) < 1e-6);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    Renderer r(f.ed.project(), pool);
+    Project bare = f.ed.project();
+    bare.tracks.erase(std::remove_if(bare.tracks.begin(), bare.tracks.end(), [&](const Track& t) { return t.findClip(id); }), bare.tracks.end());
+    Renderer rb(bare, pool);
+    const VideoFrame with = r.renderVideo(sec(2), 320, 180), without = rb.renderVideo(sec(2), 320, 180);
+    long diff = 0;
+    for (std::size_t i = 0; i < with.rgba.size(); ++i) diff += std::abs(int(with.rgba[i]) - int(without.rgba[i]));
+    CHECK(diff > 2000);
+}
+
 TEST("generated clips: added on an overlay track, rendered, undone, saved") {
     Fixture f;
     f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
@@ -1848,4 +1913,207 @@ TEST("generated clips: added on an overlay track, rendered, undone, saved") {
     f.ed.undo();  // s1 + its track
     CHECK_EQ(f.ed.project().tracks.size(), tracks - 1);
     CHECK(!f.ed.project().findClip(s1));
+}
+
+// ------------------------------------------------------------------ recent projects
+
+#include "vstudio/recents.hpp"
+
+TEST("recents: cards, posters, unfinished until exported, recent list order") {
+    const auto root = fs::temp_directory_path() / ("vstudio_recent_" + newId());
+    fs::create_directories(root);
+    const std::string a = (root / "Phim A.vstudio").string(), b = (root / "Phim B.vstudio").string();
+    Fixture f;
+    f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(4));
+    saveProject(f.ed.project(), a);
+    VideoFrame frame;
+    frame.allocate(1280, 720);
+    for (std::size_t i = 0; i < frame.rgba.size(); i += 4) {
+        frame.rgba[i] = 200;
+        frame.rgba[i + 3] = 255;
+    }
+    recents::writeCard(a, f.ed.project(), &frame);
+    auto ca = recents::readCard(a);
+    CHECK(ca.has_value());
+    CHECK_EQ(ca->name, std::string("Test"));
+    CHECK_EQ(ca->clips, 1);
+    CHECK_NEAR(ca->duration, 4.0, 1e-6);
+    CHECK_EQ(ca->width, 1280);
+    CHECK(!ca->exported);
+    CHECK(ca->hasPoster);
+    VideoFrame poster;
+    CHECK(recents::readPoster(a, poster));
+    CHECK_EQ(poster.width, 256);  // long side 256, aspect kept
+    CHECK_EQ(poster.height, 144);
+    CHECK_EQ(int(poster.rgba[0]), 200);
+    // Exported: no longer unfinished, until the content changes again.
+    recents::markExported(a, f.ed.project());
+    CHECK(recents::readCard(a)->exported);
+    saveProject(f.ed.project(), a);  // saving the same content (new timestamps) keeps it exported
+    recents::writeCard(a, f.ed.project());
+    CHECK(recents::readCard(a)->exported);
+    CHECK(recents::readCard(a)->hasPoster);  // no frame given: the old poster stays
+    f.ed.insertClip(f.v1, f.asset, sec(4), sec(0), sec(2));
+    saveProject(f.ed.project(), a);
+    recents::writeCard(a, f.ed.project());
+    CHECK(!recents::readCard(a)->exported);
+    CHECK_NEAR(recents::readCard(a)->duration, 6.0, 1e-6);
+    // A package saved before cards existed is still listed (read from project.json), without a poster.
+    saveProject(Editor::newProject("Cũ", 1080, 1920, {30, 1}, "test"), b);
+    auto cb = recents::readCard(b);
+    CHECK(cb.has_value());
+    CHECK_EQ(cb->name, std::string("Cũ"));
+    CHECK(!cb->hasPoster && !cb->exported);
+    CHECK(!recents::readPoster(b, poster));
+    CHECK(!recents::readCard((root / "nothing.vstudio").string()).has_value());
+    // Scanning a folder finds both; the open project and exported ones can be left out.
+    CHECK_EQ(recents::scanFolder(root.string()).size(), std::size_t(2));
+    CHECK_EQ(recents::startCards("", root.string(), true, 10, b).size(), std::size_t(1));
+    recents::markExported(a, f.ed.project());
+    CHECK_EQ(recents::startCards("", root.string(), true, 10).size(), std::size_t(1));
+    CHECK_EQ(recents::startCards("", root.string(), false, 10).size(), std::size_t(2));
+    // The recent list: newest first, no duplicates, missing packages drop out.
+    const std::string list = (root / "recent.json").string();
+    recents::RecentList rl(list);
+    rl.touch(a);
+    rl.touch(b);
+    rl.touch(a);
+    CHECK_EQ(rl.paths().size(), std::size_t(2));
+    CHECK_EQ(rl.paths()[0], a);
+    CHECK_EQ(recents::startCards(list, root.string(), false, 10).size(), std::size_t(2));  // de-duplicated
+    fs::remove_all(b);
+    CHECK_EQ(rl.paths().size(), std::size_t(1));
+    rl.remove(a);
+    CHECK(rl.paths().empty());
+    for (int i = 0; i < 40; ++i) rl.touch(a);
+    CHECK(rl.paths().size() <= recents::RecentList::kMax);
+    fs::remove_all(root);
+}
+
+TEST("editor: live preview of a gesture leaves the project and the undo history alone") {
+    Fixture f;
+    const Id clip = f.ed.addGeneratedClip(stickers::defaultStickerContent("heart_red"), sec(0), sec(3));
+    const auto rev = f.ed.revision();
+    const bool couldUndo = f.ed.canUndo();
+    auto live = f.ed.preview([&](Editor& e) {
+        e.updateClipContent(clip, {{"size", 640.0}});
+        e.setPropertyAt(clip, sec(0), {{kf::kScale, 2.0}});
+    });
+    CHECK(live != nullptr);
+    CHECK_NEAR(live->findClip(clip)->content.value("size", 0.0), 640.0, 1e-9);
+    CHECK_NEAR(animatedTransform(*live->findClip(clip), sec(0)).scale, 2.0, 1e-9);
+    // The project, its revision and its history did not move.
+    CHECK_NEAR(f.ed.project().findClip(clip)->content.value("size", 0.0), 320.0, 1e-9);
+    CHECK_EQ(f.ed.revision(), rev);
+    CHECK_EQ(f.ed.canUndo(), couldUndo);
+    // A refused edit gives no preview.
+    CHECK(f.ed.preview([&](Editor& e) { e.updateClipContent("missing", {{"size", 1.0}}); }) == nullptr);
+    // The gesture's end: one undo step.
+    f.ed.updateClipContent(clip, {{"size", 640.0}});
+    CHECK(f.ed.undo());
+    CHECK_NEAR(f.ed.project().findClip(clip)->content.value("size", 0.0), 320.0, 1e-9);
+}
+
+// ------------------------------------------------------------------ video effects (zoom, rotate, reflect)
+
+#include "vstudio/video_fx.hpp"
+
+TEST("video effects: every one moves the picture smoothly, repeats exactly, reflections keep the top") {
+    using namespace videofx;
+    const auto& cat = videoFxCatalog();
+    CHECK(cat.size() >= 20);
+    std::set<std::string> groups;
+    for (const auto& fx : cat) groups.insert(fx.group);
+    CHECK_EQ(groups.size(), std::size_t(3));
+    VideoFrame base;
+    base.allocate(160, 90);
+    drawVideoFxIcon("zoom_in", 0, base);  // the landscape, untouched at t = 0
+    auto diff = [](const VideoFrame& a, const VideoFrame& b) {
+        double d = 0;
+        for (std::size_t i = 0; i < a.rgba.size(); ++i) d += std::abs(int(a.rgba[i]) - int(b.rgba[i]));
+        return d / a.rgba.size();
+    };
+    for (const auto& fx : cat) {
+        VideoFrame f = base;
+        applyVideoFx(f, Json{{"fx", fx.id}}, 2.3, 4.0);
+        double moved = 0;  // over a few moments (a beat is brief)
+        for (double t : {0.4, 1.3, 2.3}) {
+            VideoFrame g = base;
+            applyVideoFx(g, Json{{"fx", fx.id}}, t, 4.0);
+            moved = std::max(moved, diff(g, base));
+        }
+        if (moved < 0.5) std::printf("  %s does not change the picture\n", fx.id.c_str());
+        CHECK(moved >= 0.5);
+        VideoFrame again = base;
+        applyVideoFx(again, Json{{"fx", fx.id}}, 2.3, 4.0);
+        CHECK(again.rgba == f.rgba);  // a pure function of time
+        if (!fx.animated) continue;
+        // No jumps: a frame later the picture moved only a little.
+        VideoFrame next = base;
+        applyVideoFx(next, Json{{"fx", fx.id}}, 2.3 + 1.0 / 30, 4.0);
+        if (diff(next, f) > 12) std::printf("  %s jumps (%.1f)\n", fx.id.c_str(), diff(next, f));
+        CHECK(diff(next, f) <= 12);
+    }
+    // Slow zooms start (zoom in) or end (zoom out) on the untouched picture.
+    VideoFrame z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_in"}}, 0, 4);
+    CHECK(diff(z, base) < 0.01);
+    z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_out"}}, 4, 4);
+    CHECK(diff(z, base) < 0.01);
+    // Amount 0 leaves it alone.
+    z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_pulse"}, {"amount", 0}}, 0.4, 4);
+    CHECK(diff(z, base) < 0.01);
+    // A 90° turn of a wide picture keeps its shape: transparent bars at the sides.
+    z = base;
+    applyVideoFx(z, Json{{"fx", "rot_90"}}, 0, 4);
+    CHECK_EQ(int(z.rgba[(45 * 160 + 2) * 4 + 3]), 0);
+    CHECK_EQ(int(z.rgba[(45 * 160 + 80) * 4 + 3]), 255);
+    // Water: the picture above the line is untouched, the water below changes over time.
+    VideoFrame w1 = base, w2 = base;
+    applyVideoFx(w1, Json{{"fx", "reflect_water"}, {"line", 0.6}}, 1.0, 4);
+    applyVideoFx(w2, Json{{"fx", "reflect_water"}, {"line", 0.6}}, 1.5, 4);
+    CHECK(std::equal(w1.rgba.begin(), w1.rgba.begin() + 50 * 160 * 4, base.rgba.begin()));
+    CHECK(!std::equal(w1.rgba.begin() + 60 * 160 * 4, w1.rgba.end(), w2.rgba.begin() + 60 * 160 * 4));
+}
+
+TEST("video effects on clips: one per group, after colour, fixed order, undoable, rendered") {
+    Fixture f;
+    const Id a = f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(4));
+    f.ed.setClipVideoFx({a}, "reflect", "reflect_water", 1.0, 1.0, 0.7);
+    f.ed.setClipLook({a}, "teal_orange");
+    f.ed.setClipVideoFx({a}, "zoom", "zoom_in", 1.5, 2.0);
+    auto types = [&] {
+        std::vector<std::string> out;
+        for (const auto& e : f.ed.project().findClip(a)->effects) out.push_back(e.value("type", std::string{}));
+        return out;
+    };
+    // The look stays first; geometry runs zoom -> reflect whatever the order they were added in.
+    CHECK((types() == std::vector<std::string>{kColorLookEffect, videofx::kZoomEffect, videofx::kReflectEffect}));
+    f.ed.setClipVideoFx({a}, "zoom", "zoom_pulse");  // replaces within the group
+    CHECK_EQ(types().size(), std::size_t(3));
+    const Json& zoom = f.ed.project().findClip(a)->effects[1]["params"];
+    CHECK_EQ(zoom.value("fx", std::string{}), std::string("zoom_pulse"));
+    CHECK_NEAR(f.ed.project().findClip(a)->effects[2]["params"].value("line", 0.0), 0.7, 1e-9);
+    bool refused = false;
+    try {
+        f.ed.setClipVideoFx({a}, "zoom", "reflect_water");  // wrong group
+    } catch (const EditError&) {
+        refused = true;
+    }
+    CHECK(refused);
+    f.ed.setClipVideoFx({a}, "reflect", "");
+    CHECK_EQ(types().size(), std::size_t(2));
+    CHECK(f.ed.undo());
+    CHECK_EQ(types().size(), std::size_t(3));
+    // Rendered through the effect modules, with the clip's length passed in.
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    VideoFrame frame;
+    frame.allocate(64, 36);
+    videofx::drawVideoFxIcon("zoom_in", 0, frame);
+    const VideoFrame before = frame;
+    applyClipEffects(mods, *f.ed.project().findClip(a), frame, sec(1), nullptr, {});
+    CHECK(frame.rgba != before.rgba);
 }

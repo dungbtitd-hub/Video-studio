@@ -68,8 +68,10 @@ void main() {
   });
 
   group('box on the preview', () {
-    Future<List<(Rect, Rect)>> pumpOverlay(WidgetTester tester) async {
+    final live = <Rect>[];
+    Future<List<(Rect, Rect)>> pumpOverlay(WidgetTester tester, {bool freeShape = false}) async {
       final changes = <(Rect, Rect)>[];
+      live.clear();
       await tester.pumpWidget(MaterialApp(
         home: Center(
           child: SizedBox(
@@ -79,6 +81,8 @@ void main() {
               canvasSize: const Size(1920, 1080),
               rect: const Rect.fromLTWH(0.25, 0.2, 0.5, 0.4),
               onChanged: (a, b) => changes.add((a, b)),
+              onChanging: (_, b) => live.add(b),
+              freeShape: freeShape,
             ),
           ),
         ),
@@ -94,10 +98,12 @@ void main() {
         await g.moveBy(const Offset(10, 5.625));
         await tester.pump();
       }
-      expect(changes, isEmpty);
+      expect(changes, isEmpty); // nothing edited while the finger moves...
+      expect(live.length, greaterThanOrEqualTo(3)); // ...but the picture follows it live
       await g.up();
       await tester.pump();
       final (from, to) = changes.single;
+      expect(live.last, to);
       expect(from, const Rect.fromLTWH(0.25, 0.2, 0.5, 0.4));
       expect(to.left, closeTo(0.35, 0.02));
       expect(to.top, closeTo(0.3, 0.02));
@@ -120,6 +126,23 @@ void main() {
       expect(to.center.dy, closeTo(0.4, 1e-6));
       expect(to.width / to.height, closeTo(0.5 / 0.4, 1e-6));
       expect(to.width, greaterThan(0.55));
+    });
+
+    testWidgets('an overlay region: the corner resizes freely, top-left stays', (tester) async {
+      final changes = await pumpOverlay(tester, freeShape: true);
+      final box = tester.getRect(find.byType(ObjectOverlay));
+      final g = await tester.startGesture(box.topLeft + const Offset(300, 37.5 + 0.6 * 225));
+      for (var i = 1; i <= 4; i++) {
+        await g.moveBy(const Offset(10, -5));
+        await tester.pump();
+      }
+      await g.up();
+      await tester.pump();
+      final (_, to) = changes.single;
+      expect(to.left, closeTo(0.25, 1e-6));
+      expect(to.top, closeTo(0.2, 1e-6));
+      expect(to.width, closeTo(0.6, 0.01));
+      expect(to.height, closeTo(0.4 - 20 / 225, 0.01));
     });
   });
 
@@ -169,6 +192,22 @@ void main() {
     }
     expect(opaque, greaterThan(48 * 48 / 5));
     expect(vs.stickerIcon('no-such-sticker', 48), isNull);
+    // Overlay effects: full frame when added, then a region; an icon for the library.
+    final overlays = vs.overlayCatalog();
+    expect(overlays.length, greaterThanOrEqualTo(20));
+    expect(overlays.map((o) => o.id), containsAll(['snow', 'snowflakes', 'confetti', 'fireworks']));
+    final snow = vs.addGeneratedClip(vs.defaultOverlay('snow'), 0, 5);
+    expect(vs.project().tracks.expand((t) => t.clips).firstWhere((c) => c.id == snow).name, '✦  Tuyết rơi');
+    var box = vs.generatedRect(snow, 1)!;
+    expect(box.$1, closeTo(0, 1e-6));
+    expect(box.$3, closeTo(1, 1e-6));
+    vs.setOverlayRegion(snow, 1, 0, 0.5, 1, 0.5);
+    box = vs.generatedRect(snow, 1)!;
+    expect(box.$2, closeTo(0.5, 1e-6));
+    expect(box.$4, closeTo(0.5, 1e-6));
+    final ov = vs.overlayIcon('snow', 64, 36)!;
+    expect(ov[3], 255);
+    expect(vs.overlayIcon('nope', 64, 36), isNull);
     final px = vs.contentPreview(text, 1.5, 3, 160, 90)!;
     expect(px.length, 160 * 90 * 4);
     expect(px.where((v) => v != 0), isNotEmpty);
@@ -228,7 +267,7 @@ void main() {
     final vs = VStudio.create('ffi-sticker-sheet', width: 640, height: 360);
     addTearDown(vs.dispose);
     final picked = <String>[];
-    final patches = <Map<String, dynamic>>[];
+    final patches = <Map<String, dynamic>>[], lives = <Map<String, dynamic>>[];
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: Align(
@@ -243,12 +282,16 @@ void main() {
                 return vs.defaultSticker(id);
               },
               onPatch: patches.add,
+              onLive: lives.add,
+              scale: () => 2, // pinched to twice the size
             ),
           ),
         ),
       ),
     ));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200))); // icons decode
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('sticker-cat-Trái tim')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('sticker-cat-Trái tim')));
     await tester.pump();
@@ -262,6 +305,11 @@ void main() {
     await tester.pump();
     expect(patches[0], {'flip': true});
     expect(patches[1]['size'], isA<double>());
+    expect(lives, isNotEmpty); // the sticker grew while the slider moved
+    expect(lives.last['size'], patches[1]['size']);
+    // The slider shows the size as seen (content size x scale): 320 x 2 = 640 px, then a bit more.
+    final shown = tester.widget<Slider>(find.byKey(const Key('sticker-size'))).value;
+    expect(shown, closeTo((patches[1]['size'] as double) * 2, 2));
     await tester.tap(find.text('Lặp lại'));
     await tester.pump();
     await tester.ensureVisible(find.byKey(const Key('anim-loop-pulse')));
@@ -271,6 +319,61 @@ void main() {
     expect(patches.last, {
       'loop': {'type': 'pulse', 'speed': 1.0}
     });
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  }, skip: skip != null);
+
+  testWidgets('overlay sheet: categories, a tap adds, then density, colour and full frame', (tester) async {
+    final vs = VStudio.create('ffi-overlay-sheet', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final picked = <String>[];
+    final patches = <Map<String, dynamic>>[];
+    var full = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 360,
+            child: OverlaySheet(
+              vs: vs,
+              content: null,
+              onPick: (id) {
+                picked.add(id);
+                return vs.defaultOverlay(id);
+              },
+              onPatch: patches.add,
+              onFullFrame: () => full++,
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200))); // icons decode
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('overlay-snow')));
+    await tester.pump();
+    expect(picked, ['snow']);
+    await tester.ensureVisible(find.byKey(const Key('overlay-cat-Lễ hội')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('overlay-cat-Lễ hội')));
+    await tester.pump();
+    expect(find.byKey(const Key('overlay-confetti')), findsOneWidget);
+    expect(find.byKey(const Key('overlay-snow')), findsNothing);
+    await tester.tap(find.text('Chỉnh'));
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    await tester.drag(find.byKey(const Key('overlay-density')), const Offset(60, 0));
+    await tester.pump();
+    expect(patches.last['density'], greaterThan(1.0));
+    await tester.ensureVisible(find.byKey(const Key('overlay-color-#8ecae6')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('overlay-color-#8ecae6')));
+    await tester.pump();
+    expect(patches.last, {'color': '#8ecae6'});
+    await tester.ensureVisible(find.byKey(const Key('overlay-full')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('overlay-full')));
+    expect(full, 1);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   }, skip: skip != null);

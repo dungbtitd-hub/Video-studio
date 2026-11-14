@@ -114,6 +114,13 @@ class TransitionInfo {
   final String id, name, category;
 }
 
+/// A video effect that moves the picture: zoom, rotate or reflection (one of each group per clip).
+class VideoFxInfo {
+  const VideoFxInfo(this.id, this.name, this.group, this.groupName, {this.animated = true, this.usesLine = false});
+  final String id, name, group, groupName;
+  final bool animated, usesLine;
+}
+
 /// Keyframe groups: picture (zoom, position, opacity) and audio (volume) are independent.
 enum KeyGroup { picture, audio }
 
@@ -156,6 +163,41 @@ class TextPresetInfo {
 class StickerInfo {
   const StickerInfo(this.id, this.name, this.category);
   final String id, name, category;
+}
+
+/// An overlay effect (snow, rain, confetti, light leaks...): [tintable] ones take a colour.
+class OverlayInfo {
+  const OverlayInfo(this.id, this.name, this.category, {this.tintable = false});
+  final String id, name, category;
+  final bool tintable;
+}
+
+/// A saved project as the start screen lists it (read from small files in its package, never media).
+class ProjectCard {
+  ProjectCard(this.path, this.name, this.savedAt, this.duration, this.clips, this.width, this.height,
+      {this.exported = false, this.hasPoster = false});
+  factory ProjectCard.fromJson(Map<String, dynamic> e) => ProjectCard(
+      e['path'] as String,
+      e['name'] as String,
+      DateTime.fromMillisecondsSinceEpoch(((e['savedAt'] ?? 0) as num).toInt() * 1000),
+      ((e['duration'] ?? 0) as num).toDouble(),
+      ((e['clips'] ?? 0) as num).toInt(),
+      ((e['width'] ?? 0) as num).toInt(),
+      ((e['height'] ?? 0) as num).toInt(),
+      exported: e['exported'] == true,
+      hasPoster: e['hasPoster'] == true);
+  final String path, name;
+  final DateTime savedAt;
+  final double duration;
+  final int clips, width, height;
+  final bool exported, hasPoster;
+}
+
+/// A project's poster: RGBA8 pixels.
+class PosterImage {
+  PosterImage(this.width, this.height, this.rgba);
+  final int width, height;
+  final Uint8List rgba;
 }
 
 /// Catalogs for the text and sticker tools (fixed for the app's lifetime).
@@ -217,6 +259,29 @@ class VStudio {
   }
 
   String get version => _b.version().toDartString();
+
+  /// Projects in [folder], newest first; [unfinishedOnly] keeps those changed since their last export,
+  /// [exclude] (the open project) is left out. Instant: reads each package's small card file.
+  static List<ProjectCard> recentProjects(String folder, {bool unfinishedOnly = true, int max = 12, String? exclude}) =>
+      using((a) {
+        final p = _bindings.recentProjectsJson(nullptr, folder.toNativeUtf8(allocator: a), unfinishedOnly ? 1 : 0, max,
+            exclude == null ? nullptr : exclude.toNativeUtf8(allocator: a));
+        if (p == nullptr) return <ProjectCard>[];
+        final json = p.toDartString();
+        _bindings.free(p.cast());
+        return [for (final e in (jsonDecode(json) as List).cast<Map<String, dynamic>>()) ProjectCard.fromJson(e)];
+      });
+
+  /// The small picture saved with a project, or null.
+  static PosterImage? projectPoster(String packageDir) => using((a) {
+        final dir = packageDir.toNativeUtf8(allocator: a);
+        final w = a<Int32>(), h = a<Int32>();
+        if (_bindings.projectPoster(dir, nullptr, 0, w, h) != 1) return null;
+        final n = w.value * h.value * 4;
+        final buf = a<Uint8>(n);
+        if (_bindings.projectPoster(dir, buf, n, w, h) != 1) return null;
+        return PosterImage(w.value, h.value, Uint8List.fromList(buf.asTypedList(n)));
+      });
 
   String _take(Pointer<Utf8> p) {
     if (p == nullptr) throw VStudioException(_b.lastError(_s).toDartString());
@@ -385,6 +450,18 @@ class VStudio {
   void setPropertyAt(String clipId, double t, Map<String, double> values) => using((a) => _check(_b.setPropertyAt(
       _s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
 
+  // ---- live preview during a gesture (pinch, corner drag, slider) ----
+  // The preview shows the edit at once; the project and the undo history stay as they are until the
+  // gesture ends with the real edit (one undo step), or liveEnd() drops it.
+
+  void livePropertyAt(String clipId, double t, Map<String, double> values) => using((a) => _check(_b.livePropertyAt(
+      _s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
+  void liveOverlayRegion(String clipId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.liveOverlayRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
+  void liveClipContent(String clipId, Map<String, dynamic> patch) => using((a) =>
+      _check(_b.liveClipContent(_s, clipId.toNativeUtf8(allocator: a), jsonEncode(patch).toNativeUtf8(allocator: a))));
+  void liveEnd() => _b.liveEnd(_s);
+
   /// Zooms so the region (0..1 of the frame) fills the frame at [t].
   void zoomToRegion(String clipId, double t, double x, double y, double w, double h) =>
       using((a) => _check(_b.zoomToRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
@@ -519,6 +596,41 @@ class VStudio {
         return Uint8List.fromList(po.asTypedList(a.length));
       });
 
+  // ---- video effects: zoom, rotate, reflection (video_fx.hpp) ----
+
+  static List<VideoFxInfo>? _videoFx;
+
+  /// Every video effect, in catalogue order (read once).
+  List<VideoFxInfo> videoFx() => _videoFx ??= [
+        for (final e in (jsonDecode(_take(_b.videoFxJson())) as List).cast<Map<String, dynamic>>())
+          VideoFxInfo(e['id'] as String, e['name'] as String, e['group'] as String, e['groupName'] as String,
+              animated: e['animated'] == true, usesLine: e['usesLine'] == true)
+      ];
+
+  /// Puts effect [fxId] of [group] ("zoom", "rotate", "reflect") on the clips, replacing that group's
+  /// effect; '' removes it. [line] < 0 keeps the default water line. One undo step.
+  void setClipVideoFx(List<String> clipIds, String group, String fxId,
+          {double amount = 1, double speed = 1, double line = -1}) =>
+      using((a) => _check(_b.setClipVideoFx(_s, jsonEncode(clipIds).toNativeUtf8(allocator: a),
+          group.toNativeUtf8(allocator: a), fxId.toNativeUtf8(allocator: a), amount, speed, line)));
+
+  /// A [width] x [height] thumbnail of effect [fxId] at [seconds] (of a 4 s loop), over [picture]
+  /// ([pw] x [ph] RGBA) or, without one, a small built-in landscape.
+  Uint8List? videoFxIcon(String fxId, double seconds, int width, int height,
+          {Uint8List? picture, int pw = 0, int ph = 0}) =>
+      using((al) {
+        Pointer<Uint8> pic = nullptr;
+        if (picture != null && pw > 0 && ph > 0) {
+          pic = al<Uint8>(picture.length);
+          pic.asTypedList(picture.length).setAll(0, picture);
+        }
+        final out = al<Uint8>(width * height * 4);
+        if (_b.videoFxIcon(fxId.toNativeUtf8(allocator: al), seconds, pic, pw, ph, out, width, height) != 0) {
+          return null;
+        }
+        return Uint8List.fromList(out.asTypedList(width * height * 4));
+      });
+
   // ---- text and stickers: clips without media, drawn by the core from their "content" ----
 
   static TextCatalog? _catalog;
@@ -550,8 +662,42 @@ class VStudio {
     for (final st in c.stickers) {
       stickerNames[st.id] = st.name;
     }
+    overlayCatalog();
     return _catalog = c;
   }
+
+  static List<OverlayInfo>? _overlays;
+
+  /// Overlay effects in display order (read once, then cached).
+  List<OverlayInfo> overlayCatalog() {
+    final cached = _overlays;
+    if (cached != null) return cached;
+    final list = [
+      for (final e in (jsonDecode(_take(_b.overlaysJson())) as List).cast<Map<String, dynamic>>())
+        OverlayInfo(e['id'] as String, e['name'] as String, e['category'] as String, tintable: e['tintable'] == true)
+    ];
+    for (final o in list) {
+      overlayNames[o.id] = o.name;
+    }
+    return _overlays = list;
+  }
+
+  /// Content for a new overlay covering the whole frame (sized to the canvas when added).
+  Map<String, dynamic> defaultOverlay(String overlayId) =>
+      jsonDecode(using((a) => _take(_b.defaultOverlayJson(overlayId.toNativeUtf8(allocator: a)))))
+          as Map<String, dynamic>;
+
+  /// Overlay [id] at [seconds] over a dark backdrop, an opaque [width] x [height] RGBA thumbnail.
+  Uint8List? overlayIcon(String id, int width, int height, {double seconds = 2}) => using((a) {
+        final n = width * height * 4;
+        final buf = a<Uint8>(n);
+        if (_b.overlayIcon(id.toNativeUtf8(allocator: a), seconds, buf, width, height) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(n));
+      });
+
+  /// The region an overlay covers, as seen at [t] (0..1 of the frame). One undo step.
+  void setOverlayRegion(String clipId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.setOverlayRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
 
   /// Adds a TrueType/OpenType font (e.g. a company font); false when the bytes are not a usable font.
   bool registerFont(String id, String name, Uint8List bytes) => using((a) {

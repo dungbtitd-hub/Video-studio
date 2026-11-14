@@ -1,6 +1,7 @@
 #include "EditorController.h"
 
 #include "vstudio/generators.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 
@@ -11,6 +12,7 @@
 #include "vstudio/keyframes.hpp"
 #include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/video_fx.hpp"
 
 #include <QDir>
 #include <QJsonDocument>
@@ -19,9 +21,11 @@
 #include <QHash>
 #include <QImage>
 #include <QMetaObject>
+#include <QStandardPaths>
 
 #include "AudioOutput.h"
 #include "vstudio/project_io.hpp"
+#include "vstudio/recents.hpp"
 #include "vstudio/proxy.hpp"
 #include "vstudio/render.hpp"
 
@@ -103,11 +107,14 @@ void EditorController::resetSession(Project p, const QString& packageDir) {
     preview_ = std::make_unique<PreviewEngine>(backend_, mediaBaseDir(s(packageDir)), cfg, &modules_);
     preview_->setFrameCallback([this](std::shared_ptr<const VideoFrame> f) {
         // Render thread -> UI thread. Wrap without copying; QImage keeps the frame alive.
-        auto* holder = new std::shared_ptr<const VideoFrame>(std::move(f));
+        auto* holder = new std::shared_ptr<const VideoFrame>(f);
         QImage img((*holder)->rgba.data(), (*holder)->width, (*holder)->height, (*holder)->width * 4,
                    QImage::Format_RGBA8888, [](void* h) { delete static_cast<std::shared_ptr<const VideoFrame>*>(h); },
                    holder);
-        QMetaObject::invokeMethod(this, [this, img] { emit frameReady(img); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, img, f = std::move(f)] {
+            lastFrame_ = f;
+            emit frameReady(img);
+        }, Qt::QueuedConnection);
     });
     audio_ = std::make_unique<AudioOutput>(preview_.get(), editor_->project().sampleRate, editor_->project().audioChannels);
     // Disk cache next to the project (or in temp until it is saved), keyed by file fingerprint.
@@ -181,6 +188,10 @@ void EditorController::openProject(const QUrl& folder) {
             setStatus(tr("Recovered unsaved changes"));
         }
         resetSession(std::move(p), dir);
+        try {
+            recents::RecentList(s(recentFile())).touch(s(dir));
+        } catch (...) {
+        }
         // Assets that already have a proxy from a previous session.
         for (const auto& a : editor_->project().assets) {
             const QString proxy = dir + "/cache/proxy/" + q(a.id) + ".mp4";
@@ -201,10 +212,50 @@ void EditorController::saveProject(const QUrl& folder) {
         if (dir != packageDir_) preview_->setProjectDir(mediaBaseDir(s(dir)));
         packageDir_ = dir;
         editor_->markSaved();
+        try {  // the start strip's card: name, length, a small poster of the preview
+            recents::writeCard(s(dir), editor_->project(), lastFrame_.get());
+            recents::RecentList(s(recentFile())).touch(s(dir));
+        } catch (...) {
+        }
         emit projectChanged();
         setStatus(tr("Saved %1").arg(dir));
     } catch (const std::exception& e) {
         setStatus(tr("Save failed: %1").arg(q(e.what())));
+    }
+}
+
+QString EditorController::recentFile() const {
+    if (!recentFile_.isEmpty()) return recentFile_;
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent.json";
+}
+
+QVariantList EditorController::recentProjects(bool unfinishedOnly, int max) const {
+    QVariantList out;
+    for (const auto& c : recents::startCards(s(recentFile()), {}, unfinishedOnly, static_cast<std::size_t>(std::max(0, max)),
+                                             s(packageDir_))) {
+        out.push_back(QVariantMap{{"path", q(c.path)},
+                                  {"name", q(c.name)},
+                                  {"savedAt", QVariant::fromValue<qint64>(c.savedAt)},
+                                  {"duration", c.duration},
+                                  {"clips", c.clips},
+                                  {"width", c.width},
+                                  {"height", c.height},
+                                  {"exported", c.exported},
+                                  {"hasPoster", c.hasPoster}});
+    }
+    return out;
+}
+
+QImage EditorController::projectPoster(const QString& packageDir) {
+    VideoFrame f;
+    if (!recents::readPoster(s(packageDir), f)) return {};
+    return QImage(f.rgba.data(), f.width, f.height, f.width * 4, QImage::Format_RGBA8888).copy();
+}
+
+void EditorController::forgetRecent(const QString& packageDir) {
+    try {
+        recents::RecentList(s(recentFile())).remove(s(packageDir));
+    } catch (...) {
     }
 }
 
@@ -272,6 +323,7 @@ bool EditorController::edit(F&& f) {
 }
 
 void EditorController::published() {
+    live_ = false;  // a real edit replaces any live preview
     snapshot_ = editor_->snapshot();
     if (gradePreviewOn_) {  // an edit (or undo) always shows the committed project
         gradePreviewOn_ = false;
@@ -316,6 +368,28 @@ void EditorController::setClipLook(const QStringList& clipIds, const QString& lo
     std::vector<Id> ids;
     for (const QString& c : clipIds) ids.push_back(s(c));
     edit([&] { editor_->setClipLook(ids, s(lookId), strength); });
+}
+
+void EditorController::setClipVideoFx(const QStringList& clipIds, const QString& group, const QString& fxId, double amount,
+                                      double speed, double line) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    edit([&] { editor_->setClipVideoFx(ids, s(group), s(fxId), amount, speed, line); });
+}
+
+QVariantMap EditorController::clipVideoFx(const QString& clipId, const QString& group) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    const std::string type = videofx::effectTypeFor(s(group));
+    if (c && c->effects.is_array())
+        for (const auto& e : c->effects)
+            if (e.is_object() && e.value("type", std::string{}) == type && e.value("enabled", true) && e.contains("params")) {
+                const Json& p = e["params"];
+                return {{"fx", q(p.value("fx", std::string{}))},
+                        {"amount", p.value("amount", 1.0)},
+                        {"speed", p.value("speed", 1.0)},
+                        {"line", p.value("line", -1.0)}};
+            }
+    return {};
 }
 
 QPair<QString, double> EditorController::clipLook(const QString& clipId) const {
@@ -813,8 +887,8 @@ void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
     emit exportChanged();
     auto snap = editor_->snapshot();  // frozen copy: editing continues during export
     const std::string out = s(file.toLocalFile());
-    const std::string base = mediaBaseDir(s(packageDir_));
-    jobs_->submit("export", JobPriority::Normal, [this, snap, es, out, base](const CancelToken& tok) {
+    const std::string base = mediaBaseDir(s(packageDir_)), package = s(packageDir_);
+    jobs_->submit("export", JobPriority::Normal, [this, snap, es, out, base, package](const CancelToken& tok) {
         MediaPool pool(backend_, base);
         auto enc = backend_->createEncoder();
         auto r = exportProject(*snap, pool, *enc, out, es, [this](const ExportProgress& p) {
@@ -824,6 +898,12 @@ void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
                 emit exportChanged();
             }, Qt::QueuedConnection);
         }, tok.flag(), &modules_);
+        if (r.ok && !package.empty()) {
+            try {
+                recents::markExported(package, *snap);  // no longer "unfinished" on the start strip
+            } catch (...) {
+            }
+        }
         QMetaObject::invokeMethod(this, [this, r, out] {
             exporting_ = false;
             emit exportChanged();
@@ -852,6 +932,10 @@ QString generatedLabel(const vstudio::Clip& c) {
         const auto* info = vstudio::stickers::findSticker(c.content.value("sticker", std::string{}));
         return QStringLiteral("★  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Sticker"));
     }
+    if (kind == "overlay") {
+        const auto* info = vstudio::overlays::findOverlay(c.content.value("overlay", std::string{}));
+        return QStringLiteral("✦  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Lớp phủ"));
+    }
     return QString::fromStdString(kind);
 }
 
@@ -875,6 +959,25 @@ QString EditorController::addSticker(const QString& stickerId) {
     return q(id);
 }
 
+QString EditorController::addOverlay(const QString& overlayId) {
+    if (!vstudio::overlays::findOverlay(s(overlayId))) return {};
+    vstudio::Json c = vstudio::overlays::defaultOverlayContent(s(overlayId));
+    c.erase("w");  // sized to the canvas by the editor
+    c.erase("h");
+    c.erase("ref");
+    Id id;
+    if (!edit([&] { id = editor_->addGeneratedClip(c, fromSecs(playhead_), Time::fromSeconds(5)); })) return {};
+    setSelectedClip(q(id));
+    return q(id);
+}
+
+void EditorController::setOverlayFullFrame() {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || c->content.value("kind", std::string{}) != "overlay") return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    edit([&] { editor_->setOverlayRegion(c->id, src, 0, 0, snapshot_->canvas.width, snapshot_->canvas.height); });
+}
+
 std::optional<vstudio::Json> EditorController::selectedContent() const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated()) return std::nullopt;
@@ -884,7 +987,7 @@ std::optional<vstudio::Json> EditorController::selectedContent() const {
 void EditorController::updateContent(const vstudio::Json& patch) {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated()) return;
-    edit([&] { editor_->updateClipContent(c->id, patch); });
+    if (!edit([&] { editor_->updateClipContent(c->id, patch); })) endLive();
 }
 
 QRectF EditorController::objectCanvasRect() const {
@@ -897,17 +1000,70 @@ QRectF EditorController::objectCanvasRect() const {
     return {r[0] / W, r[1] / H, r[2] / W, r[3] / H};
 }
 
-void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
+std::function<void(Editor&)> EditorController::objectRectEdit(const QRectF& from, const QRectF& to) const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
-    if (!c || !c->generated() || from.width() <= 0) return;
+    if (!c || !c->generated() || from.width() <= 0) return {};
+    const Id id = c->id;
     const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
     const Transform tf = animatedTransform(*c, src);
     const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    if (c->content.value("kind", std::string{}) == "overlay") {
+        if (to.width() <= 0 || to.height() <= 0) return {};
+        return [=](Editor& e) { e.setOverlayRegion(id, src, to.x() * W, to.y() * H, to.width() * W, to.height() * H); };
+    }
     const double k = to.width() / from.width();
     // The box centre sits at canvas centre + offset + (box centre in content units) * scale.
     const double x = to.center().x() * W - W / 2 - (from.center().x() * W - W / 2 - tf.x) * k;
     const double y = to.center().y() * H - H / 2 - (from.center().y() * H - H / 2 - tf.y) * k;
-    edit([&] { editor_->setPropertyAt(c->id, src, {{kf::kScale, std::clamp(tf.scale * k, 0.05, 20.0)}, {kf::kX, x}, {kf::kY, y}}); });
+    const double scale = std::clamp(tf.scale * k, 0.05, 20.0);
+    return [=](Editor& e) { e.setPropertyAt(id, src, {{kf::kScale, scale}, {kf::kX, x}, {kf::kY, y}}); };
+}
+
+void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
+    auto fn = objectRectEdit(from, to);
+    if (!fn || !edit([&] { fn(*editor_); })) endLive();
+}
+
+void EditorController::previewObjectCanvasRect(const QRectF& from, const QRectF& to) {
+    if (auto fn = objectRectEdit(from, to)) showLive(fn);
+}
+
+void EditorController::previewContent(const vstudio::Json& patch) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return;
+    const Id id = c->id;
+    showLive([&](Editor& e) { e.updateClipContent(id, patch); });
+}
+
+double EditorController::stickerDisplaySize() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return 0;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    return c->content.value("size", 320.0) * animatedTransform(*c, src).scale;
+}
+
+void EditorController::setStickerDisplaySize(double px, bool live) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated() || px <= 0) return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    const double scale = std::max(0.05, animatedTransform(*c, src).scale);
+    const vstudio::Json patch = {{"size", std::max(1.0, std::round(px / scale))}};
+    if (live) previewContent(patch);
+    else updateContent(patch);
+}
+
+void EditorController::showLive(const std::function<void(Editor&)>& fn) {
+    if (!preview_) return;
+    if (auto p = editor_->preview(fn)) {
+        live_ = true;
+        preview_->setProject(std::move(p));
+    }
+}
+
+void EditorController::endLive() {
+    if (!live_ || !preview_) return;
+    live_ = false;
+    preview_->setProject(snapshot_);
 }
 
 void EditorController::setSelectedClip(const QString& id) {

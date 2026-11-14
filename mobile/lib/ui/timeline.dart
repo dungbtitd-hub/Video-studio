@@ -441,10 +441,11 @@ class _TimelinePainter extends CustomPainter {
         if (x > size.width || x + w < 0) continue; // cull off-screen clips
         final r =
             RRect.fromRectAndRadius(Rect.fromLTWH(x, top + 4, w < 3 ? 3 : w, trackH - 10), const Radius.circular(4));
-        // Text and stickers have no media: a colour of their own instead of thumbnails.
+        // Text, stickers and overlays have no media: a colour of their own instead of thumbnails.
         final (fill, edge) = switch (c.kind) {
           'text' => (const Color(0xFF5C46A0), const Color(0xFF8C74D8)),
           'sticker' => (const Color(0xFFA04678), const Color(0xFFD874AC)),
+          'overlay' => (const Color(0xFF2E7D8C), const Color(0xFF5FC3D4)),
           _ => audio ? (VsColors.clipAudio2, VsColors.clipAudio) : (VsColors.clipVideo2, VsColors.clipVideo),
         };
         canvas.drawRRect(r, Paint()..color = fill);

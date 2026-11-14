@@ -62,6 +62,15 @@ public:
     Q_INVOKABLE void newProject(const QString& name, int width, int height, int fps);
     Q_INVOKABLE void openProject(const QUrl& folder);
     Q_INVOKABLE void saveProject(const QUrl& folder);
+    // Recent projects for the start strip (recents.hpp): newest first, the open project left out.
+    // Each: {path, name, savedAt (unix s), duration (s), clips, width, height, exported, hasPoster}.
+    QVariantList recentProjects(bool unfinishedOnly, int max = 12) const;
+    static QImage projectPoster(const QString& packageDir);
+    void forgetRecent(const QString& packageDir);
+    // The recent-list file (app data folder by default; tests point it elsewhere).
+    void setRecentFile(const QString& file) { recentFile_ = file; }
+    [[nodiscard]] QString recentFile() const;
+    [[nodiscard]] QString packageDir() const { return packageDir_; }
     Q_INVOKABLE void importMedia(const QList<QUrl>& files, bool appendToTimeline = false);
     Q_INVOKABLE void addToTimeline(const QString& assetId);
     Q_INVOKABLE void splitAtPlayhead();
@@ -115,6 +124,11 @@ public:
     QString selectedClip() const { return selected_; }
     // Colour looks (vstudio/looks.hpp): one undo step for any number of clips; "" removes.
     void setClipLook(const QStringList& clipIds, const QString& lookId, double strength);
+    // Video effects (vstudio/video_fx.hpp): zoom / rotate / reflect, one per group; "" removes the group's.
+    void setClipVideoFx(const QStringList& clipIds, const QString& group, const QString& fxId, double amount = 1.0,
+                        double speed = 1.0, double line = -1.0);
+    // The group's effect on a clip: {fx, amount, speed, line}; empty when none.
+    [[nodiscard]] QVariantMap clipVideoFx(const QString& clipId, const QString& group) const;
     // Look on a clip: (look id, strength); empty id if none.
     [[nodiscard]] QPair<QString, double> clipLook(const QString& clipId) const;
     [[nodiscard]] QString clipAsset(const QString& clipId) const;
@@ -199,14 +213,28 @@ public:
     // Adds a text (default look) / sticker at the playhead for 3 s on a free overlay track and selects it.
     QString addText(const QString& text = {});
     QString addSticker(const QString& stickerId);
+    // Lays overlay effect `overlayId` over the whole frame from the playhead for 5 s and selects it.
+    QString addOverlay(const QString& overlayId);
+    // The selected overlay covers the whole frame again.
+    void setOverlayFullFrame();
     // Content of the selected clip when it is a text or sticker.
     [[nodiscard]] std::optional<vstudio::Json> selectedContent() const;
     // Merges `patch` into the selected text/sticker (one undo step).
     void updateContent(const vstudio::Json& patch);
     // The selected text/sticker's box on the canvas at the playhead (0..1), or null.
     [[nodiscard]] QRectF objectCanvasRect() const;
-    // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated).
+    // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated);
+    // an overlay's region takes the box `to` exactly (any shape).
     void setObjectCanvasRect(const QRectF& from, const QRectF& to);
+    // Live preview while a gesture runs (corner drag, slider): the picture follows at once, nothing is
+    // edited until the gesture ends with setObjectCanvasRect / updateContent; endLive() drops it.
+    void previewObjectCanvasRect(const QRectF& from, const QRectF& to);
+    void previewContent(const vstudio::Json& patch);
+    void endLive();
+    // Effective size of the selected sticker at the playhead: content "size" x transform scale (canvas px).
+    [[nodiscard]] double stickerDisplaySize() const;
+    // Sets the effective size: content "size" = px / scale at the playhead (live: preview only).
+    void setStickerDisplaySize(double px, bool live);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }
@@ -273,6 +301,11 @@ private:
     std::unique_ptr<AudioOutput> audio_;
     int previewW_ = 960, previewH_ = 540;
     QString packageDir_;
+    QString recentFile_;
+    bool live_ = false;  // the preview shows a gesture's live result, not snapshot_
+    [[nodiscard]] std::function<void(vstudio::Editor&)> objectRectEdit(const QRectF& from, const QRectF& to) const;
+    void showLive(const std::function<void(vstudio::Editor&)>& fn);
+    std::shared_ptr<const vstudio::VideoFrame> lastFrame_;  // poster for the project's card at save
     std::shared_ptr<const vstudio::Project> snapshot_;
     mutable QVariantList assets_, tracks_;
     mutable bool assetsDirty_ = true, tracksDirty_ = true;

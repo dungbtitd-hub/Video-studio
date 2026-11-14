@@ -87,6 +87,8 @@ int main(int argc, char* argv[]) {
         return app.exec();
     }
     if (!files.isEmpty()) editor.importMedia(files, true);
+    // Plain start: unfinished projects slide up at the bottom, once the window has painted.
+    else QTimer::singleShot(150, &win, [&win] { win.showRecentProjects(); });
     if (seekTo >= 0) QTimer::singleShot(2500, &editor, [&] { editor.seek(seekTo); });
     if (!look.isEmpty())
         QTimer::singleShot(2000, &editor, [&] {

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -22,12 +23,15 @@
 #include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/motion.hpp"
+#include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/project_io.hpp"
+#include "vstudio/recents.hpp"
+#include "vstudio/video_fx.hpp"
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 
@@ -71,6 +75,8 @@ struct vs_session {
     std::mutex frameMu;
     std::shared_ptr<const VideoFrame> latest;
     std::int64_t latestSerial = 0;
+    std::int64_t posterSerial = -1;  // the frame last written as the project's poster
+    std::string posterDir;
     // Native preview sink; sinkMu is held while it runs so removing it is a hard barrier.
     std::mutex sinkMu;
     vs_frame_sink sink = nullptr;
@@ -300,6 +306,17 @@ int vs_save(vs_session* s, const char* package_dir) {
         s->packageDir = dir;
         clearAutosave(dir);
         s->editor->markSaved();
+        std::shared_ptr<const VideoFrame> poster;
+        {
+            std::lock_guard lk(s->frameMu);
+            if (s->latestSerial != s->posterSerial || dir != s->posterDir) poster = s->latest;  // unchanged: keep it
+            s->posterSerial = s->latestSerial;
+        }
+        s->posterDir = dir;
+        try {
+            recents::writeCard(dir, s->editor->project(), poster.get());  // the start screen's card
+        } catch (...) {
+        }
     });
 }
 
@@ -412,6 +429,48 @@ int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_
         s->editor->setClipLook(clips, str(look_id), strength);
         s->edited();
     });
+}
+
+char* vs_video_fx_json(void) {
+    Json out = Json::array();
+    for (const auto& f : videofx::videoFxCatalog())
+        out.push_back({{"id", f.id},
+                       {"name", f.name},
+                       {"group", f.group},
+                       {"groupName", videofx::groupName(f.group)},
+                       {"animated", f.animated},
+                       {"usesLine", f.usesLine}});
+    return dup(out.dump());
+}
+
+int vs_set_clip_video_fx(vs_session* s, const char* clip_ids_json, const char* group, const char* fx_id, double amount,
+                         double speed, double line) {
+    return guard(s, [&] {
+        const Json ids = Json::parse(str(clip_ids_json));
+        if (!ids.is_array()) throw std::runtime_error("clip_ids_json must be a JSON array");
+        std::vector<Id> clips;
+        for (const auto& id : ids) clips.push_back(id.get<std::string>());
+        s->editor->setClipVideoFx(clips, str(group), str(fx_id), amount, speed, line);
+        s->edited();
+    });
+}
+
+int vs_video_fx_icon(const char* fx_id, double seconds, const uint8_t* picture, int picture_w, int picture_h, uint8_t* out,
+                     int width, int height) {
+    if (!out || width <= 0 || height <= 0 || !videofx::findVideoFx(str(fx_id))) return -1;
+    try {
+        VideoFrame f, pic;
+        f.allocate(width, height);
+        if (picture && picture_w > 0 && picture_h > 0) {
+            pic.allocate(picture_w, picture_h);
+            std::memcpy(pic.rgba.data(), picture, pic.rgba.size());
+        }
+        videofx::drawVideoFxIcon(str(fx_id), seconds, f, pic.empty() ? nullptr : &pic);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 namespace {
@@ -606,18 +665,24 @@ int vs_clear_keyframes(vs_session* s, const char* clip_id, int group) {
     });
 }
 
+namespace {
+std::map<std::string, double> propertyValues(const char* values_json) {
+    const Json j = Json::parse(str(values_json));
+    if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
+    std::map<std::string, double> values;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (!kf::isProperty(it.key()) || !it.value().is_number())
+            throw std::runtime_error("not an animatable number: " + it.key());
+        values[it.key()] = it.value().get<double>();
+    }
+    return values;
+}
+}  // namespace
+
 int vs_set_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json) {
     return guard(s, [&] {
         const Clip& c = clipOrThrow(s, clip_id);
-        const Json j = Json::parse(str(values_json));
-        if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
-        std::map<std::string, double> values;
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (!kf::isProperty(it.key()) || !it.value().is_number())
-                throw std::runtime_error("not an animatable number: " + it.key());
-            values[it.key()] = it.value().get<double>();
-        }
-        s->editor->setPropertyAt(c.id, c.toSource(Time::fromTicks(t)), values);
+        s->editor->setPropertyAt(c.id, c.toSource(Time::fromTicks(t)), propertyValues(values_json));
         s->edited();
     });
 }
@@ -965,6 +1030,45 @@ char* vs_stickers_json(void) {
     return dup(out.dump());
 }
 
+char* vs_overlays_json(void) {
+    Json out = Json::array();
+    for (const auto& o : overlays::overlayCatalog())
+        out.push_back({{"id", o.id}, {"name", o.name}, {"category", o.category}, {"tintable", o.tintable}});
+    return dup(out.dump());
+}
+
+char* vs_default_overlay_json(const char* id) {
+    if (!overlays::findOverlay(str(id))) return nullptr;
+    Json c = overlays::defaultOverlayContent(str(id));
+    c.erase("w");  // sized to the project's canvas when added
+    c.erase("h");
+    c.erase("ref");
+    return dup(c.dump());
+}
+
+int vs_set_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Project& p = s->editor->project();
+        const double W = p.canvas.width, H = p.canvas.height;
+        s->editor->setOverlayRegion(c.id, c.toSource(Time::fromTicks(t)), x * W, y * H, w * W, h * H);
+        s->edited();
+    });
+}
+
+int vs_overlay_icon(const char* id, double seconds, uint8_t* out, int width, int height) {
+    if (!out || width <= 0 || height <= 0 || !overlays::findOverlay(str(id))) return -1;
+    try {
+        VideoFrame f;
+        f.allocate(width, height);
+        overlays::drawOverlayIcon(str(id), seconds, f);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
 char* vs_default_text_json(const char* t) {
     try {
         return dup(text::defaultTextContent(t && *t ? std::string(t) : std::string("Nhập chữ")).dump());
@@ -997,7 +1101,7 @@ int vs_update_clip_content(vs_session* s, const char* clip_id, const char* patch
 int vs_generated_rect(vs_session* s, const char* clip_id, int64_t t, double* xywh) {
     return guard(s, [&] {
         const Clip& c = clipOrThrow(s, clip_id);
-        if (!c.generated()) throw std::runtime_error("not a text or sticker clip");
+        if (!c.generated()) throw std::runtime_error("not a generated clip");
         const Project& p = s->editor->project();
         const auto r = generatedRectOnCanvas(p, c, c.toSource(Time::fromTicks(t)));
         if (xywh) {
@@ -1300,9 +1404,9 @@ void startExport(vs_session* s, const char* out_path, const ExportSettings& es) 
         s->exportStatus = VS_EXPORT_RUNNING;
         auto snap = s->editor->snapshot();  // export works on a frozen copy; editing can continue
         const std::string out = str(out_path);
-        const std::string base = mediaBaseDir(s->packageDir);
+        const std::string base = mediaBaseDir(s->packageDir), package = s->packageDir;
         s->jobs->submit("export", JobPriority::Normal,
-                        [s, snap, es, out, base](const CancelToken& tok) {
+                        [s, snap, es, out, base, package](const CancelToken& tok) {
                             MediaPool pool(s->backend, base);
                             auto enc = s->backend->createEncoder();
                             auto r = exportProject(*snap, pool, *enc, out, es,
@@ -1313,6 +1417,12 @@ void startExport(vs_session* s, const char* out_path, const ExportSettings& es) 
                             {
                                 std::lock_guard lk(s->exportErrMu);
                                 s->exportError = r.error;
+                            }
+                            if (r.ok && !package.empty()) {
+                                try {
+                                    recents::markExported(package, *snap);  // no longer "unfinished" at start
+                                } catch (...) {
+                                }
                             }
                             s->exportStatus = r.ok ? VS_EXPORT_DONE : (r.cancelled ? VS_EXPORT_CANCELLED : VS_EXPORT_FAILED);
                         },
@@ -1454,5 +1564,97 @@ char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_tra
         TransferResult r;
         r.error = e.what();
         return transferJson(r);
+    }
+}
+
+char* vs_recent_projects_json(const char* recent_file, const char* scan_dir, int unfinished_only, int max,
+                              const char* exclude) {
+    try {
+        Json out = Json::array();
+        for (const auto& c : recents::startCards(str(recent_file), str(scan_dir), unfinished_only != 0,
+                                                 static_cast<std::size_t>(std::max(0, max)), str(exclude)))
+            out.push_back(recents::toJson(c));
+        return dup(out.dump());
+    } catch (...) {
+        return dup("[]");
+    }
+}
+
+int vs_recent_touch(const char* recent_file, const char* package_dir) {
+    if (!recent_file || !*recent_file || !package_dir || !*package_dir) return -1;
+    try {
+        recents::RecentList(recent_file).touch(package_dir);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_recent_remove(const char* recent_file, const char* package_dir) {
+    if (!recent_file || !*recent_file || !package_dir) return -1;
+    try {
+        recents::RecentList(recent_file).remove(package_dir);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacity, int* width, int* height) {
+    VideoFrame f;
+    if (!package_dir || !recents::readPoster(package_dir, f)) return 0;
+    if (width) *width = f.width;
+    if (height) *height = f.height;
+    if (!dst) return 1;
+    if (dst_capacity < static_cast<int64_t>(f.rgba.size())) return -1;
+    std::memcpy(dst, f.rgba.data(), f.rgba.size());
+    return 1;
+}
+
+// ---- live preview during a gesture ----
+
+namespace {
+// Shows `edit` (run on a scratch copy) on the preview; the project and history stay as they are.
+void showLive(vs_session* s, const std::function<void(Editor&)>& edit) {
+    auto p = s->editor->preview(edit);
+    if (!p) throw std::runtime_error("edit refused");
+    s->previewEngine().setProject(std::move(p));
+}
+}  // namespace
+
+int vs_live_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const auto values = propertyValues(values_json);
+        const Id id = c.id;
+        const Time src = c.toSource(Time::fromTicks(t));
+        showLive(s, [&](Editor& e) { e.setPropertyAt(id, src, values); });
+    });
+}
+
+int vs_live_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Project& p = s->editor->project();
+        const double W = p.canvas.width, H = p.canvas.height;
+        const Id id = c.id;
+        const Time src = c.toSource(Time::fromTicks(t));
+        showLive(s, [&](Editor& e) { e.setOverlayRegion(id, src, x * W, y * H, w * W, h * H); });
+    });
+}
+
+int vs_live_clip_content(vs_session* s, const char* clip_id, const char* patch_json) {
+    return guard(s, [&] {
+        const Id id = clipOrThrow(s, clip_id).id;
+        const Json patch = Json::parse(str(patch_json));
+        showLive(s, [&](Editor& e) { e.updateClipContent(id, patch); });
+    });
+}
+
+void vs_live_end(vs_session* s) {
+    if (!s) return;
+    try {
+        s->edited();  // back to the project as it is
+    } catch (...) {
     }
 }

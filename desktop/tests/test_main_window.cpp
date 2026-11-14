@@ -2,6 +2,7 @@
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
 #include "raw_sample.hpp"
+#include <cmath>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -33,7 +34,10 @@
 #include "TransitionsPanel.h"
 #include "AnimationBox.h"
 #include "StickerPanel.h"
+#include "OverlayPanel.h"
 #include "TextPanel.h"
+#include "RecentStrip.h"
+#include "VideoFxPanel.h"
 #include <QPlainTextEdit>
 #include <QMimeData>
 
@@ -184,6 +188,39 @@ private slots:
             return qint64(0);
         };
         QVERIFY(bitrate("hevc10") > 0 && bitrate("hevc10") < bitrate("h264"));
+    }
+
+    void videoEffects() {
+        VideoFxPanel* panel = win_->videoFxPanel();
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString clip = QString::fromStdString(v1.clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        // Zoom group first; each thumbnail is drawn.
+        QCOMPARE(panel->group()->currentData().toString(), QString("zoom"));
+        QVERIFY(panel->list()->count() >= 6);
+        QVERIFY(!panel->list()->item(0)->icon().isNull());
+        emit panel->list()->itemClicked(panel->list()->item(0));
+        QCOMPARE(ctrl_->clipVideoFx(clip, "zoom").value("fx").toString(), QString("zoom_in"));
+        // Reflections: water, with the surface line slider; combined with the zoom.
+        panel->group()->setCurrentIndex(panel->group()->findData("reflect"));
+        QListWidgetItem* water = nullptr;
+        for (int i = 0; i < panel->list()->count(); ++i)
+            if (panel->list()->item(i)->data(Qt::UserRole) == "reflect_water") water = panel->list()->item(i);
+        QVERIFY(water);
+        emit panel->list()->itemClicked(water);
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("fx").toString(), QString("reflect_water"));
+        QCOMPARE(ctrl_->clipVideoFx(clip, "zoom").value("fx").toString(), QString("zoom_in"));
+        QVERIFY(panel->line()->isEnabled());
+        panel->line()->setValue(70);
+        panel->amount()->setValue(150);
+        emit panel->line()->sliderReleased();
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("line").toDouble(), 0.7);
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("amount").toDouble(), 1.5);
+        // Remove the group's effect; undo brings it back.
+        panel->clearButton()->click();
+        QVERIFY(ctrl_->clipVideoFx(clip, "reflect").isEmpty());
+        ctrl_->undo();
+        QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("fx").toString(), QString("reflect_water"));
     }
 
     void oneTapLooks() {
@@ -539,9 +576,101 @@ private slots:
         QVERIFY(c && c->value("kind", std::string{}) == "sticker");
         QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
         QVERIFY(sp->animations()->isEnabled());
+        // Resizing follows the mouse live: nothing is edited until release, then one undo step.
+        {
+            const QRectF from = ctrl_->objectCanvasRect();
+            QVERIFY(from.width() > 0);
+            const QRectF to(from.x(), from.y(), from.width() * 2, from.height() * 2);
+            const QString undoBefore = ctrl_->undoLabel();
+            const double sizeBefore = ctrl_->stickerDisplaySize();
+            emit win_->preview()->objectRectChanging(from, to);
+            QCOMPARE(ctrl_->undoLabel(), undoBefore);
+            QCOMPARE(ctrl_->stickerDisplaySize(), sizeBefore);
+            emit win_->preview()->objectRectChanged(from, to);
+            QVERIFY(std::abs(ctrl_->stickerDisplaySize() - sizeBefore * 2) < 1);
+            // The size slider shows the size as seen (content size x scale).
+            auto* slider = sp->findChild<QSlider*>("stickerSize");
+            QVERIFY(slider);
+            QVERIFY(std::abs(slider->value() - sizeBefore * 2) <= 1);
+            // Slider dragging is live too; release commits.
+            const QString undoScaled = ctrl_->undoLabel();
+            const auto contentBefore = *ctrl_->selectedContent();
+            ctrl_->setStickerDisplaySize(300, true);
+            QVERIFY(*ctrl_->selectedContent() == contentBefore);
+            ctrl_->setStickerDisplaySize(300, false);
+            QVERIFY(std::abs(ctrl_->stickerDisplaySize() - 300) < 2);
+            ctrl_->undo();
+            ctrl_->undo();
+            QCOMPARE(ctrl_->stickerDisplaySize(), sizeBefore);
+            (void)undoScaled;
+        }
+        // Overlays: snow over the whole frame from the playhead, then only the top-left quarter.
+        OverlayPanel* op = win_->overlayPanel();
+        QVERIFY(op->list()->count() >= 20);
+        QListWidgetItem* snow = nullptr;
+        for (int i = 0; i < op->list()->count(); ++i)
+            if (op->list()->item(i)->data(Qt::UserRole) == "snow") snow = op->list()->item(i);
+        QVERIFY(snow && !snow->icon().isNull());
+        emit op->list()->itemClicked(snow);
+        const QString ov = ctrl_->selectedClip();
+        QVERIFY(ctrl_->selectedContent() && ctrl_->selectedContent()->value("kind", std::string{}) == "overlay");
+        QVERIFY(win_->findChild<QDockWidget*>("overlays")->isVisible());
+        QVERIFY(op->settings()->isVisibleTo(op));
+        QVERIFY(win_->timeline()->clipLabel(ov).contains(QString::fromUtf8("Tuyết rơi")));
+        QRectF full = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(full.x()) < 1e-6 && std::abs(full.width() - 1) < 1e-6 && std::abs(full.height() - 1) < 1e-6);
+        ctrl_->setObjectCanvasRect(full, QRectF(0, 0, 0.5, 0.4));
+        QRectF part = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(part.width() - 0.5) < 1e-6 && std::abs(part.height() - 0.4) < 1e-6 && std::abs(part.x()) < 1e-6);
+        op->slider("density")->setValue(200);
+        QCOMPARE(ctrl_->selectedContent()->value("density", 0.0), 2.0);
+        op->slider("fade")->setValue(0);
+        QCOMPARE(QString::fromStdString((*ctrl_->selectedContent())["in"].value("type", std::string("x"))), QString());
+        op->fullFrameButton()->click();
+        full = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(full.width() - 1) < 1e-6 && std::abs(full.y()) < 1e-6);
         // Everything undoes back to before.
         while (int(ctrl_->project()->tracks.size()) > tracksBefore) ctrl_->undo();
         QVERIFY(!ctrl_->project()->findClip(text.toStdString()));
+    }
+
+    void recentProjectsStrip() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        ctrl_->setRecentFile(dir.filePath("recent.json"));
+        // Nothing saved yet: no strip.
+        win_->showRecentProjects();
+        QVERIFY(!win_->recentStrip()->shown());
+        // Two saved projects, then a new one open: both are listed, newest first, with a poster.
+        ctrl_->saveProject(QUrl::fromLocalFile(dir.filePath("A.vstudio")));
+        ctrl_->saveProject(QUrl::fromLocalFile(dir.filePath("B.vstudio")));
+        ctrl_->newProject("Mới", 1920, 1080, 30);
+        auto cards = ctrl_->recentProjects(true);
+        QCOMPARE(cards.size(), 2);
+        QVERIFY(cards[0].toMap().value("path").toString().endsWith("B.vstudio"));
+        QCOMPARE(cards[0].toMap().value("clips").toInt(), 6);
+        win_->showRecentProjects();
+        RecentStrip* strip = win_->recentStrip();
+        QVERIFY(strip->shown());
+        QCOMPARE(strip->cardCount(), 2);
+        QTest::qWait(400);  // slid in, at the bottom of the window
+        QVERIFY(strip->isVisible());
+        QVERIFY(strip->geometry().bottom() <= win_->height());
+        QVERIFY(strip->geometry().bottom() > win_->height() - 60);
+        // Clicking a card opens it; the strip slides away; the open project is not listed.
+        emit strip->openRequested(dir.filePath("A.vstudio"));
+        QVERIFY(!strip->shown());
+        QCOMPARE(ctrl_->packageDir(), dir.filePath("A.vstudio"));
+        QTest::qWait(350);
+        QVERIFY(!strip->isVisible());
+        cards = ctrl_->recentProjects(true);
+        QCOMPARE(cards.size(), 1);
+        // Forgetting a project takes it off the list.
+        ctrl_->forgetRecent(dir.filePath("B.vstudio"));
+        QCOMPARE(ctrl_->recentProjects(false).size(), 0);
+        QCOMPARE(RecentStrip::ago(1000, 1030), QString("Vừa xong"));
+        QCOMPARE(RecentStrip::ago(1000, 1000 + 7200), QString("2 giờ trước"));
+        QCOMPARE(RecentStrip::length(83), QString("1:23"));
     }
 
     void layoutResets() {

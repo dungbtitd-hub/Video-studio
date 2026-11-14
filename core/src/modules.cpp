@@ -1,4 +1,5 @@
 #include "vstudio/modules.hpp"
+#include "vstudio/video_fx.hpp"
 
 #include "vstudio/generators.hpp"
 
@@ -234,6 +235,7 @@ void registerBuiltinModules(ModuleRegistry& r) {
     r.add<IVideoEffect>({.id = "builtin.grayscale", .displayName = "Grayscale", .capabilities = {"effect.color"}},
                         [] { return std::make_shared<Grayscale>(); });
     registerGeneratorModules(r);
+    registerVideoFxModules(r);
 }
 
 void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Time localTime,
@@ -254,6 +256,8 @@ void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Ti
             if (!resourceBase.empty() && params.is_object()) params["base"] = resourceBase;
             // Source time, for effects with their own keyframes (covers following a subject).
             if (params.is_object()) params["source_time"] = (clip.sourceIn + localTime).ticks();
+            // Clip length, for effects that run over the whole clip (slow zoom, slow tilt).
+            if (params.is_object()) params["clip_length"] = clip.sourceDuration().seconds();
             effect->apply(frame, params, localTime);
         } catch (const std::exception& ex) {
             if (warnings) warnings->push_back("effect " + type + " failed: " + ex.what());

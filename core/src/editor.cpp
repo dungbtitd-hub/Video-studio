@@ -1,4 +1,5 @@
 #include "vstudio/editor.hpp"
+#include "vstudio/video_fx.hpp"
 
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
@@ -304,35 +305,72 @@ void Editor::clearKeyframes(const Id& clipId, kf::Group group) {
     });
 }
 
+namespace {
+
+// What setPropertyAt changes: the static transform/volume, or keys where the property is animated.
+struct PropertyChange {
+    Json transform;
+    double volume = 1;
+    bool staticChange = false;
+    std::map<std::string, double> keyed;
+};
+
+PropertyChange propertyChange(const Clip& c, Time sourceTime, const std::map<std::string, double>& values) {
+    PropertyChange ch;
+    ch.transform = c.transform.is_object() ? c.transform : Json::object();
+    ch.volume = c.volume;
+    for (const auto& [prop, v] : values) {
+        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
+        if (keyframeValue(c, prop, sourceTime)) {
+            // Keyed volume multiplies the clip volume: store the factor that gives `v`.
+            ch.keyed[prop] = prop == kf::kVolume ? v / std::max(c.volume, 1e-6) : v;
+        } else if (prop == kf::kVolume) {
+            ch.volume = kf::clampValue(prop, v);
+            ch.staticChange = true;
+        } else {
+            ch.transform[prop] = kf::clampValue(prop, v);
+            ch.staticChange = true;
+        }
+    }
+    return ch;
+}
+
+void applyPropertyChange(Clip& clip, const PropertyChange& ch, Time sourceTime, Time tol) {
+    if (ch.staticChange) {
+        clip.transform = ch.transform;
+        clip.volume = ch.volume;
+    }
+    for (const auto& [prop, v] : ch.keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+}
+
+}  // namespace
+
 void Editor::setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values) {
     const Clip* c = project_.findClip(clipId);
     if (!c) throw EditError("clip not found");
-    std::map<std::string, double> keyed;
-    Json tf = c->transform.is_object() ? c->transform : Json::object();
-    double volume = c->volume;
-    bool staticChange = false;
-    for (const auto& [prop, v] : values) {
-        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
-        if (keyframeValue(*c, prop, sourceTime)) {
-            // Keyed volume multiplies the clip volume: store the factor that gives `v`.
-            keyed[prop] = prop == kf::kVolume ? v / std::max(c->volume, 1e-6) : v;
-        } else if (prop == kf::kVolume) {
-            volume = kf::clampValue(prop, v);
-            staticChange = true;
-        } else {
-            tf[prop] = kf::clampValue(prop, v);
-            staticChange = true;
-        }
-    }
+    const PropertyChange ch = propertyChange(*c, sourceTime, values);
     const Track* tr = project_.trackOfClip(clipId);
     run("Adjust", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        applyPropertyChange(editableClip(p, clipId), ch, sourceTime, keyTolerance(p));
+    });
+}
+
+void Editor::setOverlayRegion(const Id& clipId, Time sourceTime, double x, double y, double w, double h) {
+    const Clip* c = project_.findClip(clipId);
+    if (!c) throw EditError("clip not found");
+    if (!c->generated() || c->content.value("kind", std::string{}) != "overlay") throw EditError("not an overlay");
+    if (w < 1 || h < 1) throw EditError("empty region");
+    const Transform tf = animatedTransform(*c, sourceTime);
+    const double s = std::max(tf.scale, 1e-6);
+    const PropertyChange ch = propertyChange(*c, sourceTime,
+                                             {{kf::kX, x + w / 2 - project_.canvas.width / 2.0},
+                                              {kf::kY, y + h / 2 - project_.canvas.height / 2.0}});
+    const Json patch{{"w", w / s}, {"h", h / s}};
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Overlay region", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
         Clip& clip = editableClip(p, clipId);
-        if (staticChange) {
-            clip.transform = tf;
-            clip.volume = volume;
-        }
-        const Time tol = keyTolerance(p);
-        for (const auto& [prop, v] : keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+        clip.content.merge_patch(patch);
+        applyPropertyChange(clip, ch, sourceTime, keyTolerance(p));
     });
 }
 
@@ -517,6 +555,12 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
     c.sourceIn = Time::zero();
     c.sourceOut = duration.snapToFrame(project_.fps);
     c.content = content;
+    const std::string kind = content.value("kind", std::string{});
+    if (kind == "overlay") {  // covers the whole frame unless a region is given
+        if (!c.content.contains("w")) c.content["w"] = project_.canvas.width;
+        if (!c.content.contains("h")) c.content["h"] = project_.canvas.height;
+        if (!c.content.contains("ref")) c.content["ref"] = project_.canvas.height;
+    }
     const Id id = c.id;
     Id target = trackId;
     std::size_t newIndex = 0;
@@ -541,10 +585,10 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
         if (target.empty()) {
             target = newId();
             newIndex = firstVideo < project_.tracks.size() ? lastVideo + 1 : 0;
-            newName = content.value("kind", std::string{}) == "text" ? "Chữ" : "Sticker";
+            newName = kind == "text" ? "Chữ" : kind == "overlay" ? "Lớp phủ" : "Sticker";
         }
     }
-    run(content.value("kind", std::string{}) == "text" ? "Add text" : "Add sticker", EditCommand::Scope::AllTracks, {},
+    run(kind == "text" ? "Add text" : kind == "overlay" ? "Add overlay" : "Add sticker", EditCommand::Scope::AllTracks, {},
         [=](Project& p) {
             if (!newName.empty()) {
                 Track t;
@@ -561,7 +605,7 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
 void Editor::updateClipContent(const Id& clipId, const Json& patch) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");
-    if (!tr->findClip(clipId)->generated()) throw EditError("not a text or sticker clip");
+    if (!tr->findClip(clipId)->generated()) throw EditError("not a generated clip");
     run("Edit content", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
         Clip& c = editableClip(p, clipId);
         c.content.merge_patch(patch);
@@ -623,6 +667,52 @@ void Editor::setClipEffect(const std::vector<Id>& clipIds, const std::string& ty
     });
 }
 
+void Editor::setClipVideoFx(const std::vector<Id>& clipIds, const std::string& group, const std::string& fxId,
+                            double amount, double speed, double line) {
+    const std::string type = videofx::effectTypeFor(group);
+    if (type.empty()) throw EditError("unknown effect group: " + group);
+    Json params;
+    if (!fxId.empty()) {
+        const videofx::VideoFxInfo* fx = videofx::findVideoFx(fxId);
+        if (!fx || fx->group != group) throw EditError("unknown " + group + " effect: " + fxId);
+        params = {{"fx", fxId}, {"amount", std::clamp(amount, 0.0, 2.0)}, {"speed", std::clamp(speed, 0.25, 4.0)}};
+        if (fx->usesLine && line >= 0) params["line"] = std::clamp(line, 0.1, 0.9);
+    }
+    if (clipIds.empty()) throw EditError("no clip selected");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    Json fx;
+    if (!params.is_null()) fx = Json{{"effect_id", newId()}, {"type", type}, {"enabled", true}, {"params", params}};
+    run(fx.is_null() ? "Remove video effect" : "Video effect", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        // Geometry last, in a fixed order, so colour and covers stay on their subject.
+        static const std::vector<std::string> order = {videofx::kZoomEffect, videofx::kRotateEffect,
+                                                       videofx::kReflectEffect};
+        auto rank = [&](const Json& e) {
+            return std::find(order.begin(), order.end(), e.value("type", std::string{})) - order.begin();
+        };
+        for (const Id& c : clipIds) {
+            Clip* clip = p.trackOfClip(c)->findClip(c);
+            Json others = Json::array(), geo = Json::array();
+            if (clip->effects.is_array())
+                for (const auto& e : clip->effects) {
+                    if (!e.is_object()) continue;
+                    const std::string t = e.value("type", std::string{});
+                    if (t == type) continue;  // replaced (or removed)
+                    (rank(e) < static_cast<std::ptrdiff_t>(order.size()) ? geo : others).push_back(e);
+                }
+            if (!fx.is_null()) geo.push_back(fx);
+            std::stable_sort(geo.begin(), geo.end(), [&](const Json& x, const Json& y) { return rank(x) < rank(y); });
+            for (auto& e : geo) others.push_back(e);
+            clip->effects = std::move(others);
+        }
+    });
+}
+
 void Editor::setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength) {
     const ColorLook* look = lookId.empty() ? nullptr : findColorLook(lookId);
     if (!lookId.empty() && !look) throw EditError("unknown look: " + lookId);
@@ -674,6 +764,16 @@ void Editor::setClipGrade(const std::vector<Id>& clipIds, const Json& params) {
 
 bool Editor::undo() { return history_.undo(project_); }
 bool Editor::redo() { return history_.redo(project_); }
+
+std::shared_ptr<const Project> Editor::preview(const std::function<void(Editor&)>& edit) const {
+    Editor scratch(project_);
+    try {
+        edit(scratch);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+    return std::make_shared<const Project>(std::move(scratch.project_));
+}
 
 std::shared_ptr<const Project> Editor::snapshot() {
     if (!snapshot_ || snapshotRevision_ != history_.revision()) {

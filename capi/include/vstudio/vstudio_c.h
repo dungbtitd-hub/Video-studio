@@ -75,6 +75,16 @@ VS_API int vs_ripple_delete(vs_session* s, const char* clip_id);
 VS_API char* vs_looks_json(void);
 VS_API int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_id, double strength);
 VS_API int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height);
+/* Video effects (video_fx.hpp): zoom, rotate, reflection. vs_video_fx_json: [{"id","name","group",
+ * "groupName","animated","usesLine"}]; groups "zoom", "rotate", "reflect", one effect of each per clip.
+ * vs_set_clip_video_fx: fx_id "" removes the group's effect; amount 0..2, speed 0.25..4, line 0.1..0.9
+ * (reflections, < 0 = default); one undo step. vs_video_fx_icon: the effect at `seconds` on `picture`
+ * (RGBA, picture_w x picture_h; NULL = a built-in landscape) into opaque RGBA out. */
+VS_API char* vs_video_fx_json(void);
+VS_API int vs_set_clip_video_fx(vs_session* s, const char* clip_ids_json, const char* group, const char* fx_id,
+                                double amount, double speed, double line);
+VS_API int vs_video_fx_icon(const char* fx_id, double seconds, const uint8_t* picture, int picture_w, int picture_h,
+                            uint8_t* out, int width, int height);
 
 /* ---- Log / HDR input and 3D LUTs (color_space.hpp); undoable ---- */
 VS_API char* vs_log_formats_json(void); /* [{"id","name","vendor"}] */
@@ -188,7 +198,11 @@ VS_API int vs_transition_preview(const char* type, const uint8_t* a, const uint8
  * vs_update_clip_content: JSON merge patch into the clip's content (null removes a key). Undoable.
  * vs_generated_rect: the clip's box on the canvas at a time (0..1 of the frame: x, y, w, h).
  * vs_sticker_icon: draws sticker `id` (its idle motion at `seconds`) into transparent RGBA out.
- * vs_content_preview: draws content at `local` seconds of a clip lasting `length`, fitted into out. */
+ * vs_content_preview: draws content at `local` seconds of a clip lasting `length`, fitted into out.
+ * Overlay effects (overlays.hpp: snow, rain, confetti, light leaks...) are generated clips too, kind
+ * "overlay": vs_overlays_json: [{"id","name","category","tintable"}]; vs_default_overlay_json: content
+ * covering the whole frame (vs_add_generated_clip sizes it to the canvas); its "w"/"h" (canvas px) set
+ * the region it covers. vs_overlay_icon: a thumbnail over a dark backdrop (opaque RGBA). */
 VS_API char* vs_fonts_json(void);
 VS_API int vs_register_font(const char* id, const char* name, const uint8_t* bytes, int64_t size);
 VS_API char* vs_text_animations_json(void);
@@ -203,6 +217,12 @@ VS_API int vs_generated_rect(vs_session* s, const char* clip_id, int64_t timelin
 VS_API int vs_sticker_icon(const char* sticker_id, double seconds, uint8_t* out, int width, int height);
 VS_API int vs_content_preview(const char* content_json, double local, double length, uint8_t* out, int width,
                               int height);
+VS_API char* vs_overlays_json(void);
+VS_API char* vs_default_overlay_json(const char* overlay_id);
+VS_API int vs_overlay_icon(const char* overlay_id, double seconds, uint8_t* out, int width, int height);
+/* Sets the region an overlay covers (0..1 of the frame) as seen at timeline_time. One undo step. */
+VS_API int vs_set_overlay_region(vs_session* s, const char* clip_id, int64_t timeline_time, double x, double y,
+                                 double w, double h);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);
@@ -289,6 +309,33 @@ VS_API char* vs_transfer_pack(vs_session* s, const char* out_file, vs_transfer_p
 /* Session-free: unpacks into dest_root/<name>.vstudio (new name if taken) and dest_root/media/. */
 VS_API char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_transfer_progress progress,
                                 void* user);
+
+/* ---- live preview during a gesture (corner drag, pinch, slider) ----
+ * Each vs_live_* call shows the result of the matching edit (vs_set_property_at, vs_set_overlay_region,
+ * vs_update_clip_content) on the preview right away, without changing the project or the undo
+ * history. At the end of the gesture make the real edit (one undo step), or call vs_live_end to drop
+ * the preview (cancelled gesture). Any real edit replaces the live preview. */
+VS_API int vs_live_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json);
+VS_API int vs_live_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w,
+                                  double h);
+VS_API int vs_live_clip_content(vs_session* s, const char* clip_id, const char* patch_json);
+VS_API void vs_live_end(vs_session* s);
+
+/* ---- recent projects (the start screen's "continue" strip) ----
+ * vs_save also writes a small card (name, length, clips) and a poster of the current preview frame into
+ * the package, and a successful export marks the exported content, so these calls are instant: they read
+ * small files only, never media. Session-free.
+ * vs_recent_projects_json: [{"path","name","savedAt" (unix s),"duration" (s),"clips","width","height",
+ * "exported","hasPoster"}] from the recent-list file and/or every package in scan_dir (either may be NULL),
+ * newest first. unfinished_only keeps projects changed since their last export; exclude (the open project,
+ * may be NULL) is left out.
+ * vs_recent_touch / vs_recent_remove: put a package first in / take it out of the recent-list file.
+ * vs_project_poster: the poster as RGBA8. 1 = copied (dst NULL: only sizes), 0 = none, -1 = dst too small. */
+VS_API char* vs_recent_projects_json(const char* recent_file, const char* scan_dir, int unfinished_only, int max,
+                                     const char* exclude);
+VS_API int vs_recent_touch(const char* recent_file, const char* package_dir);
+VS_API int vs_recent_remove(const char* recent_file, const char* package_dir);
+VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacity, int* width, int* height);
 
 #ifdef __cplusplus
 }
