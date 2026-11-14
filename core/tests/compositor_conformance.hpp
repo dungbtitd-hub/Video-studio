@@ -29,7 +29,8 @@ using CompositorFactory = std::function<std::shared_ptr<vstudio::ICompositor>()>
 namespace compconf {
 using namespace vstudio;
 
-inline std::shared_ptr<const VideoFrame> pattern(int w, int h, std::uint32_t seed, bool alpha) {
+// wrap: the red and green ramps wrap from 255 to 0 (a hard edge). Without it they stay inside one half of the range.
+inline std::shared_ptr<const VideoFrame> pattern(int w, int h, std::uint32_t seed, bool alpha, bool wrap = true) {
     auto f = std::make_shared<VideoFrame>();
     f->allocate(w, h);
     std::mt19937 rng(seed);
@@ -38,8 +39,13 @@ inline std::shared_ptr<const VideoFrame> pattern(int w, int h, std::uint32_t see
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
             std::uint8_t* p = f->rgba.data() + (static_cast<std::size_t>(y) * w + x) * 4;
-            p[0] = static_cast<std::uint8_t>((r0 + x * 255 / std::max(1, w - 1)) & 255);
-            p[1] = static_cast<std::uint8_t>((g0 + y * 255 / std::max(1, h - 1)) & 255);
+            if (wrap) {
+                p[0] = static_cast<std::uint8_t>((r0 + x * 255 / std::max(1, w - 1)) & 255);
+                p[1] = static_cast<std::uint8_t>((g0 + y * 255 / std::max(1, h - 1)) & 255);
+            } else {
+                p[0] = static_cast<std::uint8_t>(r0 / 2 + x * 127 / std::max(1, w - 1));
+                p[1] = static_cast<std::uint8_t>(g0 / 2 + y * 127 / std::max(1, h - 1));
+            }
             p[2] = static_cast<std::uint8_t>((b0 + int(rng() % 32)) & 255);
             p[3] = alpha ? static_cast<std::uint8_t>(128 + (x + y) % 128) : 255;
         }
@@ -250,7 +256,9 @@ struct CompositorSuite {
                         CHECK(lk != nullptr);
                         Json lp = lk->params;
                         if (variant == 2) lp["strength"] = 0.6;
-                        auto src = pattern(320, 180, 13, false);
+                        // A scaled layer is sampled first and then given its look, where the CPU looks every texel
+                        // first. On a hard 255->0 edge those differ by design, so the scaled case uses ramps without one.
+                        auto src = pattern(320, 180, 13, false, variant != 2);
                         if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
                         CompositeLayer l{src, {}, gpuGrade(variant == 1 ? grade : Json(), lp)};
                         if (variant == 2) {
@@ -276,6 +284,9 @@ struct CompositorSuite {
             for (int deep = 0; deep < 2; ++deep)
                 for (const auto& kp : keys)
                     for (int withLook = 0; withLook < 2; ++withLook) {
+                        // The CPU rounds the look to 8 bits before keying; the shader keeps floats. A hard key edge
+                        // (smoothness 0.1) turns that rounding into alpha steps, so "+ look" uses the softer key.
+                        if (withLook && kp.value("smoothness", 0.0) < 0.3) continue;
                         auto src = pattern(320, 180, 17, false);
                         if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
                         CompositeLayer l{src, {}, gpuGrade(Json(), withLook ? findColorLook("vivid")->params : Json(), kp)};
