@@ -1565,6 +1565,51 @@ TEST("tracker: follows a moving logo frame by frame, then few keys describe it")
     }
 }
 
+TEST("tracker: text follows a moving object in the video below; one undo step") {
+    struct MovingBackend final : IMediaBackend {
+        std::string name() const override { return "moving"; }
+        std::optional<ProbeResult> probe(const std::string& p, std::string* e) override { return fake::Backend().probe(p, e); }
+        std::unique_ptr<IMediaDecoder> createDecoder() override { return std::make_unique<MovingBoxDecoder>(); }
+        std::unique_ptr<IMediaEncoder> createEncoder() override { return nullptr; }
+    };
+    Fixture f;
+    MediaAsset a;
+    a.id = "M";
+    a.uri = "synthetic:4:320x180";
+    a.type = MediaType::Video;
+    a.duration = sec(4);
+    a.width = 320;
+    a.height = 180;
+    a.fps = {30, 1};
+    a.hasVideo = true;
+    const Id asset = f.ed.addAsset(a);
+    const Id video = f.ed.appendClip(f.v1, asset, sec(0), sec(3));
+    const Id text = f.ed.addGeneratedClip(Json{{"kind", "text"}, {"text", "Tên"}}, sec(0), sec(3));
+    CHECK_EQ(followTargetAt(f.ed.project(), text, sec(1)), video);
+    MediaPool pool(std::make_shared<MovingBackend>(), "");
+    // The checker box starts at (40, 50) px, 32 px wide, and moves 60 px/s right, 20 px/s down.
+    const FollowTrack ft = trackFollow(f.ed.project(), pool, text, video, TrackBox{40.0 / 320, 50.0 / 180, 32.0 / 320, 32.0 / 180},
+                                       sec(0), sec(2), false);
+    CHECK(ft.result.error.empty());
+    CHECK(ft.keys.size() >= 2u);
+    f.ed.setFollowTrack(text, ft.keys);
+    const Clip& c = *f.ed.project().findClip(text);
+    // Canvas 1280x720 shows the 320x180 source 4x: the text keeps its offset from the object.
+    const Transform at = animatedTransform(c, c.toSource(sec(1.5)));
+    CHECK(std::abs(at.x - 360) < 16);
+    CHECK(std::abs(at.y - 120) < 16);
+    const Transform start = animatedTransform(c, c.toSource(sec(0)));
+    CHECK(std::abs(start.x) < 4 && std::abs(start.y) < 4);
+    CHECK(f.ed.undo());
+    CHECK(!f.ed.project().findClip(text)->keyframes.contains(kf::kX) ||
+          f.ed.project().findClip(text)->keyframes[kf::kX].empty());
+    // Following the size too adds scale keys.
+    const FollowTrack fs = trackFollow(f.ed.project(), pool, text, video, TrackBox{40.0 / 320, 50.0 / 180, 32.0 / 320, 32.0 / 180},
+                                       sec(0), sec(1), true);
+    CHECK(!fs.keys.empty() && fs.keys.front().second.count(kf::kScale) == 1);
+    CHECK(!trackFollow(f.ed.project(), pool, text, "nope", TrackBox{0.1, 0.1, 0.1, 0.1}, sec(0), sec(1), false).result.error.empty());
+}
+
 // ------------------------------------------------------------------ transitions
 
 namespace {

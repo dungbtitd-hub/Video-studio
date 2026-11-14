@@ -186,6 +186,11 @@ public:
     // Follows the subject from the playhead to the clip's end (background job, one undo step).
     void trackCover();
     void cancelTrack();
+    // The selected clip (text, sticker, picture-in-picture) follows the object it sits on in the
+    // video below, from the playhead to its end; `withSize` also follows how big the object gets.
+    // Uses the same background job and progress as cover tracking (trackFinished at the end).
+    void followMotion(bool withSize = false);
+    [[nodiscard]] bool canFollowMotion() const;
     [[nodiscard]] bool tracking() const { return tracking_; }
     [[nodiscard]] double trackProgress() const { return trackProgress_; }
 

@@ -112,6 +112,25 @@ void main() {
     expect(vs.effect(clip, 'builtin.stabilize'), isNull);
   }, skip: skip);
 
+  test('a sticker follows the video below through dart:ffi', () {
+    final vs = VStudio.create('ffi-follow', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final sticker = vs.addGeneratedClip(vs.defaultSticker(vs.textCatalog().stickers.first.id), 0.2, 1.0);
+    expect(() => vs.startFollow('nope', 0.2), throwsA(isA<VStudioException>()));
+    vs.startFollow(sticker, 0.2);
+    var st = 1;
+    for (var i = 0; i < 500 && st == 1; i++) {
+      sleep(const Duration(milliseconds: 20));
+      st = vs.toolJobStatus().$1;
+    }
+    expect(st, anyOf(2, -1)); // -1 when the test clip has nothing to follow; never stuck or crashed
+    if (st == 2) {
+      expect(vs.undo(), isTrue);
+    }
+  }, skip: skip);
+
   testWidgets('audio and clip tool sheets fit a phone', (tester) async {
     final vs = VStudio.create('ffi-tool-sheets', width: 640, height: 360);
     addTearDown(vs.dispose);

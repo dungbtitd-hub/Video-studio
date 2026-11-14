@@ -90,6 +90,9 @@ public:
     // Tracking result: replaces the region keys between the first and last sample
     // with these (linear in between, so the cover moves exactly like the subject).
     void setCoverTrack(const Id& clipId, const Id& effectId, const std::vector<std::pair<Time, std::array<double, 4>>>& boxes);
+    // Writes tracked motion (tracker.hpp trackFollow) as picture keys on a clip: keys of the same
+    // properties inside the tracked span are replaced, the others kept. One undo step.
+    void setFollowTrack(const Id& clipId, const std::vector<std::pair<Time, std::map<std::string, double>>>& keys);
     [[nodiscard]] const Json* coverParams(const Id& clipId, const Id& effectId) const;
 
     // ---- transitions (transitions.hpp); each call is one undo step ----

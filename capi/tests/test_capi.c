@@ -142,6 +142,9 @@ int main(void) {
         r = vs_tool_command(s, "{\"cmd\":\"job_status\"}");
         EXPECT(r && strstr(r, "\"status\":0"));
         vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"start\",\"job\":\"follow\",\"clip\":\"nope\"}");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
         r = vs_tool_command(s, "{\"cmd\":\"set_track_mix\",\"track\":\"nope\",\"pan\":0.5}");
         EXPECT(r && strstr(r, "\"ok\":false"));
         vs_free(r);

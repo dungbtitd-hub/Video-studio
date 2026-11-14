@@ -1920,6 +1920,37 @@ Json toolCommand(vs_session* s, const Json& in) {
         if (s->toolStatus == 1) throw std::runtime_error("another job is running");
         if (!s->media()) throw std::runtime_error("no media module available");
         const Clip c = clip();
+        if (in.at("job").get<std::string>() == "follow") {  // FR-028: a text/sticker follows the video below it
+            const Time from = std::clamp(Time::fromTicks(in.value("at", c.timelineIn.ticks())), c.timelineIn, c.timelineOut());
+            const Id target = followTargetAt(ed.project(), c.id, from);
+            const auto box = target.empty() ? std::nullopt : followStartBox(ed.project(), c.id, target, from);
+            if (!box) throw std::runtime_error("no video under this clip at the playhead");
+            if (!s->toolJobs) s->toolJobs = std::make_unique<JobScheduler>(1);
+            s->toolCancel = false;
+            s->toolProgress = 0.0;
+            s->toolStatus = 1;
+            auto snap = std::make_shared<const Project>(ed.project());
+            const bool size = in.value("size", false);
+            const std::string base = mediaBaseDir(s->packageDir);
+            s->toolJobs->submit("tool", JobPriority::Normal, [s, snap, id = c.id, target, start = *box, from, size, base](const CancelToken&) {
+                MediaPool pool(s->backend, base);
+                FollowTrack r = trackFollow(*snap, pool, id, target, start, from, snap->findClip(id)->timelineOut(), size,
+                                            [s](double p) {
+                                                s->toolProgress = p;
+                                                return !s->toolCancel.load();
+                                            });
+                std::function<void(Editor&)> apply;
+                std::string err = r.result.error;
+                if (!r.result.cancelled && err.empty() && r.keys.size() >= 2)
+                    apply = [id, keys = std::move(r.keys)](Editor& e) { e.setFollowTrack(id, keys); };
+                else if (err.empty() && !r.result.cancelled) err = "could not follow the object";
+                std::lock_guard lk(s->toolMu);
+                s->toolApply = apply;
+                s->toolError = err;
+                s->toolStatus = s->toolCancel ? -2 : (apply ? 3 : -1);
+            });
+            return out;
+        }
         const MediaAsset* a = ed.project().findAsset(c.assetId);
         if (!a) throw std::runtime_error("clip has no media");
         const MediaAsset asset = *a;

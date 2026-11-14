@@ -8,6 +8,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -86,5 +87,28 @@ struct CoverTrack {
 };
 CoverTrack trackCoverInClip(const Project& project, MediaPool& pool, const Id& clipId, const Id& coverId,
                             Time fromTimeline, Time toTimeline, const std::function<bool(double)>& progress = {});
+
+// Makes a clip (text, sticker, another video) follow an object in a video clip: tracks the
+// region `start` (0..1 of the TARGET's source frame) in `targetClipId` from `fromTimeline`
+// towards `toTimeline` (both clips must be on screen) and turns the motion into position keys
+// (and size keys when `followScale`) for the follower, keeping where it sits relative to the
+// object at the start. Keys: follower source time -> {"x", "y"[, "scale"]}, for
+// Editor::setFollowTrack.
+struct FollowTrack {
+    TrackResult result;
+    std::vector<std::pair<Time, std::map<std::string, double>>> keys;
+};
+FollowTrack trackFollow(const Project& project, MediaPool& pool, const Id& followerId, const Id& targetClipId, TrackBox start,
+                        Time fromTimeline, Time toTimeline, bool followScale,
+                        const std::function<bool(double)>& progress = {});
+
+// The object to follow when none is drawn: a box of `size` (0..1 of the target's smaller side)
+// centred where the follower sits on screen at `t`, in the target's source frame. Users put the
+// text or sticker on the object, then start following. Nothing when the target has no picture.
+std::optional<TrackBox> followStartBox(const Project& project, const Id& followerId, const Id& targetClipId, Time t,
+                                       double size = 0.14);
+
+// The video clip under `followerId` at timeline time `t` (the topmost one below it), or "".
+Id followTargetAt(const Project& project, const Id& followerId, Time t);
 
 }  // namespace vstudio

@@ -3,6 +3,7 @@
 #include "vstudio/video_fx.hpp"
 
 #include <cmath>
+#include <set>
 #include <limits>
 
 #include "vstudio/color_space.hpp"
@@ -497,6 +498,33 @@ void Editor::setCoverTrack(const Id& clipId, const Id& effectId,
             p["anim"][props[k]] = kept;
             for (const auto& [t, box] : boxes)
                 putKeyIn(p["anim"], props[k], Keyframe{t, clampCover(props[k], box[static_cast<std::size_t>(k)]), Ease::Linear}, tol);
+        }
+    });
+}
+
+void Editor::setFollowTrack(const Id& clipId, const std::vector<std::pair<Time, std::map<std::string, double>>>& keys) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    if (keys.empty()) return;
+    run("Follow motion", EditCommand::Scope::Tracks, {tr->id}, [=](Project& pr) {
+        Clip& c = editableClip(pr, clipId);
+        if (!c.keyframes.is_object()) c.keyframes = Json::object();
+        const Time a = keys.front().first, b = keys.back().first, tol = keyTolerance(pr);
+        std::set<std::string> props;
+        for (const auto& [t, v] : keys)
+            for (const auto& [name, _] : v) props.insert(name);
+        for (const auto& name : props) {
+            if (!kf::isProperty(name)) continue;
+            Json kept = Json::array();
+            if (c.keyframes[name].is_array())
+                for (const auto& j : c.keyframes[name]) {
+                    const Time t = Time::fromTicks(j.value("t", std::int64_t{0}));
+                    if (t < a - tol || t > b + tol) kept.push_back(j);
+                }
+            c.keyframes[name] = kept;
+            for (const auto& [t, v] : keys)
+                if (auto it = v.find(name); it != v.end())
+                    putKeyIn(c.keyframes, name.c_str(), Keyframe{t, kf::clampValue(name, it->second), Ease::Linear}, tol);
         }
     });
 }

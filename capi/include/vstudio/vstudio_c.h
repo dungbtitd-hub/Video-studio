@@ -399,6 +399,8 @@ VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_
  *   guess_key_color                             -> {"color": "#rrggbb"} from the last preview frame
  *   start {job: "noise"|"stabilize", clip, value (amount|strength)}; job_status -> {"status","progress",
  *     "error"} (0 idle, 1 running, 2 done and applied as one undo step, -1 failed, -2 cancelled); job_cancel
+ *   start {job: "follow", clip, at (ticks), size?}  a text/sticker follows the object under it in the video
+ *     below, from `at` to the clip's end: x/y (and scale with size) keys, one undo step
  *   stabilize_strength {clip, strength}         re-smooths without measuring again */
 VS_API char* vs_tool_command(vs_session* s, const char* command_json);
 

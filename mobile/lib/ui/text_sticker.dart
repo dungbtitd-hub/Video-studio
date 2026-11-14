@@ -244,10 +244,13 @@ const textSwatches = [
 
 /// The text tool: what it says, its look, how it comes and goes.
 class TextSheet extends StatefulWidget {
-  const TextSheet({super.key, required this.vs, required this.content, required this.onPatch});
+  const TextSheet({super.key, required this.vs, required this.content, required this.onPatch, this.follow});
   final VStudio vs;
   final Map<String, dynamic> content;
   final ValueChanged<Map<String, dynamic>> onPatch; // one undo step each
+
+  /// Shown under the animations: "Bám theo đối tượng" (FR-028).
+  final Widget? follow;
 
   @override
   State<TextSheet> createState() => _TextSheetState();
@@ -471,7 +474,11 @@ class _TextSheetState extends State<TextSheet> {
         children: [
           _textTab(),
           _styleTab(),
-          SingleChildScrollView(child: AnimationPicker(vs: widget.vs, content: _c, onPatch: _patch)),
+          SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            AnimationPicker(vs: widget.vs, content: _c, onPatch: _patch),
+            if (widget.follow != null) ...[const SizedBox(height: 8), widget.follow!],
+          ])),
         ],
       );
 }
@@ -519,7 +526,8 @@ class StickerSheet extends StatefulWidget {
       required this.onPick,
       required this.onPatch,
       this.onLive,
-      this.scale});
+      this.scale,
+      this.follow});
   final VStudio vs;
   final Map<String, dynamic>? content; // the selected sticker, if any
   final Map<String, dynamic>? Function(String stickerId) onPick; // returns the new sticker's content
@@ -530,6 +538,9 @@ class StickerSheet extends StatefulWidget {
 
   /// The sticker's scale at the playhead (pinch / corner drag), so "Cỡ" shows the size as seen.
   final double Function()? scale;
+
+  /// Shown under the animations: "Bám theo đối tượng" (FR-028).
+  final Widget? follow;
 
   @override
   State<StickerSheet> createState() => _StickerSheetState();
@@ -652,6 +663,7 @@ class _StickerSheetState extends State<StickerSheet> {
           ),
         ]),
         AnimationPicker(vs: widget.vs, content: c, onPatch: _patch),
+        if (widget.follow != null) ...[const SizedBox(height: 8), widget.follow!],
       ]),
     );
   }

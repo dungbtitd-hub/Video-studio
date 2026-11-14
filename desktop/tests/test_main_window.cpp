@@ -707,6 +707,19 @@ private slots:
         QVERIFY(c && c->value("kind", std::string{}) == "sticker");
         QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
         QVERIFY(sp->animations()->isEnabled());
+        // Follow motion (FR-028): runs in the background and reports back. The synthetic project has no
+        // media files, so here it only fails cleanly, without an edit; the tracking itself is tested in core.
+        {
+            QVERIFY(ctrl_->canFollowMotion());
+            QVERIFY(sp->animations()->followButton()->isEnabled());
+            const QString undoBefore = ctrl_->undoLabel();
+            sp->animations()->followButton()->click();
+            QVERIFY(ctrl_->tracking());
+            QTRY_VERIFY_WITH_TIMEOUT(!ctrl_->tracking(), 20000);
+            QVERIFY(!ctrl_->status().isEmpty());
+            QCOMPARE(ctrl_->undoLabel(), undoBefore);
+            QCOMPARE(sp->animations()->followButton()->text(), QString::fromUtf8("Bám theo đối tượng"));
+        }
         // Resizing follows the mouse live: nothing is edited until release, then one undo step.
         {
             const QRectF from = ctrl_->objectCanvasRect();

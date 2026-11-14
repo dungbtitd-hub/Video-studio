@@ -19,6 +19,7 @@ import 'core/vstudio.dart';
 import 'ui/audio_sheet.dart';
 import 'ui/clip_tools_sheet.dart';
 import 'ui/cover_panel.dart';
+import 'ui/follow_button.dart';
 import 'ui/grade_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
@@ -624,7 +625,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       backgroundColor: VsColors.panel,
       barrierColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => TextSheet(vs: vs, content: clip!.content!, onPatch: (p) => _patchObject(id, p)),
+      builder: (_) => TextSheet(
+        vs: vs,
+        content: clip!.content!,
+        onPatch: (p) => _patchObject(id, p),
+        follow: FollowButton(vs: vs, clipId: () => id, playhead: () => _playhead, onDone: () => _edit((_) {})),
+      ),
     );
   }
 
@@ -663,6 +669,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             return 1.0;
           }
         },
+        follow: FollowButton(vs: vs, clipId: () => target, playhead: () => _playhead, onDone: () => _edit((_) {})),
       ),
     );
   }

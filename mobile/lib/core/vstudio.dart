@@ -1108,6 +1108,11 @@ class VStudio {
   void startToolJob(String job, String clipId, double value) =>
       tool({'cmd': 'start', 'job': job, 'clip': clipId, 'value': value});
 
+  /// FR-028: the text/sticker [clipId] follows the object under it in the video below, from
+  /// [atSeconds] to its end (x/y keys, and scale with [size]); applied by [toolJobStatus], one undo step.
+  void startFollow(String clipId, double atSeconds, {bool size = false}) =>
+      tool({'cmd': 'start', 'job': 'follow', 'clip': clipId, 'at': secondsToTicks(atSeconds), 'size': size});
+
   /// (status, progress, error): 1 running, 2 done (applied, one undo step), -1 failed, -2 cancelled.
   (int, double, String) toolJobStatus() {
     final r = tool({'cmd': 'job_status'});

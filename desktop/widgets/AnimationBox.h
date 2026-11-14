@@ -8,7 +8,9 @@
 
 class EditorController;
 class QComboBox;
+class QCheckBox;
 class QLabel;
+class QPushButton;
 class QSlider;
 class QTimer;
 
@@ -22,6 +24,7 @@ public:
     [[nodiscard]] QComboBox* outBox() const { return out_; }
     [[nodiscard]] QComboBox* loopBox() const { return loop_; }
     [[nodiscard]] QLabel* preview() const { return preview_; }
+    [[nodiscard]] QPushButton* followButton() const { return follow_; }
     // Draws content at `local` seconds of a clip lasting `length` into a w x h image (transparent).
     static QImage render(const vstudio::Json& content, double local, double length, int w, int h);
 
@@ -33,6 +36,8 @@ private:
     QComboBox *in_, *out_, *loop_;
     QSlider *inLen_, *outLen_;
     QLabel* preview_;
+    QPushButton* follow_;
+    QCheckBox* followSize_;
     QTimer* timer_;
     vstudio::Json content_;
     double t_ = 0;
