@@ -74,9 +74,18 @@ Projects store the font id, so the same font must be registered on every device 
 
 ## Stickers
 
-About 250 stickers in 17 groups, all drawn in-house as vectors: Mặt cười, Mạng xã hội, Trái tim, Hoa lá, Sao lấp
+About 340 stickers in 24 groups, all drawn in-house as vectors: Mặt cười, Mạng xã hội, Trái tim, Hoa lá, Sao lấp
 lánh, Thời tiết, Lễ hội, Mũi tên & dấu, Đồ ăn, Động vật, Nhãn khuyến mãi, Chữ hiệu ứng, Vẽ tay, Video & kênh, Thể
-thao & game, Tết & mùa lễ, Du lịch & đời sống. The groups follow what video apps commonly offer.
+thao & game, Tết & mùa lễ, Du lịch & đời sống, Game 8-bit, Thập niên 80, Động vật biểu cảm, Đồ uống & đời sống, Sinh
+nhật, Giáng sinh, Ngày lễ trong năm. The groups follow what video apps commonly offer.
+
+* **Game 8-bit** stickers are drawn on a pixel grid with a 5x7 pixel font (coins, chests, "PRESS START", "K.O.",
+  a counting high score); **Thập niên 80** adds the neon sunset, boombox, cassette and disco ball.
+* **Động vật biểu cảm** are reaction faces (a "wow" cat, a laughing dog, a crying hamster...) built from one head
+  and face kit, so eyes blink, mouths move and tears, hearts or sweat drops play in a loop.
+* **Đồ uống & đời sống** (phin coffee, trà đá, matcha, bánh mì, phở...) and the event groups (birthdays, Christmas,
+  Valentine, 8/3, 20/10, 20/11, 1/6, Trung thu, Halloween, graduation, weddings, New Year, Mother's Day) mix
+  drawings with Vietnamese or English greetings in the bundled fonts.
 
 * **Mạng xã hội** buttons (Đăng ký, Thích, Theo dõi, Chia sẻ, Thả tim, in Vietnamese and English) play a click once:
   a hand taps, the button changes colour and text smoothly, the icon reacts, then it holds. They are generic designs
@@ -84,8 +93,8 @@ thao & game, Tết & mùa lễ, Du lịch & đời sống. The groups follow wha
 * Text inside stickers (labels, comic words, Tết greetings) uses the bundled fonts, so Vietnamese renders the same
   everywhere.
 * Self-drawing stickers (hand-drawn marks, the countdown, the clapper) play once and hold their last frame.
-* The drawing kit shared by the groups is `core/src/sticker_kit.hpp`; new groups go in their own file and register
-  through `kit::Add`.
+* The drawing kit shared by the groups is `core/src/sticker_kit.hpp`; new groups go in their own file (`stickers_more.cpp`,
+  `stickers_extra.cpp`) and register through `kit::Add`.
 
 ## Using it
 

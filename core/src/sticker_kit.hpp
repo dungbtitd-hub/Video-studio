@@ -136,5 +136,7 @@ using Add = std::function<void(const char*, const char*, const char*, std::funct
 // The groups added after the first ones (stickers_more.cpp): social first, the rest at the end.
 void addSocialStickers(const Add& add);
 void addMoreStickers(const Add& add);
+// 8-bit game, the 80s, animal reactions, daily life, birthdays, Christmas, the year's celebrations (stickers_extra.cpp).
+void addExtraStickers(const Add& add);
 
 }  // namespace vstudio::stickers::kit
