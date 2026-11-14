@@ -9,6 +9,7 @@
 #include "vstudio/clip_tools.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/modules.hpp"
+#include "vstudio/pixel.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
 #include "vtest.hpp"
@@ -256,6 +257,17 @@ TEST("clip tools: chroma key makes green transparent and keeps the subject") {
     CHECK(fr.rgba[7] < 40);
     CHECK_EQ(int(fr.rgba[11]), 255);  // skin
     CHECK_EQ(int(fr.rgba[15]), 255);  // white
+    // 10-bit / Log sources stay deep through the effects: the key works there too.
+    VideoFrame deep;
+    deep.allocate(4, 1);
+    for (int i = 0; i < 4; ++i) {
+        for (int k = 0; k < 3; ++k) deep.rgba[static_cast<std::size_t>(i * 4 + k)] = px[i][k];
+        deep.rgba[static_cast<std::size_t>(i * 4 + 3)] = 255;
+    }
+    convertFrame(deep, PixelFormat::RGBA16F);
+    cliptools::applyChromaKey(deep, cliptools::defaultChromaKey());
+    CHECK(halfToFloat(deep.half[3]) < 0.01f);
+    CHECK(halfToFloat(deep.half[11]) > 0.99f);
     VideoFrame screen;
     screen.allocate(32, 32);
     for (std::size_t i = 0; i < screen.rgba.size(); i += 4) screen.rgba[i + 1] = 230, screen.rgba[i + 3] = 255;

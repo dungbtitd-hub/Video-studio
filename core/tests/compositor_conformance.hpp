@@ -266,6 +266,28 @@ struct CompositorSuite {
                                     (std::string(deep ? "10-bit " : "8-bit ") + id + " v" + std::to_string(variant)).c_str());
                     }
         });
+        add(name + ": chroma key in the compositor matches the CPU key (alone, after a look, 8/10-bit)", [get] {
+            auto c = get();
+            if (!c || !c->supportsGrade()) return;
+            const Json keys[] = {
+                {{"color", "#00ff00"}, {"similarity", 0.4}, {"smoothness", 0.1}, {"spill", 0.5}},
+                {{"color", "#0047bb"}, {"similarity", 0.3}, {"smoothness", 0.3}, {"spill", 0.0}},
+            };
+            for (int deep = 0; deep < 2; ++deep)
+                for (const auto& kp : keys)
+                    for (int withLook = 0; withLook < 2; ++withLook) {
+                        auto src = pattern(320, 180, 17, false);
+                        if (deep) src = std::make_shared<const VideoFrame>(convertedFrame(*src, PixelFormat::RGBA16F));
+                        CompositeLayer l{src, {}, gpuGrade(Json(), withLook ? findColorLook("vivid")->params : Json(), kp)};
+                        l.transform.x = 16;
+                        VideoFrame out;
+                        out.allocate(320, 180);
+                        std::string err;
+                        CHECK(c->composite(out, {l}, &err));
+                        expectClose(out, reference(320, 180, {l}),
+                                    (std::string(deep ? "10-bit " : "8-bit ") + kp.dump() + (withLook ? " + look" : "")).c_str());
+                    }
+        });
         add(name + ": 1080p, 4 layers (timing)", [get, name] {
             auto c = get();
             if (!c) return;

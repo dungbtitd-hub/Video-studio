@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "detail/parallel.hpp"
+#include "vstudio/clip_tools.hpp"
 #include "vstudio/color_space.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/pixel.hpp"
@@ -417,10 +418,10 @@ void applyColorGrade(VideoFrame& f, const Json& p) {
     });
 }
 
-std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookParams) {
+std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookParams, const Json& keyParams) {
     static std::mutex mu;
     static std::vector<std::pair<std::string, std::shared_ptr<const GpuGrade>>> cache;  // most recent first
-    const std::string key = params.dump() + "|" + lookParams.dump();
+    const std::string key = params.dump() + "|" + lookParams.dump() + "|" + keyParams.dump();
     {
         std::lock_guard lk(mu);
         for (std::size_t i = 0; i < cache.size(); ++i)
@@ -436,6 +437,7 @@ std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookPar
     auto g = std::make_shared<GpuGrade>();
     g->params = params;
     g->lookParams = lookParams;
+    g->keyParams = keyParams;
     constexpr int W = GpuGrade::kTableWidth;
     g->table.assign(static_cast<std::size_t>(W) * GpuGrade::kTableRows * 4, 0.0f);
     for (int x = 0; x < W; ++x) {
@@ -467,6 +469,10 @@ std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookPar
                          pl.qSat, pl.qExp, graded ? 1.0f : 0.0f, 0.0f};
     std::copy(u, u + 16, g->u);
     if (look.active) std::copy(look.u, look.u + 16, g->u + 16);
+    if (!keyParams.is_null()) {
+        const cliptools::KeyGpu k = cliptools::chromaKeyGpu(keyParams);
+        std::copy(k.u, k.u + 8, g->u + 32);
+    }
     std::lock_guard lk(mu);
     cache.insert(cache.begin(), {key, g});
     if (cache.size() > 16) cache.pop_back();

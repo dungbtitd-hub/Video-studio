@@ -35,7 +35,7 @@ cbuffer Layer : register(b0) {
     int2 offset;
     uint graded;
     uint3 pad;
-    float4 g[8];     // grade and look uniforms (GpuGrade::u)
+    float4 g[10];    // grade, look and key uniforms (GpuGrade::u)
 };
 Texture2D<float4> tex : register(t0);
 Texture2D<float4> gradeTab : register(t1);  // R32G32B32A32_FLOAT, 4098 x 3 (GpuGrade::table); Load only
@@ -139,6 +139,21 @@ float3 look(float3 c, float2 pos, float2 sz) {
     return c + (saturate(o) - c) * g[4].y;
 }
 
+// ---- chroma key, last: the same steps as cliptools::applyChromaKey() on the CPU ----
+float4 key(float4 c) {
+    float3 x = saturate(c.rgb);
+    float y = dot(x, float3(0.2126, 0.7152, 0.0722));
+    float2 cbcr = float2((x.b - y) / 1.8556, (x.r - y) / 1.5748);
+    float a = smoothstep(g[9].x, g[9].x + g[9].y + 1e-4, length(cbcr - g[8].xy));
+    float proj = dot(cbcr, g[8].zw);
+    if (g[9].z > 0.0 && proj > 0.0) {
+        float2 n = cbcr - g[9].z * proj * g[8].zw;
+        float r = y + 1.5748 * n.y, b = y + 1.8556 * n.x;
+        x = float3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+    }
+    return float4(saturate(x), c.a * a);
+}
+
 float4 vs_quad(uint vid : SV_VertexID) : SV_Position {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
     return float4(lerp(quad.x, quad.z, t.x), lerp(quad.y, quad.w, t.y), 0.0, 1.0);
@@ -164,6 +179,7 @@ float4 ps_layer(float4 pos : SV_Position) : SV_Target {
     if (graded != 0u) {
         if (g[3].z > 0.5) c.rgb = saturate(grade(c.rgb));
         if (g[4].x > 0.5) c.rgb = look(c.rgb, xyPos, sz);
+        if (g[9].w > 0.5) c = key(c);
     }
     c.a *= opacity;
     return c;
@@ -178,7 +194,7 @@ struct LayerCB {
     std::int32_t offset[2];
     std::uint32_t graded;
     std::uint32_t pad[3];
-    float g[32];
+    float g[40];
 };
 static_assert(sizeof(LayerCB) % 16 == 0, "constant buffer size");
 
@@ -238,7 +254,7 @@ public:
                        {}};
             ID3D11ShaderResourceView* gsrv = nullptr;
             if (l.grade) {
-                std::copy(l.grade->u, l.grade->u + 32, cb.g);
+                std::copy(l.grade->u, l.grade->u + 40, cb.g);
                 gsrv = gradeTexture(l.grade);
                 if (!gsrv) return fail(error, "cannot upload a grade table");
             }

@@ -1,5 +1,6 @@
 #include "vstudio/render.hpp"
 #include "vstudio/audio_fx.hpp"
+#include "vstudio/clip_tools.hpp"
 
 #include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
@@ -325,6 +326,7 @@ CompositeLayer baked(const CompositeLayer& l, bool deepOut) {
     auto f = std::make_shared<VideoFrame>(*l.frame);
     if (l.grade && !l.grade->params.is_null()) applyColorGrade(*f, l.grade->params);
     if (l.grade && !l.grade->lookParams.is_null()) applyColorLook(*f, l.grade->lookParams);
+    if (l.grade && !l.grade->keyParams.is_null()) cliptools::applyChromaKey(*f, l.grade->keyParams);
     if (f->deep() && !deepOut) convertFrame(*f, PixelFormat::RGBA8);  // dither down after grading
     return CompositeLayer{std::move(f), l.transform, nullptr};
 }
@@ -395,8 +397,8 @@ std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const
         }
     }
     const Clip& full = live ? *live : *layer.clip;
-    // A grade and/or a one-tap look at the end of the chain run in the compositor (GPU
-    // shader) when it can: only the effects before them run here, and the frame stays deep.
+    // A grade, a one-tap look and a chroma key at the end of the chain run in the compositor
+    // (GPU shader) when it can: only the effects before them run here, and the frame stays deep.
     std::shared_ptr<const GpuGrade> gpu;
     std::optional<Clip> rest;
     if (!deep_ && full.effects.is_array() && !full.effects.empty() && compositor().supportsGrade()) {
@@ -405,21 +407,24 @@ std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const
             if (full.effects[i].is_object() && full.effects[i].value("enabled", true)) on.push_back(i);
         auto typeAt = [&](std::size_t k) { return full.effects[on[k]].value("type", std::string{}); };
         auto paramsAt = [&](std::size_t k) { return full.effects[on[k]].value("params", Json::object()); };
-        std::vector<int> moved;
-        Json grade, look;
-        if (!on.empty() && typeAt(on.size() - 1) == kColorLookEffect) {
-            look = paramsAt(on.size() - 1);
-            moved.push_back(on.back());
-            if (on.size() >= 2 && typeAt(on.size() - 2) == kColorGradeEffect) {
-                grade = paramsAt(on.size() - 2);
-                moved.push_back(on[on.size() - 2]);
-            }
-        } else if (!on.empty() && typeAt(on.size() - 1) == kColorGradeEffect) {
-            grade = paramsAt(on.size() - 1);
-            moved.push_back(on.back());
+        // The trailing run of [grade] [look] [chroma key] (each optional, in this order).
+        std::vector<int> moved;  // effect indexes, highest first
+        Json grade, look, key;
+        std::size_t k = on.size();
+        if (k > 0 && typeAt(k - 1) == cliptools::kChromaKeyEffect) {
+            key = paramsAt(k - 1);
+            moved.push_back(on[--k]);
+        }
+        if (k > 0 && typeAt(k - 1) == kColorLookEffect) {
+            look = paramsAt(k - 1);
+            moved.push_back(on[--k]);
+        }
+        if (k > 0 && typeAt(k - 1) == kColorGradeEffect) {
+            grade = paramsAt(k - 1);
+            moved.push_back(on[--k]);
         }
         if (!moved.empty()) {
-            gpu = gpuGrade(grade, look);
+            gpu = gpuGrade(grade, look, key);
             rest = full;
             for (int i : moved) rest->effects.erase(rest->effects.begin() + i);  // highest index first
         }

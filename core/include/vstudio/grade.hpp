@@ -68,14 +68,14 @@ std::array<double, 3> wheelToBalance(double angleDeg, double distance);
 void balanceToWheel(const std::array<double, 3>& rgb, double* angleDeg, double* distance);
 
 // The grade in the form GPU compositors run in their shaders (same maths as the CPU
-// effect, from the same tables), optionally followed by a one-tap look (looks.hpp) that
-// directly follows the grade in the clip's effects. `table` is a 3-row RGBA float texture
+// effect, from the same tables), optionally followed by a one-tap look (looks.hpp) and a
+// chroma key (clip_tools.hpp) when those end the clip's effects in that order. `table` is a 3-row RGBA float texture
 // of kTableWidth texels:
 //   row 0, x = 0..4096: tone curve output (r, g, b) for input x/4096 (steps 1-3), x = 4097 guard;
 //   row 1, x = 0..360:  per hue degree: (HSL hue shift in degrees, HSL saturation factor,
 //                       HSL luminance, qualifier hue mask), x = 361 guard;
 //   row 2, x = 0..4096: the look's tone curve (r, g, b) for input x/4096, x = 4097 guard.
-// `u` (8 vec4s): [saturation, toneOn, hslOn, qualOn], [satLo, satHi, lumLo, lumHi],
+// `u` (10 vec4s): [saturation, toneOn, hslOn, qualOn], [satLo, satHi, lumLo, lumHi],
 //   [softness, invert, showMask, qualHueShiftDeg], [qualSatFactor, qualExposureFactor, gradeOn, 0],
 //   then the look's 4 (LookGpu::u): [on, strength, saturation, vibrance], [colourOn, splitOn,
 //   vignette, 0], [shadows rgb, 0], [highlights rgb, 0]. The vignette uses the layer texture's
@@ -85,13 +85,15 @@ struct GpuGrade {
     static constexpr int kTableWidth = 4098;
     static constexpr int kTableRows = 3;
     std::vector<float> table;  // kTableWidth * kTableRows * 4
-    float u[32] = {};
+    float u[40] = {};
     Json params;               // for compositors that grade on the CPU (null: no grade)
     Json lookParams;           // the look after the grade (null: none)
+    Json keyParams;            // the chroma key, last (null: none)
 };
 // Built once per distinct parameter set (small cache), so playback reuses the same
 // object and GPU compositors upload its table once.
-std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookParams = Json());
+std::shared_ptr<const GpuGrade> gpuGrade(const Json& params, const Json& lookParams = Json(),
+                                        const Json& keyParams = Json());
 
 // Returns `effects` (a clip's effect array) with the effect of `type` set to
 // `params` (null removes it). An existing effect keeps its place and id; a new

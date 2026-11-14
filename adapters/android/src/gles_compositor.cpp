@@ -43,7 +43,7 @@ uniform int uExact;
 uniform ivec2 uOffset;
 uniform int uGraded;
 uniform highp sampler2D uGrade;  // RGBA32F, 4098 x 3 (see GpuGrade in grade.hpp); texelFetch only
-uniform vec4 uG[8];
+uniform vec4 uG[10];
 out vec4 color;
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
@@ -145,6 +145,21 @@ vec3 look(vec3 c, vec2 pos) {
     return c + (clamp(o, 0.0, 1.0) - c) * uG[4].y;
 }
 
+// ---- chroma key, last: the same steps as cliptools::applyChromaKey() on the CPU ----
+vec4 key(vec4 c) {
+    vec3 x = clamp(c.rgb, 0.0, 1.0);
+    float y = dot(x, vec3(0.2126, 0.7152, 0.0722));
+    vec2 cbcr = vec2((x.b - y) / 1.8556, (x.r - y) / 1.5748);
+    float a = smoothstep(uG[9].x, uG[9].x + uG[9].y + 1e-4, length(cbcr - uG[8].xy));
+    float proj = dot(cbcr, uG[8].zw);
+    if (uG[9].z > 0.0 && proj > 0.0) {
+        vec2 n = cbcr - uG[9].z * proj * uG[8].zw;
+        float r = y + 1.5748 * n.y, b = y + 1.8556 * n.x;
+        x = vec3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+    }
+    return vec4(clamp(x, 0.0, 1.0), c.a * a);
+}
+
 void main() {
     vec2 p = gl_FragCoord.xy;  // pixel centre (x + 0.5, y + 0.5); y counts from the top row
     if (p.x < uRect.x || p.x >= uRect.z || p.y < uRect.y || p.y >= uRect.w) discard;
@@ -162,6 +177,7 @@ void main() {
     if (uGraded != 0) {
         if (uG[3].z > 0.5) c.rgb = clamp(grade(c.rgb), 0.0, 1.0);
         if (uG[4].x > 0.5) c.rgb = look(c.rgb, pos);
+        if (uG[9].w > 0.5) c = key(c);
     }
     c.a *= uOpacity;
     color = c;
@@ -262,7 +278,7 @@ private:
                 if (g) glBindTexture(GL_TEXTURE_2D, g);
                 glActiveTexture(GL_TEXTURE0);
                 if (!g) return fail(error, "cannot upload a grade table");
-                glUniform4fv(uG_, 8, l.grade->u);
+                glUniform4fv(uG_, 10, l.grade->u);
             }
             glUniform1i(uGraded_, l.grade ? 1 : 0);
             glUniform2i(uOffset_, GLint(std::lround(r.left)), GLint(std::lround(r.top)));

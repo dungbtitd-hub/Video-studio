@@ -31,7 +31,7 @@ struct Quad { float4 rect; };  // NDC x0, y0 (top), x1, y1 (bottom), one pixel l
 // rect: layer in output pixels (left, top, right, bottom). Coverage and texture
 // coordinates come from the pixel centre, exactly as the CPU reference computes
 // them, so edges do not depend on the rasteriser's rules or snapping.
-struct Layer { float4 rect; float opacity; uint exact; int2 offset; uint graded; uint pad0, pad1, pad2; float4 g[8]; };
+struct Layer { float4 rect; float opacity; uint exact; int2 offset; uint graded; uint pad0, pad1, pad2; float4 g[10]; };
 
 vertex VOut vs_quad(uint vid [[vertex_id]], constant Quad& q [[buffer(0)]]) {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
@@ -140,6 +140,21 @@ float3 look(float3 c, float2 pos, float2 sz, texture2d<float> gt, constant float
     return c + (clamp(o, 0.0, 1.0) - c) * g[4].y;
 }
 
+// ---- chroma key, last: the same steps as cliptools::applyChromaKey() on the CPU ----
+float4 key(float4 c, constant float4* g) {
+    float3 x = clamp(c.rgb, 0.0, 1.0);
+    float y = dot(x, float3(0.2126, 0.7152, 0.0722));
+    float2 cbcr = float2((x.b - y) / 1.8556, (x.r - y) / 1.5748);
+    float a = smoothstep(g[9].x, g[9].x + g[9].y + 1e-4, length(cbcr - g[8].xy));
+    float proj = dot(cbcr, g[8].zw);
+    if (g[9].z > 0.0 && proj > 0.0) {
+        float2 n = cbcr - g[9].z * proj * g[8].zw;
+        float r = y + 1.5748 * n.y, b = y + 1.8556 * n.x;
+        x = float3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+    }
+    return float4(clamp(x, 0.0, 1.0), c.a * a);
+}
+
 fragment float4 fs_layer(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                          texture2d<float> gradeTab [[texture(1)]], constant Layer& l [[buffer(0)]]) {
     float2 p = in.pos.xy;  // pixel centre (x + 0.5, y + 0.5)
@@ -160,6 +175,7 @@ fragment float4 fs_layer(VOut in [[stage_in]], texture2d<float> tex [[texture(0)
     if (l.graded != 0u) {
         if (l.g[3].z > 0.5) c.rgb = clamp(grade(c.rgb, gradeTab, l.g), 0.0, 1.0);
         if (l.g[4].x > 0.5) c.rgb = look(c.rgb, pos, sz, gradeTab, l.g);
+        if (l.g[9].w > 0.5) c = key(c, l.g);
     }
     c.a *= l.opacity;
     return c;
@@ -176,9 +192,9 @@ struct LayerU {
     int32_t offset[2];
     uint32_t graded;
     uint32_t pad[3];
-    float g[32];
+    float g[40];
 };
-static_assert(sizeof(LayerU) == 176, "matches the MSL Layer struct");
+static_assert(sizeof(LayerU) == 208, "matches the MSL Layer struct");
 
 class MetalCompositor final : public ICompositor {
 public:
