@@ -3,7 +3,7 @@
 add_library(vstudio_android STATIC src/mediacodec_module.cpp src/gles_compositor.cpp)
 add_library(vstudio::android ALIAS vstudio_android)
 target_include_directories(vstudio_android PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_link_libraries(vstudio_android PUBLIC vstudio::core PRIVATE mediandk log EGL GLESv3)
+target_link_libraries(vstudio_android PUBLIC vstudio::core PRIVATE mediandk jnigraphics log EGL GLESv3)
 target_compile_definitions(vstudio_android PUBLIC VSTUDIO_HAS_ANDROID_MEDIA=1)
 # minSdk is 26: newer NDK calls (AMediaCodec_getName, API 28) are weak and
 # guarded with __builtin_available; the warning makes an unguarded call an error.

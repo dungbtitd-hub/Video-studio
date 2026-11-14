@@ -1,4 +1,6 @@
 #include "vstudio/media_library.hpp"
+#include "vstudio/orientation.hpp"
+#include "vstudio/pixel.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -185,12 +187,15 @@ void MediaLibrary::requestThumbnails(const MediaAsset& a, const std::string& pat
     }
     jobs_.submit("thumbnails " + a.id, JobPriority::Background,
                  [st = st_, a, path, count, height, key](const CancelToken& tok) {
+                     // Thumbnails show the picture upright (the file's rotation applied).
+                     const Orientation orient{assetRotation(a)};
                      const std::string file = cacheFile(st->cacheDir, a, "_" + std::to_string(count) + "x" +
-                                                                             std::to_string(height) + ".thumbs");
+                                                                             std::to_string(height) + orient.key() + ".thumbs");
                      std::shared_ptr<ThumbnailStrip> s = readThumbs(file, count, height);
                      if (!s && !tok.cancelled()) {
-                         auto dec = st->backend ? st->backend->createDecoder() : nullptr;
-                         const int srcW = a.width > 0 ? a.width : 16, srcH = a.height > 0 ? a.height : 9;
+                         auto dec = st->backend ? orientedDecoder(st->backend->createDecoder(), orient) : nullptr;
+                         const auto [dispW, dispH] = displaySize(a);
+                         const int srcW = dispW > 0 ? dispW : 16, srcH = dispH > 0 ? dispH : 9;
                          const int w = std::max(2, static_cast<int>(std::lround(double(height) * srcW / srcH)) & ~1);
                          if (dec) dec->setMaxOutputSize(w, height);
                          std::string err;
@@ -199,15 +204,26 @@ void MediaLibrary::requestThumbnails(const MediaAsset& a, const std::string& pat
                              s->width = w;
                              s->height = height;
                              const bool still = a.type == MediaType::Image || a.duration <= Time::zero();
+                             std::optional<VideoFrame> stillFrame;
                              for (int i = 0; i < count && !tok.cancelled(); ++i) {
                                  // Centre of each of `count` equal slices.
                                  const Time t = still ? Time::zero()
                                                       : Time::fromTicks(a.duration.ticks() / count * i +
                                                                         a.duration.ticks() / count / 2);
-                                 auto f = dec->videoFrameAt(t);
+                                 std::optional<VideoFrame> f;
+                                 if (still && stillFrame) {
+                                     f = stillFrame;  // a photo: decoded once
+                                 } else {
+                                     f = dec->videoFrameAt(t);
+                                     // Decoders that ignore the box (or report another size) are scaled
+                                     // here, so a tile always shows the whole picture.
+                                     if (f && !f->empty()) *f = fitFrame(*f, w, height);
+                                     if (f && f->deep()) convertFrame(*f, PixelFormat::RGBA8);
+                                     if (still) stillFrame = f;
+                                 }
                                  std::vector<std::uint8_t> px(static_cast<std::size_t>(w) * height * 4, 0);
                                  if (f && !f->empty()) {
-                                     // Contain the decoded frame in w x h (decoder already scaled it down).
+                                     // Contain the decoded frame in w x h.
                                      const int ox = (w - std::min(w, f->width)) / 2, oy = (height - std::min(height, f->height)) / 2;
                                      for (int y = 0; y < std::min(height, f->height); ++y)
                                          std::memcpy(px.data() + (static_cast<std::size_t>(y + oy) * w + ox) * 4,

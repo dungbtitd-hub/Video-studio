@@ -19,6 +19,7 @@
 #include "vstudio/history.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
+#include "vstudio/orientation.hpp"
 #include "vstudio/speed_curve.hpp"
 #include "vstudio/subtitles.hpp"
 #include "vstudio/timeline.hpp"
@@ -109,6 +110,12 @@ public:
     // `trackId`, or (empty) on the highest video track above the main one that is free
     // there, creating a new top track when none is. One undo step. Returns the clip id.
     Id addGeneratedClip(const Json& content, Time at, Time duration, const Id& trackId = {});
+    // A text / sticker / overlay clip placed over [start, end) in one step ("Cả video",
+    // "Từ đây đến hết"). Moves it to another lane of its kind (or a new one) when its own
+    // lane is taken there.
+    void setGeneratedClipSpan(const Id& clipId, Time start, Time end);
+    // Rotate (clockwise quarter turns) and flip media clips: orientation.hpp.
+    void setClipOrientation(const std::vector<Id>& clipIds, const Orientation& o);
     // Merges `patch` into the clip's content (JSON merge patch: null removes a key). Undoable.
     void updateClipContent(const Id& clipId, const Json& patch);
     // Sets the region an overlay effect covers to the canvas box {x, y, w, h} (canvas px) as seen

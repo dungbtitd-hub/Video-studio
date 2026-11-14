@@ -6,12 +6,14 @@
 #include <string>
 #include <vector>
 
+#include "vstudio/orientation.hpp"
 #include "vstudio/pixel.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/display.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
@@ -112,6 +114,24 @@ CodecPtr openDecoder(AVStream* st, bool video, std::string* error) {
 
 // ------------------------------------------------------------------ probe
 
+// Clockwise degrees that make the stream upright (0 when it has no display matrix).
+int displayRotation(const AVStream* st) {
+    const std::uint8_t* m = nullptr;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(60, 31, 102)
+    if (const AVPacketSideData* sd = av_packet_side_data_get(st->codecpar->coded_side_data, st->codecpar->nb_coded_side_data,
+                                                             AV_PKT_DATA_DISPLAYMATRIX))
+        if (sd->size >= 9 * sizeof(int32_t)) m = sd->data;
+#else
+    std::size_t size = 0;
+    m = av_stream_get_side_data(st, AV_PKT_DATA_DISPLAYMATRIX, &size);
+    if (size < 9 * sizeof(int32_t)) m = nullptr;
+#endif
+    if (!m) return 0;
+    const double ccw = av_display_rotation_get(reinterpret_cast<const int32_t*>(m));
+    if (std::isnan(ccw)) return 0;
+    return normalizeQuarterTurn(static_cast<int>(std::lround(-ccw)));
+}
+
 std::optional<ProbeResult> probeFile(const std::string& path, std::string* error) {
     FormatPtr fmt = openInput(path, error);
     if (!fmt) return std::nullopt;
@@ -144,6 +164,11 @@ std::optional<ProbeResult> probeFile(const std::string& path, std::string* error
             r.duration = Time::fromTimebase(st->duration, toRational(st->time_base));
         if (r.isStillImage) r.duration = Time::zero();
         if (r.fps.num <= 0) r.fps = {30, 1};
+        // Phones store portrait video as landscape pixels plus a display matrix; JPEG photos
+        // carry an EXIF orientation. The core turns the decoded frames (orientation.hpp).
+        r.rotation = displayRotation(st);
+        if (r.isStillImage && st->codecpar->codec_id == AV_CODEC_ID_MJPEG)
+            if (auto e = jpegExifOrientation(path)) r.rotation = fromExif(*e).rotate;
         if (const AVPixFmtDescriptor* d = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(st->codecpar->format)))
             r.bitDepth = d->comp[0].depth;
         if (st->codecpar->color_trc != AVCOL_TRC_UNSPECIFIED)

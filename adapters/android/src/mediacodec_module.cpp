@@ -1,5 +1,7 @@
 #include "vstudio/android/mediacodec_module.hpp"
 
+#include <android/bitmap.h>
+#include <android/imagedecoder.h>
 #include <android/log.h>
 #include <fcntl.h>
 #include <media/NdkMediaCodec.h>
@@ -10,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -141,10 +144,111 @@ Tracks findTracks(AMediaExtractor* ex) {
 Time fromUs(int64_t us) { return Time::fromTimebase(us, {1, 1'000'000}); }
 int64_t toUs(Time t) { return t.toTimebase({1, 1'000'000}, Rounding::Down); }
 
+// ---- photos (JPEG, PNG, WebP, HEIF, GIF...) ----
+// MediaExtractor reads movies only; photos go through AImageDecoder (Android 11, API 30),
+// which also turns them upright from their EXIF orientation.
+
+bool hasImageExtension(const std::string& path) {
+    const auto dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    for (const char* e : {"jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "avif"})
+        if (ext == e) return true;
+    return false;
+}
+
+struct ImageDecoderDel {
+    void operator()(AImageDecoder* d) const {
+        if (__builtin_available(android 30, *)) AImageDecoder_delete(d);
+    }
+};
+using ImageDecoderPtr = std::unique_ptr<AImageDecoder, ImageDecoderDel>;
+
+ImageDecoderPtr openImage(const std::string& path, Fd& fd, std::string* error) {
+    if (__builtin_available(android 30, *)) {
+        fd = openInput(path);
+        if (fd.get() < 0) {
+            setErr(error, "cannot open " + path);
+            return nullptr;
+        }
+        AImageDecoder* d = nullptr;
+        if (AImageDecoder_createFromFd(fd.get(), &d) != ANDROID_IMAGE_DECODER_SUCCESS || !d) {
+            setErr(error, "unsupported or corrupt image: " + path);
+            return nullptr;
+        }
+        return ImageDecoderPtr(d);
+    }
+    setErr(error, "photos need Android 11 or newer on this device");
+    return nullptr;
+}
+
+std::optional<ProbeResult> probeImage(const std::string& path, std::string* error) {
+    if (__builtin_available(android 30, *)) {
+        Fd fd;
+        ImageDecoderPtr d = openImage(path, fd, error);
+        if (!d) return std::nullopt;
+        const AImageDecoderHeaderInfo* info = AImageDecoder_getHeaderInfo(d.get());
+        ProbeResult r;
+        r.hasVideo = true;
+        r.isStillImage = true;
+        const char* mime = AImageDecoderHeaderInfo_getMimeType(info);
+        r.videoCodec = mime ? mime : "image";
+        r.width = AImageDecoderHeaderInfo_getWidth(info);
+        r.height = AImageDecoderHeaderInfo_getHeight(info);
+        r.fps = {30, 1};
+        r.duration = Time::zero();
+        return r;
+    }
+    setErr(error, "photos need Android 11 or newer on this device");
+    return std::nullopt;
+}
+
+// The photo, scaled down (keeping aspect) to fit maxW x maxH when given, straight-alpha RGBA.
+std::optional<VideoFrame> decodeImage(const std::string& path, int maxW, int maxH, std::string* error) {
+    if (__builtin_available(android 30, *)) {
+        Fd fd;
+        ImageDecoderPtr d = openImage(path, fd, error);
+        if (!d) return std::nullopt;
+        const AImageDecoderHeaderInfo* info = AImageDecoder_getHeaderInfo(d.get());
+        int w = AImageDecoderHeaderInfo_getWidth(info), h = AImageDecoderHeaderInfo_getHeight(info);
+        AImageDecoder_setAndroidBitmapFormat(d.get(), ANDROID_BITMAP_FORMAT_RGBA_8888);
+        AImageDecoder_setUnpremultipliedRequired(d.get(), true);
+        if (maxW > 0 && maxH > 0 && (w > maxW || h > maxH)) {
+            const double k = std::min(static_cast<double>(maxW) / w, static_cast<double>(maxH) / h);
+            const int tw = std::max(1, static_cast<int>(w * k)), th = std::max(1, static_cast<int>(h * k));
+            if (AImageDecoder_setTargetSize(d.get(), tw, th) == ANDROID_IMAGE_DECODER_SUCCESS) {
+                w = tw;
+                h = th;
+            }
+        }
+        const size_t stride = AImageDecoder_getMinimumStride(d.get());
+        std::vector<uint8_t> px(stride * static_cast<size_t>(h));
+        if (AImageDecoder_decodeImage(d.get(), px.data(), stride, px.size()) != ANDROID_IMAGE_DECODER_SUCCESS) {
+            setErr(error, "cannot decode image: " + path);
+            return std::nullopt;
+        }
+        VideoFrame f;
+        f.allocate(w, h);
+        for (int y = 0; y < h; ++y)
+            std::memcpy(f.rgba.data() + static_cast<size_t>(y) * w * 4, px.data() + static_cast<size_t>(y) * stride,
+                        static_cast<size_t>(w) * 4);
+        return f;
+    }
+    setErr(error, "photos need Android 11 or newer on this device");
+    return std::nullopt;
+}
+
 std::optional<ProbeResult> probeFile(const std::string& path, std::string* error) {
+    if (hasImageExtension(path)) return probeImage(path, error);
     Fd fd;
     ExtractorPtr ex = openExtractor(path, fd, error);
-    if (!ex) return std::nullopt;
+    if (!ex) {
+        // No extension to go by (picker file descriptors): it may still be a photo.
+        std::string imageError;
+        if (auto r = probeImage(path, &imageError)) return r;
+        return std::nullopt;
+    }
     Tracks t = findTracks(ex.get());
     if (t.video < 0 && t.audio < 0) {
         setErr(error, "no audio or video track");
@@ -161,7 +265,7 @@ std::optional<ProbeResult> probeFile(const std::string& path, std::string* error
         const int32_t fps = getI32(f, AMEDIAFORMAT_KEY_FRAME_RATE, 0);
         r.fps = fps > 0 ? Rational{fps, 1} : Rational{30, 1};
         r.rotation = getI32(f, "rotation-degrees", 0);
-        r.isStillImage = r.videoCodec == "image/jpeg";  // images come through the picker as stills
+        r.isStillImage = r.videoCodec.rfind("image/", 0) == 0;  // e.g. a HEIF still inside a container
     }
     if (t.audio >= 0) {
         AMediaFormat* f = t.afmt.get();
@@ -375,12 +479,24 @@ public:
     }
 
     void setMaxOutputSize(int w, int h) override {
+        if (w != maxW_ || h != maxH_) still_.reset();
         maxW_ = w;
         maxH_ = h;
     }
 
     std::optional<VideoFrame> videoFrameAt(Time t) override {
         if (!probe_.hasVideo) return std::nullopt;
+        if (probe_.isStillImage) {
+            // A photo: decoded once at the requested size, the same frame for every time.
+            if (!still_) {
+                auto f = decodeImage(path_, maxW_, maxH_, nullptr);
+                if (!f) return std::nullopt;
+                still_ = std::make_shared<VideoFrame>(std::move(*f));
+            }
+            VideoFrame out = *still_;
+            out.pts = t;
+            return out;
+        }
         if (!video_.ok() && !video_.open(path_, true, nullptr)) return std::nullopt;
         const int64_t target = toUs(t);
         if (cur_ && target >= curPts_ && (!pendingValid_ || target < pendingPts_)) return *cur_;
@@ -489,6 +605,7 @@ private:
     int maxW_ = 0, maxH_ = 0;
     StreamReader video_, audio_;
     std::shared_ptr<VideoFrame> cur_;
+    std::shared_ptr<VideoFrame> still_;  // photos
     int64_t curPts_ = 0;
     VideoFrame pending_;
     int64_t pendingPts_ = 0;
