@@ -165,7 +165,11 @@ VS_API int vs_transition_preview(const char* type, const uint8_t* a, const uint8
  * vs_update_clip_content: JSON merge patch into the clip's content (null removes a key). Undoable.
  * vs_generated_rect: the clip's box on the canvas at a time (0..1 of the frame: x, y, w, h).
  * vs_sticker_icon: draws sticker `id` (its idle motion at `seconds`) into transparent RGBA out.
- * vs_content_preview: draws content at `local` seconds of a clip lasting `length`, fitted into out. */
+ * vs_content_preview: draws content at `local` seconds of a clip lasting `length`, fitted into out.
+ * Overlay effects (overlays.hpp: snow, rain, confetti, light leaks...) are generated clips too, kind
+ * "overlay": vs_overlays_json: [{"id","name","category","tintable"}]; vs_default_overlay_json: content
+ * covering the whole frame (vs_add_generated_clip sizes it to the canvas); its "w"/"h" (canvas px) set
+ * the region it covers. vs_overlay_icon: a thumbnail over a dark backdrop (opaque RGBA). */
 VS_API char* vs_fonts_json(void);
 VS_API int vs_register_font(const char* id, const char* name, const uint8_t* bytes, int64_t size);
 VS_API char* vs_text_animations_json(void);
@@ -180,6 +184,12 @@ VS_API int vs_generated_rect(vs_session* s, const char* clip_id, int64_t timelin
 VS_API int vs_sticker_icon(const char* sticker_id, double seconds, uint8_t* out, int width, int height);
 VS_API int vs_content_preview(const char* content_json, double local, double length, uint8_t* out, int width,
                               int height);
+VS_API char* vs_overlays_json(void);
+VS_API char* vs_default_overlay_json(const char* overlay_id);
+VS_API int vs_overlay_icon(const char* overlay_id, double seconds, uint8_t* out, int width, int height);
+/* Sets the region an overlay covers (0..1 of the frame) as seen at timeline_time. One undo step. */
+VS_API int vs_set_overlay_region(vs_session* s, const char* clip_id, int64_t timeline_time, double x, double y,
+                                 double w, double h);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

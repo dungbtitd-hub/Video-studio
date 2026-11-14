@@ -188,6 +188,13 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, Pointer<Double>)>('vs_generated_rect'),
         stickerIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_sticker_icon'),
+        overlaysJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_overlays_json'),
+        defaultOverlayJson = lib.lookupFunction<CStr Function(CStr), CStr Function(CStr)>('vs_default_overlay_json'),
+        overlayIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_overlay_icon'),
+        setOverlayRegion = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Int64, Double, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_set_overlay_region'),
         contentPreview = lib.lookupFunction<Int32 Function(CStr, Double, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, double, Pointer<Uint8>, int, int)>('vs_content_preview'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
@@ -301,6 +308,10 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int, Pointer<Double>) generatedRect;
   final int Function(CStr, double, Pointer<Uint8>, int, int) stickerIcon;
   final int Function(CStr, double, double, Pointer<Uint8>, int, int) contentPreview;
+  final CStr Function() overlaysJson;
+  final CStr Function(CStr) defaultOverlayJson;
+  final int Function(CStr, double, Pointer<Uint8>, int, int) overlayIcon;
+  final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) setOverlayRegion;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;

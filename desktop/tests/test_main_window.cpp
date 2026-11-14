@@ -29,6 +29,7 @@
 #include "TransitionsPanel.h"
 #include "AnimationBox.h"
 #include "StickerPanel.h"
+#include "OverlayPanel.h"
 #include "TextPanel.h"
 #include <QPlainTextEdit>
 #include <QMimeData>
@@ -462,6 +463,31 @@ private slots:
         QVERIFY(c && c->value("kind", std::string{}) == "sticker");
         QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
         QVERIFY(sp->animations()->isEnabled());
+        // Overlays: snow over the whole frame from the playhead, then only the top-left quarter.
+        OverlayPanel* op = win_->overlayPanel();
+        QVERIFY(op->list()->count() >= 20);
+        QListWidgetItem* snow = nullptr;
+        for (int i = 0; i < op->list()->count(); ++i)
+            if (op->list()->item(i)->data(Qt::UserRole) == "snow") snow = op->list()->item(i);
+        QVERIFY(snow && !snow->icon().isNull());
+        emit op->list()->itemClicked(snow);
+        const QString ov = ctrl_->selectedClip();
+        QVERIFY(ctrl_->selectedContent() && ctrl_->selectedContent()->value("kind", std::string{}) == "overlay");
+        QVERIFY(win_->findChild<QDockWidget*>("overlays")->isVisible());
+        QVERIFY(op->settings()->isVisibleTo(op));
+        QVERIFY(win_->timeline()->clipLabel(ov).contains(QString::fromUtf8("Tuyết rơi")));
+        QRectF full = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(full.x()) < 1e-6 && std::abs(full.width() - 1) < 1e-6 && std::abs(full.height() - 1) < 1e-6);
+        ctrl_->setObjectCanvasRect(full, QRectF(0, 0, 0.5, 0.4));
+        QRectF part = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(part.width() - 0.5) < 1e-6 && std::abs(part.height() - 0.4) < 1e-6 && std::abs(part.x()) < 1e-6);
+        op->slider("density")->setValue(200);
+        QCOMPARE(ctrl_->selectedContent()->value("density", 0.0), 2.0);
+        op->slider("fade")->setValue(0);
+        QCOMPARE(QString::fromStdString((*ctrl_->selectedContent())["in"].value("type", std::string("x"))), QString());
+        op->fullFrameButton()->click();
+        full = ctrl_->objectCanvasRect();
+        QVERIFY(std::abs(full.width() - 1) < 1e-6 && std::abs(full.y()) < 1e-6);
         // Everything undoes back to before.
         while (int(ctrl_->project()->tracks.size()) > tracksBefore) ctrl_->undo();
         QVERIFY(!ctrl_->project()->findClip(text.toStdString()));

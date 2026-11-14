@@ -1,7 +1,8 @@
 // Generated clips: pictures the core draws itself instead of decoding media (text,
-// stickers). A clip is generated when `Clip::content` holds {"kind": "<kind>", ...}.
+// stickers, overlay effects). A clip is generated when `Clip::content` holds {"kind": "<kind>", ...}.
 // Each kind is drawn by a module of kind "generator" offering capability
-// "generate.<kind>"; the built-in ones are "builtin.text" and "builtin.sticker".
+// "generate.<kind>"; the built-in ones are "builtin.text", "builtin.sticker" and
+// "builtin.overlay".
 #pragma once
 
 #include <array>
@@ -37,7 +38,7 @@ public:
 // built-in one. nullptr for an unknown kind.
 std::shared_ptr<IClipGenerator> generatorFor(ModuleRegistry* modules, const std::string& kind);
 
-// Registers "builtin.text" and "builtin.sticker".
+// Registers "builtin.text", "builtin.sticker" and "builtin.overlay".
 void registerGeneratorModules(ModuleRegistry& r);
 
 // Box of a generated clip on the canvas at `sourceTime` {x, y, w, h} in canvas pixels

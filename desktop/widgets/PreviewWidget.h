@@ -22,8 +22,9 @@ public:
     void setCoverRect(const QRectF& normalized, const QString& shape = "rect");
     [[nodiscard]] bool coverEditing() const { return coverOn_ && !object_; }
     // Text or sticker under the playhead: its box with corner handles; drag inside to move it,
-    // a corner to scale it (aspect kept). A null rect hides it.
-    void setObjectRect(const QRectF& normalized);
+    // a corner to scale it (aspect kept; with `freeShape`, an overlay's region, any shape).
+    // A null rect hides it.
+    void setObjectRect(const QRectF& normalized, bool freeShape = false);
     [[nodiscard]] bool objectEditing() const { return coverOn_ && object_; }
 
 signals:
@@ -52,6 +53,7 @@ private:
     QImage frame_;
     bool coverOn_ = false;
     bool object_ = false;  // the box is a text/sticker, not a cover
+    bool freeShape_ = false;  // object corners resize freely (overlay regions)
     QRectF cover_;  // normalized
     QString coverShape_;
     CoverDrag coverDrag_ = CoverDrag::None;

@@ -27,6 +27,7 @@ add_library(vstudio_core STATIC
   src/generators.cpp
   src/fonts.cpp
   src/text.cpp
+  src/overlays.cpp
   src/stickers.cpp
   src/stickers_more.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/embedded_fonts.cpp

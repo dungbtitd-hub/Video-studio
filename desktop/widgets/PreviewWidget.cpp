@@ -52,9 +52,10 @@ void PreviewWidget::setCoverRect(const QRectF& normalized, const QString& shape)
     update();
 }
 
-void PreviewWidget::setObjectRect(const QRectF& normalized) {
+void PreviewWidget::setObjectRect(const QRectF& normalized, bool freeShape) {
     if (coverDrag_ != CoverDrag::None && object_) return;  // dragging: keep the local state
     if (coverOn_ && !object_) return;                      // a cover is being edited: it wins
+    freeShape_ = freeShape;
     coverOn_ = !normalized.isNull();
     object_ = coverOn_;
     cover_ = normalized;
@@ -130,7 +131,7 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* e) {
         QRectF r = coverStart_;
         if (coverDrag_ == CoverDrag::Move) r.translate(d);
         else if (coverDrag_ == CoverDrag::Draw) r = QRectF(dragFrom_, p).normalized();
-        else if (object_) {
+        else if (object_ && !freeShape_) {
             // Scale about the centre, keeping the shape.
             const QPointF c = coverStart_.center();
             const double k0 = QLineF(c, dragFrom_).length(), k1 = QLineF(c, p).length();
@@ -223,7 +224,8 @@ void PreviewWidget::paintEvent(QPaintEvent*) {
             QFont fnt = font();
             fnt.setPixelSize(11);
             p.setFont(fnt);
-            const QString hint = object_ ? tr("Kéo để di chuyển, kéo góc để phóng to/thu nhỏ")
+            const QString hint = object_ && freeShape_ ? tr("Kéo để di chuyển vùng phủ, kéo góc để đổi kích thước vùng")
+                                 : object_   ? tr("Kéo để di chuyển, kéo góc để phóng to/thu nhỏ")
                                          : tr("Kéo vùng che để di chuyển, kéo góc để đổi cỡ, kéo ra ngoài để vẽ vùng mới");
             const QRectF box(r.left() + 8, r.bottom() - 26, p.fontMetrics().horizontalAdvance(hint) + 16, 20);
             p.setBrush(QColor(0, 0, 0, 150));
