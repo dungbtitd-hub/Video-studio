@@ -27,6 +27,10 @@
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
 #include "TransitionsPanel.h"
+#include "AnimationBox.h"
+#include "StickerPanel.h"
+#include "TextPanel.h"
+#include <QPlainTextEdit>
 #include <QMimeData>
 
 class MainWindowTest : public QObject {
@@ -400,6 +404,67 @@ private slots:
         QVERIFY(ctrl_->transitionAt({v1b, 0}).first.isEmpty());
         ctrl_->undo();
         QCOMPARE(ctrl_->transitionAt({v1b, 0}).first, QString("fade"));
+    }
+
+    void textAndStickers() {
+        TextPanel* tp = win_->textPanel();
+        StickerPanel* sp = win_->stickerPanel();
+        ctrl_->seek(1.0);
+        const int tracksBefore = int(ctrl_->project()->tracks.size());
+        tp->addButton()->click();
+        const QString text = ctrl_->selectedClip();
+        QVERIFY(!text.isEmpty());
+        QCOMPARE(int(ctrl_->project()->tracks.size()), tracksBefore + 1);  // its own overlay track
+        auto* textDock = win_->findChild<QDockWidget*>("text");
+        QVERIFY(textDock && textDock->isVisible());
+        QVERIFY(tp->textEdit()->isVisibleTo(tp));
+        // Typing is committed after a pause (or right away on commit), one undo step.
+        tp->textEdit()->setPlainText(QString::fromUtf8("Xin chào"));
+        tp->commitText();
+        QCOMPARE(QString::fromStdString(ctrl_->selectedContent()->value("text", std::string{})), QString::fromUtf8("Xin chào"));
+        // Timeline label shows the words.
+        QVERIFY(win_->timeline()->clipLabel(text).contains(QString::fromUtf8("Xin chào")));
+        // One-tap style, font, animation.
+        QListWidgetItem* neon = nullptr;
+        for (int i = 0; i < tp->styles()->count(); ++i)
+            if (tp->styles()->item(i)->data(Qt::UserRole) == "neon_pink") neon = tp->styles()->item(i);
+        QVERIFY(neon);
+        emit tp->styles()->itemClicked(neon);
+        QCOMPARE((*ctrl_->selectedContent())["glow"].value("opacity", 0.0), 1.0);
+        tp->fontBox()->setCurrentIndex(tp->fontBox()->findData("pacifico"));
+        emit tp->fontBox()->activated(tp->fontBox()->currentIndex());
+        QCOMPARE(QString::fromStdString(ctrl_->selectedContent()->value("font", std::string{})), QString("pacifico"));
+        AnimationBox* ab = tp->animations();
+        ab->inBox()->setCurrentIndex(ab->inBox()->findData("typewriter"));
+        emit ab->inBox()->activated(ab->inBox()->currentIndex());
+        QCOMPARE(QString::fromStdString((*ctrl_->selectedContent())["in"].value("type", std::string{})), QString("typewriter"));
+        QTRY_VERIFY(ab->preview()->pixmap().width() > 0);
+        // The preview shows the text: handles around it; dragging moves it.
+        const QRectF r = ctrl_->objectCanvasRect();
+        QVERIFY(r.width() > 0.05 && r.center().x() > 0.4 && r.center().x() < 0.6);
+        ctrl_->seek(1.02);
+        QTRY_VERIFY(win_->preview()->objectEditing());
+        QRectF to = r.translated(0.1, -0.2);
+        ctrl_->setObjectCanvasRect(r, to);
+        QVERIFY(std::abs(ctrl_->objectCanvasRect().center().x() - to.center().x()) < 1e-3);
+        QVERIFY(std::abs(ctrl_->objectCanvasRect().center().y() - to.center().y()) < 1e-3);
+        to = QRectF(to.center().x() - to.width(), to.center().y() - to.height(), to.width() * 2, to.height() * 2);
+        ctrl_->setObjectCanvasRect(ctrl_->objectCanvasRect(), to);
+        QVERIFY(std::abs(ctrl_->objectCanvasRect().width() - to.width()) < 1e-3);
+        QVERIFY(std::abs(ctrl_->objectCanvasRect().center().x() - to.center().x()) < 1e-3);
+        // Stickers: the library, click adds at the playhead on a free overlay track.
+        QVERIFY(sp->list()->count() >= 120);
+        QVERIFY(!sp->list()->item(0)->icon().isNull());
+        sp->category()->setCurrentIndex(sp->category()->findData(QString::fromUtf8("Hoa lá")));
+        QVERIFY(sp->list()->count() >= 10 && sp->list()->count() < 40);
+        emit sp->list()->itemClicked(sp->list()->item(0));
+        const auto c = ctrl_->selectedContent();
+        QVERIFY(c && c->value("kind", std::string{}) == "sticker");
+        QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
+        QVERIFY(sp->animations()->isEnabled());
+        // Everything undoes back to before.
+        while (int(ctrl_->project()->tracks.size()) > tracksBefore) ctrl_->undo();
+        QVERIFY(!ctrl_->project()->findClip(text.toStdString()));
     }
 
     void layoutResets() {

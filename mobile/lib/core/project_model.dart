@@ -21,7 +21,8 @@ class ClipView {
       this.colorSpace,
       this.lut,
       this.pictureKeys = const [],
-      this.audioKeys = const []});
+      this.audioKeys = const [],
+      this.content});
   final String id;
   final String assetId;
   final double start; // seconds on the timeline
@@ -37,8 +38,28 @@ class ClipView {
   // opacity) and audio (volume) keys are independent.
   final List<double> pictureKeys;
   final List<double> audioKeys;
+  // Text and sticker clips have no media: what they draw ({"kind": "text" | "sticker", ...}).
+  final Map<String, dynamic>? content;
+  String get kind => (content?['kind'] ?? '') as String;
+  bool get generated => content != null;
   double get end => start + duration;
   bool get animated => pictureKeys.isNotEmpty || audioKeys.isNotEmpty;
+}
+
+/// Sticker id -> Vietnamese name, filled from the core's catalog (for clip labels).
+final Map<String, String> stickerNames = {};
+
+/// The label drawn on a text or sticker clip.
+String generatedLabel(Map<String, dynamic> content) {
+  switch (content['kind']) {
+    case 'text':
+      final t = ((content['text'] ?? '') as String).replaceAll(RegExp(r'\s+'), ' ').trim();
+      return 'T  ${t.isEmpty ? '(chữ trống)' : t}';
+    case 'sticker':
+      final id = (content['sticker'] ?? '') as String;
+      return '★  ${stickerNames[id] ?? 'Sticker'}';
+  }
+  return (content['kind'] ?? '?') as String;
 }
 
 class TrackView {
@@ -137,12 +158,13 @@ class ProjectView {
           return out.toList()..sort();
         }
 
+        final content = m['content'] as Map<String, dynamic>?;
         clips.add(ClipView(
           id: m['clip_id'] as String,
           assetId: m['asset_id'] as String,
           start: start,
           duration: clipDur,
-          name: assets[m['asset_id']]?.name ?? '?',
+          name: content != null ? generatedLabel(content) : assets[m['asset_id']]?.name ?? '?',
           sourceIn: sourceIn,
           speed: clipSpeed,
           look: look?['look'] as String?,
@@ -151,6 +173,7 @@ class ProjectView {
           lut: effect('builtin.lut')?['path'] as String?,
           pictureKeys: keys(const ['scale', 'x', 'y', 'opacity']),
           audioKeys: keys(const ['volume']),
+          content: content,
         ));
       }
       return TrackView(

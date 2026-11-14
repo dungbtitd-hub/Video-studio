@@ -120,6 +120,45 @@ class ClipKeyState {
   final bool pictureAnimated, audioAnimated;
 }
 
+class FontInfo {
+  const FontInfo(this.id, this.name, this.style);
+  final String id, name, style;
+}
+
+/// A text/sticker in or out animation; [perLetter] ones move each letter on its own.
+class TextAnimationInfo {
+  const TextAnimationInfo(this.id, this.name, {this.perLetter = false});
+  final String id, name;
+  final bool perLetter;
+}
+
+class TextPresetInfo {
+  const TextPresetInfo(this.id, this.name, this.style);
+  final String id, name;
+  final Map<String, dynamic> style; // merged into the text content
+}
+
+class StickerInfo {
+  const StickerInfo(this.id, this.name, this.category);
+  final String id, name, category;
+}
+
+/// Catalogs for the text and sticker tools (fixed for the app's lifetime).
+class TextCatalog {
+  TextCatalog(this.fonts, this.animations, this.loops, this.presets, this.stickers);
+  final List<FontInfo> fonts;
+  final List<TextAnimationInfo> animations, loops;
+  final List<TextPresetInfo> presets;
+  final List<StickerInfo> stickers;
+  List<String> get stickerCategories {
+    final out = <String>[];
+    for (final s in stickers) {
+      if (!out.contains(s.category)) out.add(s.category);
+    }
+    return out;
+  }
+}
+
 class VStudio {
   VStudio._(this._b, this._s);
 
@@ -175,7 +214,11 @@ class VStudio {
     if (rc != 0) throw VStudioException(_b.lastError(_s).toDartString());
   }
 
-  ProjectView project() => ProjectView.fromJson(_take(_b.projectJson(_s)));
+  ProjectView project() {
+    if (stickerNames.isEmpty) textCatalog(); // clip labels show sticker names
+    return ProjectView.fromJson(_take(_b.projectJson(_s)));
+  }
+
   int get revision => _b.projectRevision(_s);
   String modulesJson() => _take(_b.modulesJson(_s));
 
@@ -459,6 +502,90 @@ class VStudio {
           return null;
         }
         return Uint8List.fromList(po.asTypedList(a.length));
+      });
+
+  // ---- text and stickers: clips without media, drawn by the core from their "content" ----
+
+  static TextCatalog? _catalog;
+
+  /// Fonts, animations, text presets and stickers (read once, then cached).
+  TextCatalog textCatalog() {
+    final cached = _catalog;
+    if (cached != null) return cached;
+    List<Map<String, dynamic>> list(Object? j) => (j as List).cast<Map<String, dynamic>>();
+    final anims = jsonDecode(_take(_b.textAnimationsJson())) as Map<String, dynamic>;
+    TextAnimationInfo anim(Map<String, dynamic> e) =>
+        TextAnimationInfo(e['id'] as String, e['name'] as String, perLetter: e['per_letter'] == true);
+    final c = TextCatalog(
+      [
+        for (final e in list(jsonDecode(_take(_b.fontsJson()))))
+          FontInfo(e['id'] as String, e['name'] as String, (e['style'] ?? '') as String)
+      ],
+      [for (final e in list(anims['animations'])) anim(e)],
+      [for (final e in list(anims['loops'])) anim(e)],
+      [
+        for (final e in list(jsonDecode(_take(_b.textPresetsJson()))))
+          TextPresetInfo(e['id'] as String, e['name'] as String, e['style'] as Map<String, dynamic>)
+      ],
+      [
+        for (final e in list(jsonDecode(_take(_b.stickersJson()))))
+          StickerInfo(e['id'] as String, e['name'] as String, e['category'] as String)
+      ],
+    );
+    for (final st in c.stickers) {
+      stickerNames[st.id] = st.name;
+    }
+    return _catalog = c;
+  }
+
+  /// Adds a TrueType/OpenType font (e.g. a company font); false when the bytes are not a usable font.
+  bool registerFont(String id, String name, Uint8List bytes) => using((a) {
+        final buf = a<Uint8>(bytes.length);
+        buf.asTypedList(bytes.length).setAll(0, bytes);
+        return _b.registerFont(id.toNativeUtf8(allocator: a), name.toNativeUtf8(allocator: a), buf, bytes.length) == 0;
+      });
+
+  /// Content for a new text clip / sticker clip.
+  Map<String, dynamic> defaultText(String text) =>
+      jsonDecode(using((a) => _take(_b.defaultTextJson(text.toNativeUtf8(allocator: a))))) as Map<String, dynamic>;
+  Map<String, dynamic> defaultSticker(String stickerId) =>
+      jsonDecode(using((a) => _take(_b.defaultStickerJson(stickerId.toNativeUtf8(allocator: a)))))
+          as Map<String, dynamic>;
+
+  /// Adds a text/sticker clip at [at] for [seconds] (on [trackId], or the topmost free overlay track,
+  /// a new one when needed). One undo step; returns the clip id.
+  String addGeneratedClip(Map<String, dynamic> content, double at, double seconds, {String? trackId}) =>
+      using((a) => _take(_b.addGeneratedClip(_s, jsonEncode(content).toNativeUtf8(allocator: a), secondsToTicks(at),
+          secondsToTicks(seconds), (trackId ?? '').toNativeUtf8(allocator: a))));
+
+  /// JSON merge patch into the clip's content (null removes a key). One undo step.
+  void updateClipContent(String clipId, Map<String, dynamic> patch) => using((a) => _check(
+      _b.updateClipContent(_s, clipId.toNativeUtf8(allocator: a), jsonEncode(patch).toNativeUtf8(allocator: a))));
+
+  /// The text/sticker box on the canvas at [t] (0..1 of the frame), or null outside the clip.
+  (double, double, double, double)? generatedRect(String clipId, double t) => using((a) {
+        final out = a<Double>(4);
+        final rc = _b.generatedRect(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), out);
+        return rc == 0 ? (out[0], out[1], out[2], out[3]) : null;
+      });
+
+  /// Sticker [id] drawn into a transparent [size] x [size] RGBA image, its idle motion at [seconds].
+  Uint8List? stickerIcon(String id, int size, {double seconds = 0}) => using((a) {
+        final n = size * size * 4;
+        final buf = a<Uint8>(n);
+        if (_b.stickerIcon(id.toNativeUtf8(allocator: a), seconds, buf, size, size) != 0) return null;
+        return Uint8List.fromList(buf.asTypedList(n));
+      });
+
+  /// [content] at [local] seconds of a clip lasting [length], fitted into a transparent RGBA image.
+  Uint8List? contentPreview(Map<String, dynamic> content, double local, double length, int width, int height) =>
+      using((a) {
+        final n = width * height * 4;
+        final buf = a<Uint8>(n);
+        if (_b.contentPreview(jsonEncode(content).toNativeUtf8(allocator: a), local, length, buf, width, height) != 0) {
+          return null;
+        }
+        return Uint8List.fromList(buf.asTypedList(n));
       });
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.

@@ -44,10 +44,22 @@ void PreviewWidget::setCoverRect(const QRectF& normalized, const QString& shape)
     const bool on = !normalized.isNull();
     if (coverDrag_ != CoverDrag::None && on) return;  // the user is dragging: keep the local state
     coverOn_ = on;
+    object_ = false;
     cover_ = normalized;
     coverShape_ = shape;
     if (on) setCursor(Qt::CrossCursor);
     else setCursor(regionEnabled_ ? Qt::CrossCursor : Qt::ArrowCursor);
+    update();
+}
+
+void PreviewWidget::setObjectRect(const QRectF& normalized) {
+    if (coverDrag_ != CoverDrag::None && object_) return;  // dragging: keep the local state
+    if (coverOn_ && !object_) return;                      // a cover is being edited: it wins
+    coverOn_ = !normalized.isNull();
+    object_ = coverOn_;
+    cover_ = normalized;
+    coverShape_ = "rect";
+    setCursor(coverOn_ ? Qt::SizeAllCursor : (regionEnabled_ ? Qt::CrossCursor : Qt::ArrowCursor));
     update();
 }
 
@@ -96,6 +108,10 @@ void PreviewWidget::mousePressEvent(QMouseEvent* e) {
                 corner_ = i;
             }
         if (coverDrag_ == CoverDrag::Draw && r.contains(p)) coverDrag_ = CoverDrag::Move;
+        if (object_ && coverDrag_ == CoverDrag::Draw) {  // outside a text/sticker: nothing to do
+            coverDrag_ = CoverDrag::None;
+            return;
+        }
         coverStart_ = r;
         dragFrom_ = p;
         setFocus();
@@ -114,7 +130,14 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* e) {
         QRectF r = coverStart_;
         if (coverDrag_ == CoverDrag::Move) r.translate(d);
         else if (coverDrag_ == CoverDrag::Draw) r = QRectF(dragFrom_, p).normalized();
-        else {
+        else if (object_) {
+            // Scale about the centre, keeping the shape.
+            const QPointF c = coverStart_.center();
+            const double k0 = QLineF(c, dragFrom_).length(), k1 = QLineF(c, p).length();
+            const double k = k0 > 1 ? std::max(0.05, k1 / k0) : 1;
+            r = QRectF(c.x() - coverStart_.width() * k / 2, c.y() - coverStart_.height() * k / 2,
+                       coverStart_.width() * k, coverStart_.height() * k);
+        } else {
             QPointF a = (corner_ == 0 || corner_ == 3) ? r.topRight() : r.topLeft();  // opposite x edge
             a.setY((corner_ == 0 || corner_ == 1) ? r.bottom() : r.top());           // opposite y edge
             r = QRectF(a, p).normalized();
@@ -132,7 +155,8 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* e) {
     if (coverDrag_ != CoverDrag::None && e->button() == Qt::LeftButton) {
         const bool moved = QLineF(e->position(), dragFrom_).length() > 2;
         coverDrag_ = CoverDrag::None;
-        if (moved) emit coverRectChanged(cover_);
+        if (moved && object_) emit objectRectChanged(toNormalized(coverStart_), cover_);
+        else if (moved) emit coverRectChanged(cover_);
         update();
         return;
     }
@@ -182,8 +206,8 @@ void PreviewWidget::paintEvent(QPaintEvent*) {
     if (coverOn_) {
         const QRectF c = coverWidgetRect();
         p.setRenderHint(QPainter::Antialiasing);
-        p.setBrush(QColor(242, 169, 59, 40));
-        p.setPen(QPen(Theme::accent(), 1.5, Qt::DashLine));
+        p.setBrush(object_ ? QColor(0, 0, 0, 0) : QColor(242, 169, 59, 40));
+        p.setPen(QPen(object_ ? QColor(255, 255, 255, 200) : Theme::accent(), 1.5, Qt::DashLine));
         if (coverShape_ == "ellipse") p.drawEllipse(c);
         else if (coverShape_ == "circle") {
             const double d = std::min(c.width(), c.height());
@@ -199,7 +223,8 @@ void PreviewWidget::paintEvent(QPaintEvent*) {
             QFont fnt = font();
             fnt.setPixelSize(11);
             p.setFont(fnt);
-            const QString hint = tr("Kéo vùng che để di chuyển, kéo góc để đổi cỡ, kéo ra ngoài để vẽ vùng mới");
+            const QString hint = object_ ? tr("Kéo để di chuyển, kéo góc để phóng to/thu nhỏ")
+                                         : tr("Kéo vùng che để di chuyển, kéo góc để đổi cỡ, kéo ra ngoài để vẽ vùng mới");
             const QRectF box(r.left() + 8, r.bottom() - 26, p.fontMetrics().horizontalAdvance(hint) + 16, 20);
             p.setBrush(QColor(0, 0, 0, 150));
             p.drawRoundedRect(box, 4, 4);

@@ -138,6 +138,46 @@ int main(void) {
     EXPECT(cuts && cuts[0] == '{');
     vs_free(cuts);
 
+    /* Text and stickers: catalogs, a text clip on its own track, edit, box, previews. */
+    char* fonts = vs_fonts_json();
+    EXPECT(fonts && strstr(fonts, "\"be-vietnam-pro-bold\"") && strstr(fonts, "\"pacifico\""));
+    vs_free(fonts);
+    char* anims = vs_text_animations_json();
+    EXPECT(anims && strstr(anims, "\"typewriter\"") && strstr(anims, "\"loops\""));
+    vs_free(anims);
+    char* tps = vs_text_presets_json();
+    EXPECT(tps && strstr(tps, "\"neon_pink\""));
+    vs_free(tps);
+    char* sts = vs_stickers_json();
+    EXPECT(sts && strstr(sts, "\"heart_red\"") && strstr(sts, "\"flower_mai\""));
+    vs_free(sts);
+    EXPECT(vs_default_sticker_json("nope") == NULL);
+    {
+        char* content = vs_default_text_json("Xin ch\xc3\xa0o");
+        EXPECT(content && strstr(content, "\"kind\":\"text\""));
+        char* tc = vs_add_generated_clip(s, content, 0, 2 * 705600000LL, NULL);
+        EXPECT(tc != NULL);
+        if (tc) {
+            EXPECT(vs_update_clip_content(s, tc, "{\"color\":\"#ff0000\"}") == 0);
+            EXPECT(vs_update_clip_content(s, tc, "{\"kind\":null}") != 0);
+            double r[4] = {0, 0, 0, 0};
+            EXPECT(vs_generated_rect(s, tc, 0, r) == 0 && r[0] < 0.5 && r[0] + r[2] > 0.5 && r[2] > 0.05);
+            uint8_t px[64 * 32 * 4];
+            int lit = 0;
+            EXPECT(vs_content_preview(content, 1.0, 2.0, px, 64, 32) == 0);
+            for (int i = 3; i < 64 * 32 * 4; i += 4) lit += px[i] > 128;
+            EXPECT(lit > 30);
+            EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1);
+            vs_free(tc);
+        }
+        vs_free(content);
+        uint8_t icon[32 * 32 * 4];
+        EXPECT(vs_sticker_icon("face_smile", 0.5, icon, 32, 32) == 0 && icon[(16 * 32 + 16) * 4 + 3] == 255);
+        EXPECT(vs_sticker_icon("nope", 0.5, icon, 32, 32) != 0);
+        EXPECT(vs_content_preview("{\"kind\":\"nope\"}", 0, 1, icon, 32, 32) != 0);
+        EXPECT(vs_register_font("mine", "Mine", icon, 16) != 0);
+    }
+
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");
     EXPECT(v2 != NULL);

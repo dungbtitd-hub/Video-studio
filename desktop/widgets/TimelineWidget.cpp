@@ -46,6 +46,13 @@ TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWid
     rebuild();
 }
 
+QString TimelineWidget::clipLabel(const QString& clipId) const {
+    for (const auto& t : tracks_)
+        for (const auto& c : t.clips)
+            if (c.id == clipId) return c.name;
+    return {};
+}
+
 void TimelineWidget::rebuild() {
     // Read the immutable core snapshot directly: no QVariant models, and clip
     // names are shared (implicitly shared QString), so this is a flat copy.
@@ -78,10 +85,12 @@ void TimelineWidget::rebuild() {
         t.clips.reserve(src->clips.size());
         for (const auto& c : src->clips) {
             const double st = c.timelineIn.seconds();
+            const QString label = generatedLabel(c);
             t.clips.push_back({QString::fromStdString(c.id), st, st + c.duration().seconds(),
-                               names.value(QString::fromStdString(c.assetId), QStringLiteral("?")),
+                               label.isEmpty() ? names.value(QString::fromStdString(c.assetId), QStringLiteral("?")) : label,
                                c.effects.is_array() && !c.effects.empty(), QString::fromStdString(c.assetId),
-                               c.sourceIn.seconds(), double(c.speed.num) / c.speed.den, {}, {}});
+                               c.sourceIn.seconds(), double(c.speed.num) / c.speed.den, {}, {},
+                               c.generated() ? QString::fromStdString(c.content.value("kind", std::string{})) : QString{}});
             if (c.keyframes.is_object() && !c.keyframes.empty()) {
                 Clip& out = t.clips.back();
                 for (const auto& prop : vstudio::kf::properties()) {
@@ -201,7 +210,10 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             const QRectF r(timeToX(s), top + 4, std::max(3.0, (e - s) * pxPerSec_), kTrackH - 10);
             const bool selected = it->id == sel;
             p.setPen(QPen(selected ? Theme::accent() : (t.audio ? Theme::clipAudio() : Theme::clipVideo()), selected ? 2 : 1));
-            p.setBrush(t.audio ? Theme::clipAudio2() : Theme::clipVideo2());
+            p.setBrush(t.audio ? Theme::clipAudio2()
+                               : it->kind == "text"    ? QColor(92, 70, 160)
+                               : it->kind == "sticker" ? QColor(160, 70, 120)
+                                                       : Theme::clipVideo2());
             p.drawRoundedRect(r, 4, 4);
             if (r.width() > 8) {
                 p.save();

@@ -26,6 +26,8 @@ public:
     [[nodiscard]] bool snapping() const { return snapping_; }
     void setSnapping(bool on);
     static constexpr double kMinPxPerSec = 5, kMaxPxPerSec = 400;
+    // The label drawn on a clip (for tests).
+    [[nodiscard]] QString clipLabel(const QString& clipId) const;
 
 signals:
     void painted();  // for benchmarks
@@ -62,6 +64,7 @@ private:
         double srcIn;  // source seconds at `start`
         double speed;  // source seconds per timeline second
         std::vector<double> pictureKeys, audioKeys;  // keyframes, timeline seconds (inside the clip)
+        QString kind;  // "" media, "text", "sticker"
     };
     // A place a transition can go (video tracks): a cut between touching clips, or a free clip edge.
     struct Cut {

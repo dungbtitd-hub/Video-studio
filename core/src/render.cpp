@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "detail/paths.hpp"
+#include "vstudio/generators.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/pixel.hpp"
 #include "vstudio/transitions.hpp"
@@ -344,6 +345,41 @@ std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const
     return CompositeLayer{std::move(frame), tr};
 }
 
+std::optional<CompositeLayer> Renderer::generatedLayer(const Clip& c, Time src, const VideoFrame& out) {
+    const std::string kind = c.content.value("kind", std::string{});
+    const auto gen = generatorFor(modules_, kind);
+    if (!gen) {
+        warn("no generator for clip kind: " + kind);
+        return std::nullopt;
+    }
+    const double local = (src - c.sourceIn).seconds(), length = c.sourceDuration().seconds();
+    const Transform tr = animatedTransform(c, src);
+    // Drawn straight at output size with the clip's position and scale: sharp at any zoom.
+    const double k = static_cast<double>(out.width) / project_.canvas.width;
+    const vec::Affine place = vec::Affine::translate(out.width / 2.0 + tr.x * k, out.height / 2.0 + tr.y * k) *
+                              vec::Affine::scale(tr.scale * k);
+    std::string key;
+    if (cache_ && gen->still(c.content, local, length)) {
+        key = "gen|" + c.id + "|" + std::to_string(std::hash<std::string>{}(c.content.dump())) + "|" +
+              std::to_string(tr.x) + "," + std::to_string(tr.y) + "," + std::to_string(tr.scale) + "|" +
+              std::to_string(out.width) + "x" + std::to_string(out.height) + (out.deep() ? "d" : "");
+        if (auto hit = cache_->get(key)) {
+            Transform t;
+            t.opacity = tr.opacity;
+            return CompositeLayer{std::move(hit), t};
+        }
+    }
+    auto frame = std::make_shared<VideoFrame>();
+    frame->allocate(out.width, out.height, out.format);  // transparent
+    frame->pts = out.pts;
+    gen->draw(c.content, local, length, place, *frame);
+    std::shared_ptr<const VideoFrame> shared = std::move(frame);
+    if (!key.empty()) cache_->put(key, shared);
+    Transform t;
+    t.opacity = tr.opacity;
+    return CompositeLayer{std::move(shared), t};
+}
+
 std::optional<CompositeLayer> Renderer::transitionLayer(const ActiveTransition& tr, std::size_t trackIndex, Time t,
                                                         const VideoFrame& out, const std::string& purpose) {
     // Each side is drawn on its own transparent canvas, then the two are blended.
@@ -352,6 +388,14 @@ std::optional<CompositeLayer> Renderer::transitionLayer(const ActiveTransition& 
         f.allocate(out.width, out.height, out.format);
         if (out.deep()) std::fill(f.half.begin(), f.half.end(), std::uint16_t{0});
         else std::fill(f.rgba.begin(), f.rgba.end(), std::uint8_t{0});
+        if (c && c->generated()) {  // text, sticker: held at its first/last frame outside the clip
+            const Time src = std::clamp(c->toSource(t), c->sourceIn, std::max(c->sourceIn, c->sourceOut - Time::fromFrame(1, project_.fps)));
+            if (auto l = generatedLayer(*c, src, f); l && l->frame) {
+                if (out.deep()) compositeOverDeep(f, *l->frame, l->transform);
+                else compositeOver(f, *l->frame, l->transform);
+            }
+            return f;
+        }
         const MediaAsset* a = c ? project_.findAsset(c->assetId) : nullptr;
         if (!a) return f;
         // Past its out point the outgoing clip plays on into its source (its last frame
@@ -389,6 +433,10 @@ VideoFrame Renderer::renderVideo(Time t, int width, int height, const std::strin
             continue;
         }
         const Clip* c = track.clipAt(t);
+        if (c && c->generated()) {
+            if (auto l = generatedLayer(*c, c->toSource(t), out)) layers.push_back(std::move(*l));
+            continue;
+        }
         const MediaAsset* a = c ? project_.findAsset(c->assetId) : nullptr;
         if (!a) continue;
         if (auto l = clipLayer({c, a, c->toSource(t), i}, out, purpose)) layers.push_back(std::move(*l));

@@ -441,8 +441,14 @@ class _TimelinePainter extends CustomPainter {
         if (x > size.width || x + w < 0) continue; // cull off-screen clips
         final r =
             RRect.fromRectAndRadius(Rect.fromLTWH(x, top + 4, w < 3 ? 3 : w, trackH - 10), const Radius.circular(4));
-        canvas.drawRRect(r, Paint()..color = audio ? VsColors.clipAudio2 : VsColors.clipVideo2);
-        if (media != null && w > 8) {
+        // Text and stickers have no media: a colour of their own instead of thumbnails.
+        final (fill, edge) = switch (c.kind) {
+          'text' => (const Color(0xFF5C46A0), const Color(0xFF8C74D8)),
+          'sticker' => (const Color(0xFFA04678), const Color(0xFFD874AC)),
+          _ => audio ? (VsColors.clipAudio2, VsColors.clipAudio) : (VsColors.clipVideo2, VsColors.clipVideo),
+        };
+        canvas.drawRRect(r, Paint()..color = fill);
+        if (media != null && w > 8 && !c.generated) {
           canvas.save();
           canvas.clipRRect(r);
           if (audio) {
@@ -461,7 +467,7 @@ class _TimelinePainter extends CustomPainter {
                   ? const Color(0xFFFFD65A)
                   : c.id == selected
                       ? VsColors.accent
-                      : (audio ? VsColors.clipAudio : VsColors.clipVideo));
+                      : edge);
         if (w > 30) {
           final tp = TextPainter(
             text: TextSpan(text: c.name, style: const TextStyle(color: VsColors.fg, fontSize: 11)),

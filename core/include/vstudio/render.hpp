@@ -80,6 +80,8 @@ private:
                                                   bool deep);
     ICompositor& compositor();
     std::optional<CompositeLayer> clipLayer(const VideoLayer& layer, const VideoFrame& out, const std::string& purpose);
+    // Text, stickers (generators.hpp), drawn at output size.
+    std::optional<CompositeLayer> generatedLayer(const Clip& c, Time sourceTime, const VideoFrame& out);
     std::optional<CompositeLayer> transitionLayer(const ActiveTransition& tr, std::size_t trackIndex, Time t,
                                                   const VideoFrame& out, const std::string& purpose);
 

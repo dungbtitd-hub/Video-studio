@@ -1,5 +1,9 @@
 #include "EditorController.h"
 
+#include "vstudio/generators.hpp"
+#include "vstudio/stickers.hpp"
+#include "vstudio/text.hpp"
+
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
 #include "vstudio/tracker.hpp"
@@ -787,6 +791,75 @@ double EditorController::fps() const { return editor_->project().fps.toDouble();
 bool EditorController::playing() const { return preview_ && preview_->playing(); }
 QString EditorController::timecode() const { return q(fromSecs(playhead_).timecode(editor_->project().fps)); }
 
+QString generatedLabel(const vstudio::Clip& c) {
+    if (!c.generated()) return {};
+    const std::string kind = c.content.value("kind", std::string{});
+    if (kind == "text") {
+        QString t = QString::fromStdString(c.content.value("text", std::string{})).simplified();
+        return QStringLiteral("T  ") + (t.isEmpty() ? QObject::tr("(chữ trống)") : t);
+    }
+    if (kind == "sticker") {
+        const auto* info = vstudio::stickers::findSticker(c.content.value("sticker", std::string{}));
+        return QStringLiteral("★  ") + (info ? QString::fromStdString(info->name) : QObject::tr("Sticker"));
+    }
+    return QString::fromStdString(kind);
+}
+
+QString EditorController::addText(const QString& text) {
+    vstudio::Json c = vstudio::text::defaultTextContent(text.isEmpty() ? std::string("Nhập chữ") : s(text));
+    Id id;
+    if (!edit([&] { id = editor_->addGeneratedClip(c, fromSecs(playhead_), Time::fromSeconds(3)); })) return {};
+    setSelectedClip(q(id));
+    return q(id);
+}
+
+QString EditorController::addSticker(const QString& stickerId) {
+    if (!vstudio::stickers::findSticker(s(stickerId))) return {};
+    Id id;
+    if (!edit([&] {
+            id = editor_->addGeneratedClip(vstudio::stickers::defaultStickerContent(s(stickerId)), fromSecs(playhead_),
+                                           Time::fromSeconds(3));
+        }))
+        return {};
+    setSelectedClip(q(id));
+    return q(id);
+}
+
+std::optional<vstudio::Json> EditorController::selectedContent() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return std::nullopt;
+    return c->content;
+}
+
+void EditorController::updateContent(const vstudio::Json& patch) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return;
+    edit([&] { editor_->updateClipContent(c->id, patch); });
+}
+
+QRectF EditorController::objectCanvasRect() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return {};
+    const Time t = fromSecs(playhead_);
+    if (t < c->timelineIn || t >= c->timelineOut()) return {};
+    const auto r = vstudio::generatedRectOnCanvas(*snapshot_, *c, c->toSource(t));
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    return {r[0] / W, r[1] / H, r[2] / W, r[3] / H};
+}
+
+void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated() || from.width() <= 0) return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    const Transform tf = animatedTransform(*c, src);
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    const double k = to.width() / from.width();
+    // The box centre sits at canvas centre + offset + (box centre in content units) * scale.
+    const double x = to.center().x() * W - W / 2 - (from.center().x() * W - W / 2 - tf.x) * k;
+    const double y = to.center().y() * H - H / 2 - (from.center().y() * H - H / 2 - tf.y) * k;
+    edit([&] { editor_->setPropertyAt(c->id, src, {{kf::kScale, std::clamp(tf.scale * k, 0.05, 20.0)}, {kf::kX, x}, {kf::kY, y}}); });
+}
+
 void EditorController::setSelectedClip(const QString& id) {
     if (id == selected_) return;
     selected_ = id;
@@ -881,7 +954,8 @@ void EditorController::buildTracksModel() const {
             cm["id"] = q(c.id);
             cm["start"] = secs(c.timelineIn);
             cm["duration"] = secs(c.duration());
-            cm["name"] = names.value(q(c.assetId), QStringLiteral("?"));
+            const QString label = generatedLabel(c);
+            cm["name"] = label.isEmpty() ? names.value(q(c.assetId), QStringLiteral("?")) : label;
             cm["hasFx"] = c.effects.is_array() && !c.effects.empty();
             clips.push_back(cm);
         }
@@ -1076,6 +1150,7 @@ QString EditorController::cutLabel(const Cut& cut) const {
     const auto* cp = findCut(*snapshot_, s(cut.clipId), cut.edge, cuts);
     if (!cp) return {};
     auto name = [&](const vstudio::Clip* c) {
+        if (c->generated()) return generatedLabel(*c);
         const auto* a = snapshot_->findAsset(c->assetId);
         const QString uri = a ? q(a->uri) : QString("?");
         return uri.mid(uri.lastIndexOf('/') + 1);

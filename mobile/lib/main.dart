@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -17,6 +18,7 @@ import 'ui/cover_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
+import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
 import 'ui/transition_sheet.dart';
@@ -442,6 +444,18 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     return null;
   }
 
+  /// The selected text or sticker clip.
+  ClipView? get _selectedObject {
+    final c = _selectedVideoClip;
+    return c != null && c.generated ? c : null;
+  }
+
+  /// The selected video clip with media (looks and covers work on its picture).
+  ClipView? get _selectedMediaClip {
+    final c = _selectedVideoClip;
+    return c != null && !c.generated ? c : null;
+  }
+
   ClipView? get _selectedClip {
     for (final t in _project?.tracks ?? const <TrackView>[]) {
       for (final c in t.clips) {
@@ -514,6 +528,112 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (clip == null) return;
     _edit((vs) => vs.setPropertyAt(clip.id, _playhead, {'scale': 1, 'x': 0, 'y': 0}));
     _vs?.seek(_playhead);
+  }
+
+  // ---- text and stickers: clips without media, drawn by the core ----
+
+  /// Length of a new text or sticker clip.
+  static const _objectSeconds = 3.0;
+
+  /// Adds a text/sticker at the playhead and selects it; returns its content.
+  Map<String, dynamic>? _addObject(Map<String, dynamic> content) {
+    final vs = _vs;
+    if (vs == null) return null;
+    final dur = _project?.duration ?? 0;
+    final at = _playhead >= dur - 0.05 && dur > 0 ? math.max(0.0, dur - _objectSeconds) : _playhead;
+    _edit((vs) {
+      _selected = vs.addGeneratedClip(content, at, _objectSeconds);
+      _coverMode = false;
+      _activeCover = null;
+    });
+    if (_selectedObject == null) return null;
+    _seek(at + 0.7); // past the in animation, so the new object shows
+    return _selectedObject!.content;
+  }
+
+  void _patchObject(String clipId, Map<String, dynamic> patch) {
+    _edit((vs) => vs.updateClipContent(clipId, patch));
+    _vs?.seek(_playhead);
+  }
+
+  /// "Chữ": edits the selected text, or adds one.
+  Future<void> _text() async {
+    final vs = _vs;
+    if (vs == null) return;
+    var clip = _selectedObject;
+    if (clip == null || clip.kind != 'text') {
+      if (_addObject(vs.defaultText('Nhập chữ')) == null) return;
+      clip = _selectedObject!;
+    }
+    final id = clip.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => TextSheet(vs: vs, content: clip!.content!, onPatch: (p) => _patchObject(id, p)),
+    );
+  }
+
+  /// "Sticker": the library; picking one adds it at the playhead.
+  Future<void> _stickers() async {
+    final vs = _vs;
+    if (vs == null) return;
+    final selected = _selectedObject?.kind == 'sticker' ? _selectedObject : null;
+    var target = selected?.id;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => StickerSheet(
+        vs: vs,
+        content: selected?.content,
+        onPick: (sticker) {
+          final c = _addObject(vs.defaultSticker(sticker));
+          target = _selectedObject?.id;
+          return c;
+        },
+        onPatch: (p) {
+          if (target != null) _patchObject(target!, p);
+        },
+      ),
+    );
+  }
+
+  /// The object's box was dragged / pinched on the preview: one edit (a key when it is animated).
+  void _commitObject(Rect from, Rect to) {
+    final vs = _vs, clip = _selectedObject, project = _project;
+    if (vs == null || clip == null || project == null) return;
+    final st = vs.clipStateAt(clip.id, _playhead);
+    if (!st.inside) return;
+    final t = objectTransform(
+        Size(project.canvasWidth.toDouble(), project.canvasHeight.toDouble()), from, to, st.x, st.y, st.scale);
+    _edit((vs) => vs.setPropertyAt(clip.id, _playhead, {'scale': t.scale, 'x': t.x, 'y': t.y}));
+    vs.seek(_playhead);
+  }
+
+  /// The box of the selected text/sticker over the preview, while nothing plays.
+  Widget? _objectBox(Widget preview, ClipKeyState? keys) {
+    final vs = _vs, clip = _selectedObject;
+    if (vs == null || clip == null || keys == null || _playing) return null; // keys: the playhead is inside it
+    final (double, double, double, double)? r;
+    try {
+      r = vs.generatedRect(clip.id, _playhead);
+    } on VStudioException {
+      return null;
+    }
+    if (r == null) return null;
+    return Stack(fit: StackFit.expand, children: [
+      preview,
+      ObjectOverlay(
+        key: const Key('object-overlay'),
+        canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
+        rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
+        onChanged: _commitObject,
+        onDoubleTap: clip.kind == 'text' ? _text : _stickers,
+      ),
+    ]);
   }
 
   // ---- transitions: between touching clips, or a clip's free start / end ----
@@ -625,7 +745,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   Widget _coverable(Widget preview, ClipKeyState? keys) {
     final vs = _vs, clip = _selectedVideoClip, cover = _activeCover;
     if (!_coverMode || vs == null || clip == null || cover == null || keys == null || _playing) {
-      return _zoomable(preview, keys);
+      return _objectBox(preview, keys) ?? _zoomable(preview, keys);
     }
     final (double, double, double, double)? r;
     final String shape;
@@ -934,7 +1054,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
 
   /// The preview, pinchable when a video clip is selected under the playhead and nothing plays.
   Widget _zoomable(Widget preview, ClipKeyState? keys) => PreviewZoom(
-        enabled: keys != null && _selectedVideoClip != null && !_playing,
+        enabled: keys != null && _selectedMediaClip != null && !_playing,
         canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
         onCommit: _commitZoom,
         onReset: _resetZoom,
@@ -1070,8 +1190,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           child: Row(children: [
             _Tool(icon: Icons.add_photo_alternate_outlined, label: 'Nhập', onTap: _import),
             _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
-            _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedVideoClip == null ? null : _looks),
-            _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedVideoClip == null ? null : _enterCovers),
+            _Tool(icon: Icons.title, label: 'Chữ', onTap: _vs == null ? null : _text),
+            _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
+            _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
+            _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(
                 icon: Icons.delete_outline,

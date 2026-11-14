@@ -150,6 +150,36 @@ VS_API int vs_set_transition_everywhere(vs_session* s, const char* type, int64_t
 VS_API char* vs_cut_points_json(vs_session* s);
 VS_API int vs_transition_preview(const char* type, const uint8_t* a, const uint8_t* b, uint8_t* out, int width,
                                  int height, double progress);
+/* ---- text and stickers (text.hpp, stickers.hpp, generators.hpp) ----
+ * A text or sticker clip has no media: its "content" (in vs_project_json clips) says what it draws,
+ * {"kind": "text" | "sticker", ...}. Move/scale it like any clip with vs_set_property_at (x, y, scale).
+ * vs_fonts_json: [{"id","name","style","bundled"}]. vs_register_font: adds a TrueType/OpenType font
+ * (e.g. a company font) under `id`; 0 ok, -1 not a usable font.
+ * vs_text_animations_json: {"animations": [{"id","name","per_letter"}], "loops": [...]}; an animation
+ * plays as "in" and, backwards, as "out".
+ * vs_text_presets_json: [{"id","name","style"}]: one-tap looks, merge "style" into the content.
+ * vs_stickers_json: [{"id","name","category"}] in display order.
+ * vs_default_text_json / vs_default_sticker_json: content for a new clip.
+ * vs_add_generated_clip: content_json at timeline time `at` for `duration` ticks, on track_id or (NULL/"")
+ * the topmost free overlay track (a new one when needed); returns the clip id. One undo step.
+ * vs_update_clip_content: JSON merge patch into the clip's content (null removes a key). Undoable.
+ * vs_generated_rect: the clip's box on the canvas at a time (0..1 of the frame: x, y, w, h).
+ * vs_sticker_icon: draws sticker `id` (its idle motion at `seconds`) into transparent RGBA out.
+ * vs_content_preview: draws content at `local` seconds of a clip lasting `length`, fitted into out. */
+VS_API char* vs_fonts_json(void);
+VS_API int vs_register_font(const char* id, const char* name, const uint8_t* bytes, int64_t size);
+VS_API char* vs_text_animations_json(void);
+VS_API char* vs_text_presets_json(void);
+VS_API char* vs_stickers_json(void);
+VS_API char* vs_default_text_json(const char* text);
+VS_API char* vs_default_sticker_json(const char* sticker_id);
+VS_API char* vs_add_generated_clip(vs_session* s, const char* content_json, int64_t at, int64_t duration,
+                                   const char* track_id);
+VS_API int vs_update_clip_content(vs_session* s, const char* clip_id, const char* patch_json);
+VS_API int vs_generated_rect(vs_session* s, const char* clip_id, int64_t timeline_time, double* xywh);
+VS_API int vs_sticker_icon(const char* sticker_id, double seconds, uint8_t* out, int width, int height);
+VS_API int vs_content_preview(const char* content_json, double local, double length, uint8_t* out, int width,
+                              int height);
 /* Tracks (all undoable). A locked track refuses clip edits; enabled = 0 hides a video track,
  * muted silences an audio track. index_in_type: 0 = bottom video layer / first audio track. */
 VS_API int vs_remove_track(vs_session* s, const char* track_id);

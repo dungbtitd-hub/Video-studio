@@ -9,6 +9,9 @@ qt_add_executable(VideoStudio
   LooksPanel.cpp LooksPanel.h
   CoverPanel.cpp CoverPanel.h
   TransitionsPanel.cpp TransitionsPanel.h
+  AnimationBox.cpp AnimationBox.h
+  TextPanel.cpp TextPanel.h
+  StickerPanel.cpp StickerPanel.h
 )
 target_link_libraries(VideoStudio PRIVATE vstudio_desktop_common Qt6::Widgets)
 set_target_properties(VideoStudio PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON

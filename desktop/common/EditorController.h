@@ -27,6 +27,9 @@
 
 class AudioOutput;
 
+// Timeline label of a text/sticker clip ("" for media clips).
+QString generatedLabel(const vstudio::Clip& c);
+
 class EditorController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString projectName READ projectName NOTIFY projectChanged)
@@ -181,6 +184,19 @@ public:
     // Every clip that can take a look: video tracks that are not locked.
     [[nodiscard]] QStringList lookableClips() const;
     void setSelectedClip(const QString& id);
+
+    // ---- text and stickers ----
+    // Adds a text (default look) / sticker at the playhead for 3 s on a free overlay track and selects it.
+    QString addText(const QString& text = {});
+    QString addSticker(const QString& stickerId);
+    // Content of the selected clip when it is a text or sticker.
+    [[nodiscard]] std::optional<vstudio::Json> selectedContent() const;
+    // Merges `patch` into the selected text/sticker (one undo step).
+    void updateContent(const vstudio::Json& patch);
+    // The selected text/sticker's box on the canvas at the playhead (0..1), or null.
+    [[nodiscard]] QRectF objectCanvasRect() const;
+    // Moves/scales the selected text/sticker so that the box `from` becomes `to` (keyed when animated).
+    void setObjectCanvasRect(const QRectF& from, const QRectF& to);
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }

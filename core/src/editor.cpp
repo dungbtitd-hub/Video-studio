@@ -507,6 +507,67 @@ int Editor::setTransitionEverywhere(const std::string& type, Time duration) {
     return static_cast<int>(clips.size());
 }
 
+Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const Id& trackId) {
+    if (!content.is_object() || !content.contains("kind")) throw EditError("content needs a kind");
+    if (duration <= Time::zero()) throw EditError("empty clip");
+    Clip c;
+    c.id = newId();
+    c.timelineIn = std::max(Time::zero(), at).snapToFrame(project_.fps);
+    c.sourceIn = Time::zero();
+    c.sourceOut = duration.snapToFrame(project_.fps);
+    c.content = content;
+    const Id id = c.id;
+    Id target = trackId;
+    std::size_t newIndex = 0;
+    std::string newName;
+    if (target.empty()) {
+        // Topmost overlay track (not the bottom video track) with room here.
+        std::size_t firstVideo = project_.tracks.size(), lastVideo = 0;
+        for (std::size_t i = 0; i < project_.tracks.size(); ++i)
+            if (project_.tracks[i].type == TrackType::Video) {
+                firstVideo = std::min(firstVideo, i);
+                lastVideo = i;
+            }
+        for (std::size_t i = project_.tracks.size(); i-- > 0;) {
+            const Track& t = project_.tracks[i];
+            if (t.type != TrackType::Video || t.locked || i == firstVideo) continue;
+            const bool free = std::none_of(t.clips.begin(), t.clips.end(), [&](const Clip& x) { return x.range().overlaps(c.range()); });
+            if (free) {
+                target = t.id;
+                break;
+            }
+        }
+        if (target.empty()) {
+            target = newId();
+            newIndex = firstVideo < project_.tracks.size() ? lastVideo + 1 : 0;
+            newName = content.value("kind", std::string{}) == "text" ? "Chữ" : "Sticker";
+        }
+    }
+    run(content.value("kind", std::string{}) == "text" ? "Add text" : "Add sticker", EditCommand::Scope::AllTracks, {},
+        [=](Project& p) {
+            if (!newName.empty()) {
+                Track t;
+                t.id = target;
+                t.type = TrackType::Video;
+                t.name = newName;
+                edit::addTrack(p, t, newIndex);
+            }
+            edit::insertClip(p, target, c);
+        });
+    return id;
+}
+
+void Editor::updateClipContent(const Id& clipId, const Json& patch) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    if (!tr->findClip(clipId)->generated()) throw EditError("not a text or sticker clip");
+    run("Edit content", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& c = editableClip(p, clipId);
+        c.content.merge_patch(patch);
+        if (!c.generated()) throw EditError("content needs a kind");
+    });
+}
+
 void Editor::setClipVolume(const Id& clipId, double v) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");
