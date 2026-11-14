@@ -9,6 +9,8 @@
 #include <string>
 
 #include "vstudio/color_space.hpp"
+#include "vstudio/cover.hpp"
+#include "vstudio/tracker.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
@@ -61,6 +63,16 @@ struct vs_session {
     vs_frame_sink sink = nullptr;
     void* sinkUser = nullptr;
     int previewW = 960, previewH = 540;
+
+    // Cover tracking: result handed back to the editing thread by vs_track_status.
+    std::atomic<int> trackStatus{0};
+    std::atomic<double> trackProgress{0.0};
+    CancelToken trackCancel;
+    std::mutex trackMu;
+    std::string trackClip, trackCover, trackError;
+    std::vector<std::pair<Time, std::array<double, 4>>> trackKeys;
+    bool trackLost = false;
+    std::unique_ptr<JobScheduler> trackJobs;
 
     std::atomic<int> exportStatus{VS_EXPORT_IDLE};
     std::atomic<double> exportProgress{0.0};
@@ -188,6 +200,17 @@ const Clip& clipOrThrow(vs_session* s, const char* clip_id) {
     if (!c) throw std::runtime_error("unknown clip");
     return *c;
 }
+std::map<std::string, double> numberMap(const std::string& json) {
+    const Json j = Json::parse(json);
+    if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
+    std::map<std::string, double> values;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (!it.value().is_number()) throw std::runtime_error("not a number: " + it.key());
+        values[it.key()] = it.value().get<double>();
+    }
+    return values;
+}
+
 kf::Group groupFrom(int g) {
     if (g != 0 && g != 1) throw std::runtime_error("group must be 0 (picture) or 1 (audio)");
     return g == 1 ? kf::Group::Audio : kf::Group::Picture;
@@ -240,6 +263,8 @@ vs_session* vs_session_open(const char* package_dir) {
 void vs_session_destroy(vs_session* s) {
     if (!s) return;
     s->exportCancel.cancel();
+    s->trackCancel.cancel();
+    s->trackJobs.reset();  // joins a running tracking job
     s->library.reset();  // cancels thumbnail/waveform work
     s->libJobs.reset();
     s->jobs.reset();     // joins export job
@@ -496,6 +521,211 @@ char* vs_clip_state_at(vs_session* s, const char* clip_id, int64_t ticks) {
         }
         return out.dump();
     });
+}
+
+char* vs_cover_styles_json(void) {
+    Json out = Json::array();
+    for (const auto& st : coverStyles())
+        out.push_back({{"id", st.id}, {"name", st.name}, {"category", st.category}, {"animated", st.animated}});
+    return dup(out.dump());
+}
+
+char* vs_cover_shapes_json(void) {
+    Json out = Json::array();
+    for (const auto& sh : coverShapes()) out.push_back({{"id", sh.id}, {"name", sh.name}});
+    return dup(out.dump());
+}
+
+char* vs_add_cover(vs_session* s, const char* clip_id, const char* params_json) {
+    return guardStr(s, [&] {
+        const std::string j = str(params_json);
+        const Json p = j.empty() ? Json::object() : Json::parse(j);
+        const Id id = s->editor->addCover(clipOrThrow(s, clip_id).id, p);
+        s->edited();
+        return id;
+    });
+}
+
+int vs_update_cover(vs_session* s, const char* clip_id, const char* cover_id, const char* patch_json) {
+    return guard(s, [&] {
+        const Json p = Json::parse(str(patch_json));
+        if (!p.is_object()) throw std::runtime_error("patch must be a JSON object");
+        s->editor->updateCover(clipOrThrow(s, clip_id).id, str(cover_id), p);
+        s->edited();
+    });
+}
+
+int vs_remove_cover(vs_session* s, const char* clip_id, const char* cover_id) {
+    return guard(s, [&] {
+        s->editor->removeCover(clipOrThrow(s, clip_id).id, str(cover_id));
+        s->edited();
+    });
+}
+
+int vs_set_cover_at(vs_session* s, const char* clip_id, const char* cover_id, int64_t t, const char* values_json) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        s->editor->setCoverAt(c.id, str(cover_id), c.toSource(Time::fromTicks(t)), numberMap(str(values_json)));
+        s->edited();
+    });
+}
+
+int vs_key_cover(vs_session* s, const char* clip_id, const char* cover_id, int64_t t) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        s->editor->keyCover(c.id, str(cover_id), c.toSource(Time::fromTicks(t)));
+        s->edited();
+    });
+}
+
+int vs_clear_cover_keys(vs_session* s, const char* clip_id, const char* cover_id, int64_t t) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        s->editor->clearCoverKeys(c.id, str(cover_id), c.toSource(Time::fromTicks(t)));
+        s->edited();
+    });
+}
+
+char* vs_cover_state_at(vs_session* s, const char* clip_id, const char* cover_id, int64_t t) {
+    return guardStr(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Json* p = s->editor->coverParams(c.id, str(cover_id));
+        if (!p) throw std::runtime_error("cover not found");
+        Json out = coverParamsAt(*p, c.toSource(Time::fromTicks(t)));
+        out["following"] = p->contains("anim") && (*p)["anim"].is_object() && !(*p)["anim"].empty();
+        return out.dump();
+    });
+}
+
+char* vs_covers_json(vs_session* s, const char* clip_id) {
+    return guardStr(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        Json out = Json::array();
+        if (c.effects.is_array())
+            for (const auto& e : c.effects)
+                if (e.is_object() && e.value("type", std::string{}) == kCoverEffect)
+                    out.push_back({{"id", e.value("effect_id", std::string{})}, {"params", e.value("params", Json::object())}});
+        return out.dump();
+    });
+}
+
+int vs_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t t, double* xywh) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Json* p = s->editor->coverParams(c.id, str(cover_id));
+        if (!p) throw std::runtime_error("cover not found");
+        const Time src = c.toSource(Time::fromTicks(t));
+        const auto r = sourceRectOnCanvas(s->editor->project(), c, src);
+        if (!r) throw std::runtime_error("clip has no picture size");
+        const Json now = coverParamsAt(*p, src);
+        const double W = s->editor->project().canvas.width, H = s->editor->project().canvas.height;
+        if (xywh) {
+            xywh[0] = ((*r)[0] + now.value("x", 0.0) * (*r)[2]) / W;
+            xywh[1] = ((*r)[1] + now.value("y", 0.0) * (*r)[3]) / H;
+            xywh[2] = now.value("w", 0.0) * (*r)[2] / W;
+            xywh[3] = now.value("h", 0.0) * (*r)[3] / H;
+        }
+    });
+}
+
+int vs_set_cover_canvas_rect(vs_session* s, const char* clip_id, const char* cover_id, int64_t t, double x, double y,
+                             double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Time src = c.toSource(Time::fromTicks(t));
+        const auto r = sourceRectOnCanvas(s->editor->project(), c, src);
+        if (!r || (*r)[2] <= 0 || (*r)[3] <= 0) throw std::runtime_error("clip has no picture size");
+        const double W = s->editor->project().canvas.width, H = s->editor->project().canvas.height;
+        s->editor->setCoverAt(c.id, str(cover_id), src,
+                              {{"x", (x * W - (*r)[0]) / (*r)[2]}, {"y", (y * H - (*r)[1]) / (*r)[3]},
+                               {"w", w * W / (*r)[2]}, {"h", h * H / (*r)[3]}});
+        s->edited();
+    });
+}
+
+int vs_cover_preview(const char* style, const char* shape, uint8_t* rgba, int width, int height) {
+    if (!rgba || width <= 0 || height <= 0 || !findCoverStyle(str(style))) return -1;
+    try {
+        VideoFrame f;
+        f.width = width;
+        f.height = height;
+        f.rgba.assign(rgba, rgba + static_cast<std::size_t>(width) * height * 4);
+        Json p = defaultCover(str(style), isCoverShape(str(shape)) ? str(shape) : "rect");
+        p.update(Json{{"x", 0.15}, {"y", 0.15}, {"w", 0.7}, {"h", 0.7}, {"feather", 0.08}});
+        applyCover(f, p, Time::fromSeconds(0.5));
+        std::memcpy(rgba, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int vs_track_cover_start(vs_session* s, const char* clip_id, const char* cover_id, int64_t from, int64_t to) {
+    return guard(s, [&] {
+        if (s->trackStatus == 1) throw std::runtime_error("tracking is already running");
+        if (!s->media()) throw std::runtime_error("no media module available");
+        const Clip& c = clipOrThrow(s, clip_id);
+        if (!s->editor->coverParams(c.id, str(cover_id))) throw std::runtime_error("cover not found");
+        if (!s->trackJobs) s->trackJobs = std::make_unique<JobScheduler>(1);
+        auto snap = s->editor->snapshot();
+        const Id clip = c.id, cover = str(cover_id);
+        const Time a = Time::fromTicks(from), b = to > 0 ? Time::fromTicks(to) : c.timelineOut();
+        {
+            std::lock_guard lk(s->trackMu);
+            s->trackClip = clip;
+            s->trackCover = cover;
+            s->trackKeys.clear();
+            s->trackError.clear();
+            s->trackLost = false;
+        }
+        s->trackCancel = CancelToken{};
+        s->trackProgress = 0.0;
+        s->trackStatus = 1;
+        const std::string base = mediaBaseDir(s->packageDir);
+        s->trackJobs->submit("track", JobPriority::Normal,
+                             [s, snap, clip, cover, a, b, base](const CancelToken& tok) {
+                                 MediaPool pool(s->backend, base);
+                                 const CoverTrack r = trackCoverInClip(*snap, pool, clip, cover, a, b, [&](double p) {
+                                     s->trackProgress = p;
+                                     return !tok.cancelled();
+                                 });
+                                 std::lock_guard lk(s->trackMu);
+                                 s->trackKeys = r.keys;
+                                 s->trackError = r.result.error;
+                                 s->trackLost = r.result.lost;
+                                 s->trackStatus = r.result.cancelled ? -2 : (!r.result.error.empty() ? -1 : 3);  // 3: ready
+                             },
+                             s->trackCancel);
+    });
+}
+
+int vs_track_status(vs_session* s, double* progress) {
+    if (!s) return -1;
+    if (progress) *progress = s->trackProgress.load();
+    int st = s->trackStatus.load();
+    if (st == 3) {  // finished: apply on this (editing) thread, once
+        std::lock_guard lk(s->trackMu);
+        try {
+            if (!s->trackKeys.empty()) {
+                s->editor->setCoverTrack(s->trackClip, s->trackCover, s->trackKeys);
+                s->edited();
+            }
+            st = s->trackLost ? -3 : 2;
+        } catch (const std::exception& e) {
+            s->trackError = e.what();
+            st = -1;
+        }
+        s->trackStatus = st;
+    }
+    if (st == -1) {
+        std::lock_guard lk(s->trackMu);
+        s->error = s->trackError;
+    }
+    return st;
+}
+
+void vs_track_cancel(vs_session* s) {
+    if (s) s->trackCancel.cancel();
 }
 
 char* vs_suggested_log_format(vs_session* s, const char* asset_id) {

@@ -7,6 +7,7 @@
 // in the preview engine (background threads) and on export.
 #pragma once
 
+#include <array>
 #include <map>
 
 #include <memory>
@@ -68,6 +69,24 @@ public:
     // property is animated (auto-key), else the clip's static transform/volume.
     void setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values);
     void addClipEffect(const Id& clipId, const std::string& type, const Json& params);
+
+    // ---- covers (cover.hpp): one "builtin.cover" effect per covered region ----
+    // Adds a cover (params merged over defaultCover) and returns its effect id.
+    Id addCover(const Id& clipId, const Json& params);
+    // Merges `patch` into the cover's params (a null value removes that key).
+    void updateCover(const Id& clipId, const Id& effectId, const Json& patch);
+    void removeCover(const Id& clipId, const Id& effectId);
+    // Moves/resizes the cover at `sourceTime` the way the UI does: keyed when the cover
+    // follows motion (has keys), else its static region.
+    void setCoverAt(const Id& clipId, const Id& effectId, Time sourceTime, const std::map<std::string, double>& values);
+    // Starts following motion: keys the current region at `sourceTime`.
+    void keyCover(const Id& clipId, const Id& effectId, Time sourceTime);
+    // Stops following: keeps the region shown at `sourceTime` as the static one.
+    void clearCoverKeys(const Id& clipId, const Id& effectId, Time sourceTime);
+    // Tracking result: replaces the region keys between the first and last sample
+    // with these (linear in between, so the cover moves exactly like the subject).
+    void setCoverTrack(const Id& clipId, const Id& effectId, const std::vector<std::pair<Time, std::array<double, 4>>>& boxes);
+    [[nodiscard]] const Json* coverParams(const Id& clipId, const Id& effectId) const;
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null

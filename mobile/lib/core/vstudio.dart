@@ -69,6 +69,31 @@ class ExportPresetView {
   final double fps;
 }
 
+class CoverStyleInfo {
+  const CoverStyleInfo(this.id, this.name, this.category, this.animated);
+  final String id, name, category;
+  final bool animated;
+}
+
+/// A cover's values at one moment.
+class CoverState {
+  CoverState(this.json);
+  final Map<String, dynamic> json;
+  double _d(String k, double fallback) => ((json[k] ?? fallback) as num).toDouble();
+  double get x => _d('x', 0.35);
+  double get y => _d('y', 0.35);
+  double get w => _d('w', 0.3);
+  double get h => _d('h', 0.3);
+  double get amount => _d('amount', 0.5);
+  double get feather => _d('feather', 0.15);
+  String get style => (json['style'] ?? 'blur') as String;
+  String get shape => (json['shape'] ?? 'rect') as String;
+  bool get invert => json['invert'] == true;
+  bool get following => json['following'] == true;
+}
+
+enum TrackState { idle, running, done, lost, cancelled, failed }
+
 /// Keyframe groups: picture (zoom, position, opacity) and audio (volume) are independent.
 enum KeyGroup { picture, audio }
 
@@ -305,6 +330,91 @@ class VStudio {
   ClipKeyState clipStateAt(String clipId, double t) => ClipKeyState.fromJson(
       jsonDecode(using((a) => _take(_b.clipStateAt(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t)))))
           as Map<String, dynamic>);
+
+  // ---- covers: blur / mosaic / bars over a region (x, y, w, h: 0..1 of the clip's source frame) ----
+
+  List<CoverStyleInfo> coverStyles() => [
+        for (final e in (jsonDecode(_take(_b.coverStylesJson())) as List).cast<Map<String, dynamic>>())
+          CoverStyleInfo(e['id'] as String, e['name'] as String, e['category'] as String, e['animated'] == true)
+      ];
+  List<(String, String)> coverShapes() => [
+        for (final e in (jsonDecode(_take(_b.coverShapesJson())) as List).cast<Map<String, dynamic>>())
+          (e['id'] as String, e['name'] as String)
+      ];
+
+  /// Adds a cover (centred box unless [params] say otherwise); returns its id.
+  String addCover(String clipId, [Map<String, Object?> params = const {}]) => using(
+      (a) => _take(_b.addCover(_s, clipId.toNativeUtf8(allocator: a), jsonEncode(params).toNativeUtf8(allocator: a))));
+  void updateCover(String clipId, String coverId, Map<String, Object?> patch) => using((a) => _check(_b.updateCover(
+      _s,
+      clipId.toNativeUtf8(allocator: a),
+      coverId.toNativeUtf8(allocator: a),
+      jsonEncode(patch).toNativeUtf8(allocator: a))));
+  void removeCover(String clipId, String coverId) =>
+      using((a) => _check(_b.removeCover(_s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a))));
+
+  /// Region / amount / rotation at [t]: keyed when the cover follows motion.
+  void setCoverAt(String clipId, String coverId, double t, Map<String, double> values) =>
+      using((a) => _check(_b.setCoverAt(_s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a),
+          secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
+  void setCoverFollowing(String clipId, String coverId, double t, bool on) => using((a) {
+        final c = clipId.toNativeUtf8(allocator: a), id = coverId.toNativeUtf8(allocator: a);
+        _check(on ? _b.keyCover(_s, c, id, secondsToTicks(t)) : _b.clearCoverKeys(_s, c, id, secondsToTicks(t)));
+      });
+  CoverState coverStateAt(String clipId, String coverId, double t) => CoverState(jsonDecode(using((a) => _take(_b
+          .coverStateAt(_s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a), secondsToTicks(t)))))
+      as Map<String, dynamic>);
+  List<(String, Map<String, dynamic>)> covers(String clipId) => [
+        for (final e in (jsonDecode(using((a) => _take(_b.coversJson(_s, clipId.toNativeUtf8(allocator: a))))) as List)
+            .cast<Map<String, dynamic>>())
+          (e['id'] as String, e['params'] as Map<String, dynamic>)
+      ];
+
+  /// The cover as shown on the canvas at [t] (0..1 of the output frame): (x, y, w, h), or null.
+  (double, double, double, double)? coverCanvasRect(String clipId, String coverId, double t) => using((a) {
+        final out = a<Double>(4);
+        final rc = _b.coverCanvasRect(
+            _s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a), secondsToTicks(t), out);
+        return rc == 0 ? (out[0], out[1], out[2], out[3]) : null;
+      });
+
+  /// Sets the cover from a rectangle drawn on the preview (canvas 0..1).
+  void setCoverCanvasRect(String clipId, String coverId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.setCoverCanvasRect(
+          _s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
+
+  /// A copy of [rgba] with the style over its middle, for style thumbnails.
+  Uint8List? coverPreview(String style, String shape, Uint8List rgba, int width, int height) => using((a) {
+        final buf = a<Uint8>(rgba.length);
+        buf.asTypedList(rgba.length).setAll(0, rgba);
+        if (_b.coverPreview(style.toNativeUtf8(allocator: a), shape.toNativeUtf8(allocator: a), buf, width, height) !=
+            0) {
+          return null;
+        }
+        return Uint8List.fromList(buf.asTypedList(rgba.length));
+      });
+
+  /// Follows the subject from [from] to the clip's end on a background thread.
+  void startTrackCover(String clipId, String coverId, double from) => using((a) => _check(_b.trackCoverStart(
+      _s, clipId.toNativeUtf8(allocator: a), coverId.toNativeUtf8(allocator: a), secondsToTicks(from), 0)));
+
+  /// Poll once per frame: when it reports done/lost, the keys were applied (one undo step).
+  (TrackState, double) trackStatus() => using((a) {
+        final p = a<Double>();
+        final st = _b.trackStatus(_s, p);
+        return (
+          switch (st) {
+            1 => TrackState.running,
+            2 => TrackState.done,
+            -3 => TrackState.lost,
+            -2 => TrackState.cancelled,
+            -1 => TrackState.failed,
+            _ => TrackState.idle,
+          },
+          p.value
+        );
+      });
+  void cancelTrack() => _b.trackCancel(_s);
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
   Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {

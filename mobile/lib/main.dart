@@ -13,6 +13,7 @@ import 'core/native_preview.dart';
 import 'core/project_store.dart';
 import 'core/transfer.dart';
 import 'core/vstudio.dart';
+import 'ui/cover_panel.dart';
 import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
@@ -55,6 +56,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   String? _packagePath; // the open project's .vstudio folder
   Timer? _saveTimer;
   late final AppLifecycleListener _lifecycle;
+  // Covers (blur / mosaic... over a region) of the selected video clip.
+  bool _coverMode = false;
+  String? _activeCover;
+  bool _tracking = false;
+  double _trackProgress = 0;
 
   @override
   void initState() {
@@ -249,7 +255,30 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         };
       }
     }
+    if (_tracking) _pollTrack(vs);
     if (playing || playing != _playing || _exportProgress != null) setState(() => _playing = playing);
+  }
+
+  void _pollTrack(VStudio vs) {
+    final (state, p) = vs.trackStatus();
+    if (state == TrackState.running) {
+      if ((p - _trackProgress).abs() >= 0.01) setState(() => _trackProgress = p);
+      return;
+    }
+    setState(() {
+      _tracking = false;
+      _refresh(); // the keys were applied as one undo step
+      _status = switch (state) {
+        TrackState.done => 'Vùng che đã bám theo đối tượng. Kéo vùng ở chỗ lệch để sửa.',
+        TrackState.lost => 'Mất dấu đối tượng ở giữa clip: phần đã bám được giữ lại, kéo vùng ở chỗ còn lại.',
+        TrackState.cancelled => 'Đã dừng bám theo',
+        _ => 'Không bám theo được: ${vs.lastError}',
+      };
+    });
+    if (state == TrackState.done || state == TrackState.lost) {
+      _scheduleSave();
+      vs.seek(_playhead);
+    }
   }
 
   void _edit(void Function(VStudio vs) f) {
@@ -480,6 +509,131 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (clip == null) return;
     _edit((vs) => vs.setPropertyAt(clip.id, _playhead, {'scale': 1, 'x': 0, 'y': 0}));
     _vs?.seek(_playhead);
+  }
+
+  // ---- covers: on the selected video clip, edited at the playhead ----
+
+  List<String> _coverIds() {
+    final vs = _vs, clip = _selectedVideoClip;
+    if (vs == null || clip == null) return const [];
+    try {
+      return [for (final (id, _) in vs.covers(clip.id)) id];
+    } on VStudioException {
+      return const [];
+    }
+  }
+
+  void _enterCovers() {
+    final ids = _coverIds();
+    setState(() {
+      _coverMode = true;
+      _activeCover = ids.isEmpty ? null : ids.first;
+      _status = 'Chọn kiểu che, rồi kéo vùng trên khung hình. Kéo góc dưới bên phải hoặc dùng hai ngón để đổi cỡ.';
+    });
+    if (ids.isEmpty) _addCover('blur', 'rect');
+  }
+
+  void _addCover(String style, String shape) {
+    final clip = _selectedVideoClip;
+    if (clip == null) return;
+    _edit((vs) => _activeCover = vs.addCover(clip.id, {'style': style, 'shape': shape}));
+    _vs?.seek(_playhead);
+  }
+
+  /// Any change to the active cover, then a fresh preview frame.
+  void _coverEdit(void Function(VStudio vs, String clip, String cover) f) {
+    final clip = _selectedVideoClip, cover = _activeCover;
+    if (clip == null || cover == null) return;
+    _edit((vs) => f(vs, clip.id, cover));
+    _vs?.seek(_playhead);
+  }
+
+  void _toggleTrack() {
+    final vs = _vs, clip = _selectedVideoClip, cover = _activeCover;
+    if (vs == null) return;
+    if (_tracking) {
+      vs.cancelTrack();
+      return;
+    }
+    if (clip == null || cover == null) return;
+    try {
+      vs.startTrackCover(clip.id, cover, _playhead);
+      setState(() {
+        _tracking = true;
+        _trackProgress = 0;
+        _status = 'Đang bám theo đối tượng từ vị trí hiện tại đến cuối clip…';
+      });
+    } on VStudioException catch (e) {
+      setState(() => _status = e.message);
+    }
+  }
+
+  /// The active cover over the preview, while covering and the clip is on screen.
+  Widget _coverable(Widget preview, ClipKeyState? keys) {
+    final vs = _vs, clip = _selectedVideoClip, cover = _activeCover;
+    if (!_coverMode || vs == null || clip == null || cover == null || keys == null || _playing) {
+      return _zoomable(preview, keys);
+    }
+    final (double, double, double, double)? r;
+    final String shape;
+    try {
+      r = vs.coverCanvasRect(clip.id, cover, _playhead);
+      shape = vs.coverStateAt(clip.id, cover, _playhead).shape;
+    } on VStudioException {
+      return preview;
+    }
+    if (r == null) return preview;
+    return Stack(fit: StackFit.expand, children: [
+      preview,
+      CoverOverlay(
+        canvasSize: Size(_project!.canvasWidth.toDouble(), _project!.canvasHeight.toDouble()),
+        rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
+        shape: shape,
+        onChanged: (n) => _coverEdit(
+            (vs, clip, cover) => vs.setCoverCanvasRect(clip, cover, _playhead, n.left, n.top, n.width, n.height)),
+      ),
+    ]);
+  }
+
+  Widget _coverPanel(VStudio vs, ClipView clip) {
+    final ids = _coverIds();
+    final active = ids.contains(_activeCover) ? _activeCover : null;
+    CoverState? st;
+    if (active != null) {
+      try {
+        st = vs.coverStateAt(clip.id, active, _playhead);
+      } on VStudioException {
+        st = null;
+      }
+    }
+    return CoverPanel(
+      vs: vs,
+      covers: ids,
+      active: active,
+      state: st,
+      tracking: _tracking,
+      trackProgress: _trackProgress,
+      onSelect: (id) => setState(() => _activeCover = id),
+      onAdd: _addCover,
+      onPatch: (patch) => _coverEdit((vs, clip, cover) => vs.updateCover(clip, cover, patch)),
+      onAmount: (v) => _coverEdit((vs, clip, cover) => vs.setCoverAt(clip, cover, _playhead, {'amount': v})),
+      onFollow: (on) => _coverEdit((vs, clip, cover) {
+        vs.setCoverFollowing(clip, cover, _playhead, on);
+        _status = on
+            ? 'Vùng che theo keyframe: sang thời điểm khác rồi kéo vùng, nó sẽ di chuyển mượt giữa các điểm.'
+            : 'Vùng che đứng yên';
+      }),
+      onTrack: _toggleTrack,
+      onRemove: () => _coverEdit((vs, clip, cover) {
+        vs.removeCover(clip, cover);
+        final rest = ids.where((i) => i != cover);
+        _activeCover = rest.isEmpty ? null : rest.first;
+      }),
+      onDone: () => setState(() {
+        _coverMode = false;
+        _status = null;
+      }),
+    );
   }
 
   /// Picks a .cube LUT, keeps a copy next to the media (so the project and its
@@ -765,12 +919,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               color: Colors.black,
               alignment: Alignment.center,
               child: _textureId != null && (_project?.duration ?? 0) > 0
-                  ? AspectRatio(aspectRatio: 720 / 1280, child: _zoomable(Texture(textureId: _textureId!), keys))
+                  ? AspectRatio(aspectRatio: 720 / 1280, child: _coverable(Texture(textureId: _textureId!), keys))
                   : _frame == null
                       ? const Text('Nhập video để bắt đầu', style: TextStyle(color: VsColors.fg3))
                       : AspectRatio(
                           aspectRatio: _frame!.width / _frame!.height,
-                          child: _zoomable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
+                          child: _coverable(RawImage(image: _frame, fit: BoxFit.fill), keys)),
             ),
           ),
           Container(
@@ -797,7 +951,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               Text('${project.duration.toStringAsFixed(1)} s', style: const TextStyle(color: VsColors.fg3)),
             ]),
           ),
-          if (_selectedClip != null)
+          if (_coverMode && _selectedVideoClip != null)
+            _coverPanel(_vs!, _selectedVideoClip!)
+          else if (_selectedClip != null)
             KeyframeBar(
               state: keys,
               video: _selectedVideoClip != null,
@@ -815,7 +971,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               playhead: _playhead,
               selectedClip: _selected,
               onSeek: _seek,
-              onSelect: (id) => setState(() => _selected = id),
+              onSelect: (id) => setState(() {
+                if (id != _selected) _activeCover = null;
+                _selected = id;
+                if (_selectedVideoClip == null) _coverMode = false;
+                if (_coverMode) _activeCover = _coverIds().firstOrNull;
+              }),
               onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
               onTrackFlags: (t, {required enabled, required locked, required muted}) =>
                   _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
@@ -851,6 +1012,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           _Tool(icon: Icons.add_photo_alternate_outlined, label: 'Nhập', onTap: _import),
           _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
           _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedVideoClip == null ? null : _looks),
+          _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedVideoClip == null ? null : _enterCovers),
           _Tool(
               icon: Icons.delete_outline,
               label: 'Xóa',

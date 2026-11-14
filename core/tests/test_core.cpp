@@ -6,7 +6,9 @@
 #include <thread>
 
 #include "fake_media.hpp"
+#include "vstudio/cover.hpp"
 #include "vstudio/editor.hpp"
+#include "vstudio/tracker.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/media_library.hpp"
@@ -1272,5 +1274,175 @@ TEST("keyframes: preview/export follow picture keys; volume fades without clicks
         CHECK(peak >= prevPeak - 1e-6);  // rises steadily through the fade
         CHECK(peak - prevPeak < 0.01);   // in small steps
         prevPeak = peak;
+    }
+}
+
+// ---- covers (blur/mosaic/bars over a region) and tracking ----
+
+namespace {
+VideoFrame texturedFrame(int w, int h, int boxX, int boxY, int boxSize) {
+    VideoFrame f;
+    f.allocate(w, h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            std::uint8_t* p = &f.rgba[(static_cast<std::size_t>(y) * w + x) * 4];
+            // Smooth background; a high-contrast checker "logo" inside the box.
+            std::uint8_t v = static_cast<std::uint8_t>(60 + (x * 40) / w + (y * 30) / h);
+            if (x >= boxX && x < boxX + boxSize && y >= boxY && y < boxY + boxSize)
+                v = (((x - boxX) / 4 + (y - boxY) / 4) % 2) ? 240 : 20;
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+    return f;
+}
+
+double regionContrast(const VideoFrame& f, int x0, int y0, int size) {
+    double lo = 255, hi = 0;
+    for (int y = y0; y < y0 + size; ++y)
+        for (int x = x0; x < x0 + size; ++x) {
+            const double v = f.rgba[(static_cast<std::size_t>(y) * f.width + x) * 4];
+            lo = std::min(lo, v), hi = std::max(hi, v);
+        }
+    return hi - lo;
+}
+
+// Decoder of a synthetic clip where a checker square moves right and down.
+class MovingBoxDecoder : public IMediaDecoder {
+public:
+    bool open(const std::string&, std::string*) override { return true; }
+    std::optional<VideoFrame> videoFrameAt(Time t) override {
+        const double s = t.seconds();
+        return texturedFrame(320, 180, 40 + static_cast<int>(s * 60), 50 + static_cast<int>(s * 20), 32);
+    }
+    AudioBuffer readAudio(Time, std::int64_t, int sr, int ch) override { return AudioBuffer{sr, ch, {}}; }
+};
+}  // namespace
+
+TEST("cover: every style hides the region and leaves the rest untouched") {
+    CHECK(coverStyles().size() >= 36);
+    CHECK_EQ(coverShapes().size(), 9u);
+    const VideoFrame base = texturedFrame(320, 180, 140, 70, 40);
+    for (const auto& st : coverStyles()) {
+        for (const char* shape : {"rect", "heart"}) {
+            VideoFrame f = base;
+            Json p = defaultCover(st.id, shape);
+            p["x"] = 130.0 / 320;
+            p["y"] = 60.0 / 180;
+            p["w"] = 60.0 / 320;
+            p["h"] = 60.0 / 180;
+            p["feather"] = 0.0;
+            applyCover(f, p, sec(0.5));
+            // Outside the region (plus feather) nothing changes.
+            CHECK_EQ(regionContrast(f, 0, 0, 40), regionContrast(base, 0, 0, 40));
+            CHECK(f.rgba[(10 * 320 + 10) * 4] == base.rgba[(10 * 320 + 10) * 4]);
+            // Inside: the picture changed (the checker is no longer intact).
+            CHECK(std::memcmp(f.rgba.data(), base.rgba.data(), f.rgba.size()) != 0);
+        }
+    }
+    // Blur / mosaic / black really hide the checker in the region's core.
+    for (const char* id : {"blur_strong", "mosaic_large", "black", "frosted"}) {
+        VideoFrame f = base;
+        Json p = defaultCover(id, "rect");
+        p.update(Json{{"x", 120.0 / 320}, {"y", 50.0 / 180}, {"w", 80.0 / 320}, {"h", 80.0 / 180}, {"feather", 0.0}});
+        applyCover(f, p, Time{});
+        CHECK(regionContrast(f, 150, 80, 20) < 0.5 * regionContrast(base, 150, 80, 20));
+    }
+    // Inverted: everything except the region.
+    VideoFrame inv = base;
+    Json p = defaultCover("black", "rect");
+    p.update(Json{{"x", 0.4}, {"y", 0.35}, {"w", 0.2}, {"h", 0.3}, {"feather", 0.0}, {"invert", true}});
+    applyCover(inv, p, Time{});
+    CHECK(inv.rgba[(5 * 320 + 5) * 4] < 10);
+    CHECK_EQ(regionContrast(inv, 145, 75, 20), regionContrast(base, 145, 75, 20));
+    // Deep (half float) frames work too.
+    VideoFrame deep = convertedFrame(base, PixelFormat::RGBA16F);
+    applyCover(deep, defaultCover("mosaic", "ellipse"), Time{});
+    CHECK(deep.deep());
+}
+
+TEST("cover: keyframed region follows motion; editor add/edit/follow/undo") {
+    Fixture f;
+    const Id clip = f.ed.appendClip(f.v1, f.asset, sec(0), sec(8));
+    const Id cov = f.ed.addCover(clip, Json{{"style", "mosaic"}, {"shape", "ellipse"}});
+    CHECK(f.ed.coverParams(clip, cov) != nullptr);
+    CHECK_THROWS(f.ed.addCover(clip, Json{{"style", "nope"}}));
+    // Static move.
+    f.ed.setCoverAt(clip, cov, sec(1), {{"x", 0.1}, {"y", 0.2}});
+    CHECK_EQ((*f.ed.coverParams(clip, cov))["x"].get<double>(), 0.1);
+    // Follow: key at 1 s, move at 3 s -> keyed; in between it glides.
+    f.ed.keyCover(clip, cov, sec(1));
+    f.ed.setCoverAt(clip, cov, sec(3), {{"x", 0.5}});
+    const Json mid = coverParamsAt(*f.ed.coverParams(clip, cov), sec(2));
+    CHECK(mid["x"].get<double>() > 0.1 && mid["x"].get<double>() < 0.5);
+    CHECK_EQ(coverParamsAt(*f.ed.coverParams(clip, cov), sec(0))["x"].get<double>(), 0.1);
+    // Tracking result replaces keys in its range with linear keys.
+    f.ed.setCoverTrack(clip, cov, {{sec(1), {0.1, 0.2, 0.3, 0.3}}, {sec(2), {0.2, 0.25, 0.3, 0.3}}, {sec(4), {0.6, 0.3, 0.3, 0.3}}});
+    const Json& anim = (*f.ed.coverParams(clip, cov))["anim"];
+    CHECK_EQ(anim["x"].size(), 3u);
+    CHECK_EQ(anim["x"][1]["ease"].get<std::string>(), std::string("linear"));
+    CHECK_NEAR(coverParamsAt(*f.ed.coverParams(clip, cov), sec(3))["x"].get<double>(), 0.4, 1e-9);
+    // Stop following keeps the region shown at that moment.
+    f.ed.clearCoverKeys(clip, cov, sec(4));
+    CHECK(!f.ed.coverParams(clip, cov)->contains("anim"));
+    CHECK_NEAR((*f.ed.coverParams(clip, cov))["x"].get<double>(), 0.6, 1e-9);
+    CHECK(f.ed.undo());
+    CHECK(f.ed.coverParams(clip, cov)->contains("anim"));
+    f.ed.updateCover(clip, cov, Json{{"style", "black"}, {"color", nullptr}});
+    CHECK_EQ((*f.ed.coverParams(clip, cov))["style"].get<std::string>(), std::string("black"));
+    CHECK(!f.ed.coverParams(clip, cov)->contains("color"));
+    // Several covers per clip; removing one keeps the other.
+    const Id cov2 = f.ed.addCover(clip, Json{{"style", "blur"}});
+    f.ed.removeCover(clip, cov);
+    CHECK(f.ed.coverParams(clip, cov) == nullptr);
+    CHECK(f.ed.coverParams(clip, cov2) != nullptr);
+    // Rendered through the effect module with the clip's source time.
+    ModuleRegistry r;
+    registerBuiltinModules(r);
+    VideoFrame frame = texturedFrame(64, 36, 20, 10, 16);
+    const VideoFrame before = frame;
+    applyClipEffects(r, *f.ed.project().findClip(clip), frame, sec(1), nullptr);
+    CHECK(std::memcmp(frame.rgba.data(), before.rgba.data(), frame.rgba.size()) != 0);
+    const Project back = projectFromJson(toJson(f.ed.project()));
+    CHECK(back.findClip(clip)->effects == f.ed.project().findClip(clip)->effects);
+}
+
+TEST("tracker: follows a moving logo frame by frame, then few keys describe it") {
+    MovingBoxDecoder dec;
+    const TrackBox start{40.0 / 320, 50.0 / 180, 32.0 / 320, 32.0 / 180};
+    int calls = 0;
+    const TrackResult r = trackRegion(dec, Time{}, sec(2), {30, 1}, start, [&](double) { return ++calls > 0; });
+    CHECK(r.error.empty());
+    CHECK(!r.lost);
+    CHECK(r.samples.size() >= 60u);
+    // At 2 s the box is at (160, 90) px.
+    const TrackBox& end = r.samples.back().box;
+    CHECK(std::abs(end.x * 320 - 160) < 3);
+    CHECK(std::abs(end.y * 180 - 90) < 3);
+    CHECK(std::abs(end.w * 320 - 32) < 3);
+    for (const auto& s : r.samples) CHECK(s.confidence > 0.6);
+    // Straight-line motion collapses to a handful of keys.
+    const auto keys = simplifyTrack(r.samples, 0.008);  // ~1.5 px on this tiny frame (the box moves in whole pixels)
+    CHECK(keys.size() <= 12u);
+    CHECK(keys.front().sourceTime == r.samples.front().sourceTime);
+    // Cancel stops at once; a tiny box is refused.
+    const TrackResult c = trackRegion(dec, Time{}, sec(2), {30, 1}, start, [](double) { return false; });
+    CHECK(c.cancelled);
+    CHECK(!trackRegion(dec, Time{}, sec(1), {30, 1}, TrackBox{0.5, 0.5, 0.001, 0.001}).error.empty());
+    // A box over a flat area (every candidate matches) neither balloons nor slows down:
+    // its size stays within 2x and it never leaves the picture.
+    struct FlatDecoder : MovingBoxDecoder {
+        std::optional<VideoFrame> videoFrameAt(Time) override {
+            VideoFrame f;
+            f.width = 320;
+            f.height = 180;
+            f.rgba.assign(static_cast<std::size_t>(320) * 180 * 4, 128);
+            return f;
+        }
+    } flat;
+    const TrackResult fr = trackRegion(flat, Time{}, sec(5), {30, 1}, TrackBox{0.6, 0.6, 0.3, 0.3});
+    CHECK(fr.samples.size() >= 140u);
+    for (const auto& s : fr.samples) {
+        CHECK(s.box.w <= 0.6 + 1e-9 && s.box.w >= 0.15 - 1e-9);
+        CHECK(s.box.x + s.box.w / 2 >= 0 && s.box.x + s.box.w / 2 <= 1);
     }
 }

@@ -1,11 +1,15 @@
 #include "EditorController.h"
 
 #include "vstudio/color_space.hpp"
+#include "vstudio/cover.hpp"
+#include "vstudio/tracker.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/looks.hpp"
 
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QHash>
 #include <QImage>
@@ -60,6 +64,8 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 
 EditorController::~EditorController() {
     exportCancel_.cancel();
+    trackCancel_.cancel();
+    trackJobs_.reset();
     library_.reset();
     libJobs_.reset();
     audio_.reset();
@@ -442,6 +448,172 @@ QList<double> EditorController::keyframeTimes(const QString& clipId, bool audio)
     return out;
 }
 
+// ---- covers ----
+
+void EditorController::setActiveCover(const QString& id) {
+    if (id == activeCover_) return;
+    activeCover_ = id;
+    emit coversChanged();
+}
+
+QVariantList EditorController::covers(const QString& clipId) const {
+    QVariantList out;
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c || !c->effects.is_array()) return out;
+    for (const auto& e : c->effects) {
+        if (!e.is_object() || e.value("type", std::string{}) != kCoverEffect) continue;
+        const Json p = e.value("params", Json::object());
+        const auto* st = findCoverStyle(p.value("style", std::string{}));
+        QString shapeName;
+        for (const auto& sh : coverShapes())
+            if (sh.id == p.value("shape", std::string{})) shapeName = q(sh.name);
+        out.push_back(QVariantMap{{"id", q(e.value("effect_id", std::string{}))},
+                                  {"style", q(p.value("style", std::string{}))},
+                                  {"shape", q(p.value("shape", std::string{}))},
+                                  {"name", (st ? q(st->name) : QString("?")) + " · " + shapeName},
+                                  {"following", p.contains("anim") && !p["anim"].empty()}});
+    }
+    return out;
+}
+
+QString EditorController::addCover(const QString& style, const QString& shape) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    const Track* track = c ? snapshot_->trackOfClip(c->id) : nullptr;
+    if (!c || track->type != TrackType::Video) {
+        setStatus(track ? tr("Covers need a video or photo clip") : tr("Select a clip first"));
+        return {};
+    }
+    Id id;
+    if (!edit([&] { id = editor_->addCover(c->id, Json{{"style", s(style)}, {"shape", s(shape)}}); })) return {};
+    activeCover_ = q(id);
+    emit coversChanged();
+    return activeCover_;
+}
+
+void EditorController::removeCover(const QString& id) {
+    if (selected_.isEmpty()) return;
+    edit([&] { editor_->removeCover(s(selected_), s(id)); });
+    if (activeCover_ == id) activeCover_.clear();
+    emit coversChanged();
+}
+
+QVariantMap EditorController::coverState() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    const Json* p = c && !activeCover_.isEmpty() ? editor_->coverParams(c->id, s(activeCover_)) : nullptr;
+    if (!p) return {};
+    const Time t = std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut());
+    Json now = coverParamsAt(*p, c->toSource(t));
+    now["following"] = p->contains("anim") && !(*p)["anim"].empty();
+    return QJsonDocument::fromJson(QByteArray::fromStdString(now.dump())).object().toVariantMap();
+}
+
+void EditorController::updateCover(const QVariantMap& patch) {
+    if (selected_.isEmpty() || activeCover_.isEmpty()) return;
+    const Json j = Json::parse(QJsonDocument(QJsonObject::fromVariantMap(patch)).toJson(QJsonDocument::Compact).toStdString());
+    // Region-like values go through setCoverAt so they key when following.
+    std::map<std::string, double> keyed;
+    Json rest = Json::object();
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (it.key() == "amount" || it.key() == "rotation") keyed[it.key()] = it.value().get<double>();
+        else rest[it.key()] = it.value();
+    }
+    const Clip* c = snapshot_->findClip(s(selected_));
+    if (!c) return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    edit([&] {
+        if (!rest.empty()) editor_->updateCover(c->id, s(activeCover_), rest);
+        if (!keyed.empty()) editor_->setCoverAt(c->id, s(activeCover_), src, keyed);
+    });
+}
+
+std::optional<QRectF> EditorController::sourceRectOnCanvas(const Clip& c) const {
+    const MediaAsset* a = snapshot_->findAsset(c.assetId);
+    if (!a || a->width <= 0 || a->height <= 0) return std::nullopt;
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    const Time t = std::clamp(fromSecs(playhead_), c.timelineIn, c.timelineOut());
+    const Transform tf = animatedTransform(c, c.toSource(t));
+    const double fit = std::min(W / a->width, H / a->height) * tf.scale;
+    const double w = a->width * fit, h = a->height * fit;
+    return QRectF(W / 2 + tf.x - w / 2, H / 2 + tf.y - h / 2, w, h);
+}
+
+QRectF EditorController::coverCanvasRect() const {
+    const QVariantMap st = coverState();
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (st.isEmpty() || !c) return {};
+    const auto src = sourceRectOnCanvas(*c);
+    if (!src) return {};
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    return QRectF((src->x() + st["x"].toDouble() * src->width()) / W, (src->y() + st["y"].toDouble() * src->height()) / H,
+                  st["w"].toDouble() * src->width() / W, st["h"].toDouble() * src->height() / H);
+}
+
+void EditorController::setCoverCanvasRect(const QRectF& r) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || activeCover_.isEmpty()) return;
+    const auto src = sourceRectOnCanvas(*c);
+    if (!src || src->width() <= 0 || src->height() <= 0) return;
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    const double x = (r.x() * W - src->x()) / src->width(), y = (r.y() * H - src->y()) / src->height();
+    const double w = r.width() * W / src->width(), h = r.height() * H / src->height();
+    const Time t = std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut());
+    edit([&] { editor_->setCoverAt(c->id, s(activeCover_), c->toSource(t), {{"x", x}, {"y", y}, {"w", w}, {"h", h}}); });
+}
+
+void EditorController::setCoverFollowing(bool on) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || activeCover_.isEmpty()) return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    edit([&] {
+        if (on) editor_->keyCover(c->id, s(activeCover_), src);
+        else editor_->clearCoverKeys(c->id, s(activeCover_), src);
+    });
+    emit coversChanged();
+}
+
+void EditorController::trackCover() {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (tracking_ || !c || activeCover_.isEmpty() || !backend_) return;
+    if (!trackJobs_) trackJobs_ = std::make_unique<JobScheduler>(1);
+    trackCancel_ = CancelToken{};
+    tracking_ = true;
+    trackProgress_ = 0;
+    emit coversChanged();
+    auto snap = snapshot_;
+    const Id clip = c->id, cover = s(activeCover_);
+    const Time from = std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut());
+    const std::string base = mediaBaseDir(s(packageDir_));
+    trackJobs_->submit("track", JobPriority::Normal, [this, snap, clip, cover, from, base](const CancelToken& tok) {
+        MediaPool pool(backend_, base);
+        CoverTrack r = trackCoverInClip(*snap, pool, clip, cover, from, snap->findClip(clip)->timelineOut(),
+                                        [this, &tok](double p) {
+                                            QMetaObject::invokeMethod(this, [this, p] {
+                                                trackProgress_ = p;
+                                                emit coversChanged();
+                                            }, Qt::QueuedConnection);
+                                            return !tok.cancelled();
+                                        });
+        QMetaObject::invokeMethod(this, [this, r = std::move(r), clip, cover] {
+            tracking_ = false;
+            bool ok = false;
+            QString msg;
+            if (r.result.cancelled) msg = tr("Tracking cancelled");
+            else if (!r.result.error.empty()) msg = q(r.result.error);
+            else if (r.keys.size() >= 2 && edit([&] { editor_->setCoverTrack(clip, cover, r.keys); })) {
+                ok = true;
+                msg = r.result.lost ? tr("Lost the subject after %1 s: the cover follows it up to there")
+                                          .arg(secs(r.result.samples.back().sourceTime - r.result.samples.front().sourceTime), 0, 'f', 1)
+                                    : tr("The cover now follows the subject (%1 keys)").arg(r.keys.size());
+            } else msg = tr("Could not follow the subject");
+            setStatus(msg);
+            emit coversChanged();
+            emit trackFinished(ok, msg);
+        }, Qt::QueuedConnection);
+    }, trackCancel_);
+}
+
+void EditorController::cancelTrack() { trackCancel_.cancel(); }
+
 QString EditorController::clipAsset(const QString& clipId) const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
     return c ? q(c->assetId) : QString{};
@@ -618,6 +790,10 @@ QString EditorController::timecode() const { return q(fromSecs(playhead_).timeco
 void EditorController::setSelectedClip(const QString& id) {
     if (id == selected_) return;
     selected_ = id;
+    if (!activeCover_.isEmpty()) {  // the active cover belongs to the previous clip
+        activeCover_.clear();
+        emit coversChanged();
+    }
     emit selectionChanged();
 }
 
