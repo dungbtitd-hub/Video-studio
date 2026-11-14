@@ -99,6 +99,13 @@ class TransitionInfo {
   final String id, name, category;
 }
 
+/// A video effect that moves the picture: zoom, rotate or reflection (one of each group per clip).
+class VideoFxInfo {
+  const VideoFxInfo(this.id, this.name, this.group, this.groupName, {this.animated = true, this.usesLine = false});
+  final String id, name, group, groupName;
+  final bool animated, usesLine;
+}
+
 /// Keyframe groups: picture (zoom, position, opacity) and audio (volume) are independent.
 enum KeyGroup { picture, audio }
 
@@ -572,6 +579,41 @@ class VStudio {
           return null;
         }
         return Uint8List.fromList(po.asTypedList(a.length));
+      });
+
+  // ---- video effects: zoom, rotate, reflection (video_fx.hpp) ----
+
+  static List<VideoFxInfo>? _videoFx;
+
+  /// Every video effect, in catalogue order (read once).
+  List<VideoFxInfo> videoFx() => _videoFx ??= [
+        for (final e in (jsonDecode(_take(_b.videoFxJson())) as List).cast<Map<String, dynamic>>())
+          VideoFxInfo(e['id'] as String, e['name'] as String, e['group'] as String, e['groupName'] as String,
+              animated: e['animated'] == true, usesLine: e['usesLine'] == true)
+      ];
+
+  /// Puts effect [fxId] of [group] ("zoom", "rotate", "reflect") on the clips, replacing that group's
+  /// effect; '' removes it. [line] < 0 keeps the default water line. One undo step.
+  void setClipVideoFx(List<String> clipIds, String group, String fxId,
+          {double amount = 1, double speed = 1, double line = -1}) =>
+      using((a) => _check(_b.setClipVideoFx(_s, jsonEncode(clipIds).toNativeUtf8(allocator: a),
+          group.toNativeUtf8(allocator: a), fxId.toNativeUtf8(allocator: a), amount, speed, line)));
+
+  /// A [width] x [height] thumbnail of effect [fxId] at [seconds] (of a 4 s loop), over [picture]
+  /// ([pw] x [ph] RGBA) or, without one, a small built-in landscape.
+  Uint8List? videoFxIcon(String fxId, double seconds, int width, int height,
+          {Uint8List? picture, int pw = 0, int ph = 0}) =>
+      using((al) {
+        Pointer<Uint8> pic = nullptr;
+        if (picture != null && pw > 0 && ph > 0) {
+          pic = al<Uint8>(picture.length);
+          pic.asTypedList(picture.length).setAll(0, picture);
+        }
+        final out = al<Uint8>(width * height * 4);
+        if (_b.videoFxIcon(fxId.toNativeUtf8(allocator: al), seconds, pic, pw, ph, out, width, height) != 0) {
+          return null;
+        }
+        return Uint8List.fromList(out.asTypedList(width * height * 4));
       });
 
   // ---- text and stickers: clips without media, drawn by the core from their "content" ----

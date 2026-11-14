@@ -11,6 +11,7 @@
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/video_fx.hpp"
 
 #include <QDir>
 #include <QJsonDocument>
@@ -349,6 +350,28 @@ void EditorController::setClipLook(const QStringList& clipIds, const QString& lo
     std::vector<Id> ids;
     for (const QString& c : clipIds) ids.push_back(s(c));
     edit([&] { editor_->setClipLook(ids, s(lookId), strength); });
+}
+
+void EditorController::setClipVideoFx(const QStringList& clipIds, const QString& group, const QString& fxId, double amount,
+                                      double speed, double line) {
+    std::vector<Id> ids;
+    for (const QString& c : clipIds) ids.push_back(s(c));
+    edit([&] { editor_->setClipVideoFx(ids, s(group), s(fxId), amount, speed, line); });
+}
+
+QVariantMap EditorController::clipVideoFx(const QString& clipId, const QString& group) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    const std::string type = videofx::effectTypeFor(s(group));
+    if (c && c->effects.is_array())
+        for (const auto& e : c->effects)
+            if (e.is_object() && e.value("type", std::string{}) == type && e.value("enabled", true) && e.contains("params")) {
+                const Json& p = e["params"];
+                return {{"fx", q(p.value("fx", std::string{}))},
+                        {"amount", p.value("amount", 1.0)},
+                        {"speed", p.value("speed", 1.0)},
+                        {"line", p.value("line", -1.0)}};
+            }
+    return {};
 }
 
 QPair<QString, double> EditorController::clipLook(const QString& clipId) const {

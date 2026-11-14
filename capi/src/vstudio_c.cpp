@@ -29,6 +29,7 @@
 #include "vstudio/preview.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/recents.hpp"
+#include "vstudio/video_fx.hpp"
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 
@@ -417,6 +418,48 @@ int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_
         s->editor->setClipLook(clips, str(look_id), strength);
         s->edited();
     });
+}
+
+char* vs_video_fx_json(void) {
+    Json out = Json::array();
+    for (const auto& f : videofx::videoFxCatalog())
+        out.push_back({{"id", f.id},
+                       {"name", f.name},
+                       {"group", f.group},
+                       {"groupName", videofx::groupName(f.group)},
+                       {"animated", f.animated},
+                       {"usesLine", f.usesLine}});
+    return dup(out.dump());
+}
+
+int vs_set_clip_video_fx(vs_session* s, const char* clip_ids_json, const char* group, const char* fx_id, double amount,
+                         double speed, double line) {
+    return guard(s, [&] {
+        const Json ids = Json::parse(str(clip_ids_json));
+        if (!ids.is_array()) throw std::runtime_error("clip_ids_json must be a JSON array");
+        std::vector<Id> clips;
+        for (const auto& id : ids) clips.push_back(id.get<std::string>());
+        s->editor->setClipVideoFx(clips, str(group), str(fx_id), amount, speed, line);
+        s->edited();
+    });
+}
+
+int vs_video_fx_icon(const char* fx_id, double seconds, const uint8_t* picture, int picture_w, int picture_h, uint8_t* out,
+                     int width, int height) {
+    if (!out || width <= 0 || height <= 0 || !videofx::findVideoFx(str(fx_id))) return -1;
+    try {
+        VideoFrame f, pic;
+        f.allocate(width, height);
+        if (picture && picture_w > 0 && picture_h > 0) {
+            pic.allocate(picture_w, picture_h);
+            std::memcpy(pic.rgba.data(), picture, pic.rgba.size());
+        }
+        videofx::drawVideoFxIcon(str(fx_id), seconds, f, pic.empty() ? nullptr : &pic);
+        std::memcpy(out, f.rgba.data(), f.rgba.size());
+        return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 namespace {

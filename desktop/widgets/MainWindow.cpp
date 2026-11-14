@@ -33,6 +33,7 @@
 #include "StickerPanel.h"
 #include "OverlayPanel.h"
 #include "RecentStrip.h"
+#include "VideoFxPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -229,6 +230,13 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
+    // Zoom, rotate and reflection effects for the selected clip.
+    auto* videoFxDock = new QDockWidget("Hiệu ứng video", this);
+    videoFxDock->setObjectName("videoFx");
+    videoFx_ = new VideoFxPanel(editor_, videoFxDock);
+    videoFxDock->setWidget(videoFx_);
+    addDockWidget(Qt::RightDockWidgetArea, videoFxDock);
+    tabifyDockWidget(looksDock, videoFxDock);
     auto* coverDock = new QDockWidget("Che mờ", this);
     coverDock->setObjectName("covers");
     covers_ = new CoverPanel(editor_, coverDock);

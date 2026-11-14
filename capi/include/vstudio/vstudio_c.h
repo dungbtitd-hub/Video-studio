@@ -75,6 +75,16 @@ VS_API int vs_ripple_delete(vs_session* s, const char* clip_id);
 VS_API char* vs_looks_json(void);
 VS_API int vs_set_clip_look(vs_session* s, const char* clip_ids_json, const char* look_id, double strength);
 VS_API int vs_look_preview(const char* look_id, double strength, uint8_t* rgba, int width, int height);
+/* Video effects (video_fx.hpp): zoom, rotate, reflection. vs_video_fx_json: [{"id","name","group",
+ * "groupName","animated","usesLine"}]; groups "zoom", "rotate", "reflect", one effect of each per clip.
+ * vs_set_clip_video_fx: fx_id "" removes the group's effect; amount 0..2, speed 0.25..4, line 0.1..0.9
+ * (reflections, < 0 = default); one undo step. vs_video_fx_icon: the effect at `seconds` on `picture`
+ * (RGBA, picture_w x picture_h; NULL = a built-in landscape) into opaque RGBA out. */
+VS_API char* vs_video_fx_json(void);
+VS_API int vs_set_clip_video_fx(vs_session* s, const char* clip_ids_json, const char* group, const char* fx_id,
+                                double amount, double speed, double line);
+VS_API int vs_video_fx_icon(const char* fx_id, double seconds, const uint8_t* picture, int picture_w, int picture_h,
+                            uint8_t* out, int width, int height);
 
 /* ---- Log / HDR input and 3D LUTs (color_space.hpp); undoable ---- */
 VS_API char* vs_log_formats_json(void); /* [{"id","name","vendor"}] */

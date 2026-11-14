@@ -12,6 +12,7 @@ import 'package:video_studio/ui/cover_panel.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
 import 'package:video_studio/ui/recent_strip.dart';
 import 'package:video_studio/ui/transition_sheet.dart';
+import 'package:video_studio/ui/video_fx_sheet.dart';
 import 'package:video_studio/core/project_model.dart';
 
 void main() {
@@ -504,6 +505,90 @@ void main() {
     expect(events.sublist(2), ['all dip_black', 'remove']);
     expect(tester.takeException(), isNull); // no overflow at phone width
     await tester.pumpWidget(const SizedBox()); // stops the preview timer
+  }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
+
+  test('video effects: one per group on a clip, shown on the clip, thumbnails move, undo', () {
+    final vs = VStudio.create('ffi-vfx', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final fx = vs.videoFx();
+    expect(fx.map((f) => f.group).toSet(), {'zoom', 'rotate', 'reflect'});
+    expect(fx.firstWhere((f) => f.id == 'reflect_water').usesLine, isTrue);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single.id;
+    vs.setClipVideoFx([clip], 'zoom', 'zoom_in');
+    vs.setClipVideoFx([clip], 'reflect', 'reflect_water', amount: 1.5, line: 0.5);
+    vs.setClipVideoFx([clip], 'zoom', 'zoom_shake'); // replaces the zoom, keeps the reflection
+    var c = vs.project().tracks.single.clips.single;
+    expect(c.videoFx.keys.toSet(), {'zoom', 'reflect'});
+    expect(c.videoFx['zoom']!['fx'], 'zoom_shake');
+    expect(c.videoFx['reflect']!['line'], closeTo(0.5, 1e-9));
+    expect(() => vs.setClipVideoFx([clip], 'zoom', 'reflect_water'), throwsA(isA<VStudioException>()));
+    vs.setClipVideoFx([clip], 'reflect', '');
+    expect(vs.project().tracks.single.clips.single.videoFx.keys, ['zoom']);
+    expect(vs.undo(), isTrue);
+    c = vs.project().tracks.single.clips.single;
+    expect(c.videoFx.containsKey('reflect'), isTrue);
+    // Thumbnails: the spin turns over time; a picture can stand in for the landscape.
+    final a = vs.videoFxIcon('rot_spin', 0.3, 32, 18)!, b = vs.videoFxIcon('rot_spin', 1.3, 32, 18)!;
+    expect(a.length, 32 * 18 * 4);
+    expect(a, isNot(equals(b)));
+    final red = Uint8List(16 * 16 * 4);
+    for (var i = 0; i < red.length; i += 4) {
+      red[i] = 255;
+      red[i + 3] = 255;
+    }
+    final own = vs.videoFxIcon('flip_h', 0, 8, 8, picture: red, pw: 16, ph: 16)!;
+    expect((own[0], own[1], own[3]), (255, 0, 255));
+    expect(vs.videoFxIcon('nope', 0, 8, 8), isNull);
+  }, skip: skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null));
+
+  testWidgets('video effect sheet: groups, tap applies and plays, sliders, remove, no overflow', (tester) async {
+    final vs = VStudio.create('ffi-vfx-sheet', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    vs.appendClip(track, vs.importMedia(media!));
+    final clip = vs.project().tracks.single.clips.single;
+    final events = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 360,
+            child: VideoFxSheet(
+              vs: vs,
+              clip: clip,
+              onSet: (g, fx, amount, speed, line) =>
+                  events.add('$g $fx ${amount.toStringAsFixed(1)} ${line.toStringAsFixed(2)}'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300))); // image decodes
+    await tester.pump();
+    expect(find.byType(RawImage), findsWidgets);
+    expect(find.byKey(const Key('vfx-line')), findsNothing); // only for reflections
+    expect(tester.widget<TextButton>(find.byKey(const Key('vfx-remove'))).onPressed, isNull);
+    await tester.tap(find.byKey(const Key('vfx-zoom_out')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('vfx-group-reflect')));
+    await tester.pump();
+    expect(find.byKey(const Key('vfx-line')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('vfx-reflect_water')));
+    await tester.pump();
+    await tester.drag(find.byKey(const Key('vfx-amount')), const Offset(60, 0));
+    await tester.pump();
+    expect(find.textContaining('Đang dùng:'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('vfx-remove')));
+    await tester.pump();
+    expect(events.sublist(0, 2), ['zoom zoom_out 1.0 -1.00', 'reflect reflect_water 1.0 0.62']);
+    expect(events[2], startsWith('reflect reflect_water 1.'));
+    expect(events[2], isNot('reflect reflect_water 1.0 0.62'));
+    expect(events.last, startsWith('reflect  '));
+    expect(tester.takeException(), isNull); // no overflow at phone width
+    await tester.pumpWidget(const SizedBox()); // stops the playing tile
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
 
   testWidgets('recent projects: saved ones slide up at the bottom, a tap opens one', (tester) async {

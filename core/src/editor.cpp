@@ -1,4 +1,5 @@
 #include "vstudio/editor.hpp"
+#include "vstudio/video_fx.hpp"
 
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
@@ -661,6 +662,52 @@ void Editor::setClipEffect(const std::vector<Id>& clipIds, const std::string& ty
                 if (!(e.is_object() && e.value("type", std::string{}) == type)) kept.push_back(e);
             if (!first && !fx.is_null()) kept.push_back(fx);
             clip->effects = std::move(kept);
+        }
+    });
+}
+
+void Editor::setClipVideoFx(const std::vector<Id>& clipIds, const std::string& group, const std::string& fxId,
+                            double amount, double speed, double line) {
+    const std::string type = videofx::effectTypeFor(group);
+    if (type.empty()) throw EditError("unknown effect group: " + group);
+    Json params;
+    if (!fxId.empty()) {
+        const videofx::VideoFxInfo* fx = videofx::findVideoFx(fxId);
+        if (!fx || fx->group != group) throw EditError("unknown " + group + " effect: " + fxId);
+        params = {{"fx", fxId}, {"amount", std::clamp(amount, 0.0, 2.0)}, {"speed", std::clamp(speed, 0.25, 4.0)}};
+        if (fx->usesLine && line >= 0) params["line"] = std::clamp(line, 0.1, 0.9);
+    }
+    if (clipIds.empty()) throw EditError("no clip selected");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    Json fx;
+    if (!params.is_null()) fx = Json{{"effect_id", newId()}, {"type", type}, {"enabled", true}, {"params", params}};
+    run(fx.is_null() ? "Remove video effect" : "Video effect", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        // Geometry last, in a fixed order, so colour and covers stay on their subject.
+        static const std::vector<std::string> order = {videofx::kZoomEffect, videofx::kRotateEffect,
+                                                       videofx::kReflectEffect};
+        auto rank = [&](const Json& e) {
+            return std::find(order.begin(), order.end(), e.value("type", std::string{})) - order.begin();
+        };
+        for (const Id& c : clipIds) {
+            Clip* clip = p.trackOfClip(c)->findClip(c);
+            Json others = Json::array(), geo = Json::array();
+            if (clip->effects.is_array())
+                for (const auto& e : clip->effects) {
+                    if (!e.is_object()) continue;
+                    const std::string t = e.value("type", std::string{});
+                    if (t == type) continue;  // replaced (or removed)
+                    (rank(e) < static_cast<std::ptrdiff_t>(order.size()) ? geo : others).push_back(e);
+                }
+            if (!fx.is_null()) geo.push_back(fx);
+            std::stable_sort(geo.begin(), geo.end(), [&](const Json& x, const Json& y) { return rank(x) < rank(y); });
+            for (auto& e : geo) others.push_back(e);
+            clip->effects = std::move(others);
         }
     });
 }

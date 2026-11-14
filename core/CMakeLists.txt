@@ -32,6 +32,7 @@ add_library(vstudio_core STATIC
   src/stickers_extra.cpp
   src/stickers_more.cpp
   src/recents.cpp
+  src/video_fx.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/embedded_fonts.cpp
 )
 add_library(vstudio::core ALIAS vstudio_core)

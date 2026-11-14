@@ -172,6 +172,13 @@ class VStudioBindings {
             Int32 Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, Int32, Int32, Double),
             int Function(
                 CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double)>('vs_transition_preview'),
+        videoFxJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_video_fx_json'),
+        setClipVideoFx = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, CStr, CStr, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, CStr, CStr, double, double, double)>('vs_set_clip_video_fx'),
+        videoFxIcon = lib.lookupFunction<
+            Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32, Pointer<Uint8>, Int32, Int32),
+            int Function(CStr, double, Pointer<Uint8>, int, int, Pointer<Uint8>, int, int)>('vs_video_fx_icon'),
         fontsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_fonts_json'),
         registerFont = lib.lookupFunction<Int32 Function(CStr, CStr, Pointer<Uint8>, Int64),
             int Function(CStr, CStr, Pointer<Uint8>, int)>('vs_register_font'),
@@ -309,6 +316,9 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, int) setTransitionEverywhere;
   final CStr Function(Pointer<VsSession>) cutPointsJson;
   final int Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double) transitionPreview;
+  final CStr Function() videoFxJson;
+  final int Function(Pointer<VsSession>, CStr, CStr, CStr, double, double, double) setClipVideoFx;
+  final int Function(CStr, double, Pointer<Uint8>, int, int, Pointer<Uint8>, int, int) videoFxIcon;
   final CStr Function() fontsJson;
   final int Function(CStr, CStr, Pointer<Uint8>, int) registerFont;
   final CStr Function() textAnimationsJson;

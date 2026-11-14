@@ -22,6 +22,7 @@ class ClipView {
       this.lut,
       this.pictureKeys = const [],
       this.audioKeys = const [],
+      this.videoFx = const {},
       this.content});
   final String id;
   final String assetId;
@@ -38,6 +39,8 @@ class ClipView {
   // opacity) and audio (volume) keys are independent.
   final List<double> pictureKeys;
   final List<double> audioKeys;
+  // Video effects by group ("zoom", "rotate", "reflect"): their params {"fx", "amount", "speed", "line"}.
+  final Map<String, Map<String, dynamic>> videoFx;
   // Text and sticker clips have no media: what they draw ({"kind": "text" | "sticker", ...}).
   final Map<String, dynamic>? content;
   String get kind => (content?['kind'] ?? '') as String;
@@ -179,6 +182,10 @@ class ProjectView {
           lut: effect('builtin.lut')?['path'] as String?,
           pictureKeys: keys(const ['scale', 'x', 'y', 'opacity']),
           audioKeys: keys(const ['volume']),
+          videoFx: {
+            for (final g in const ['zoom', 'rotate', 'reflect'])
+              if (effect('builtin.fx_$g') case final p? when (p['fx'] ?? '') != '') g: p,
+          },
           content: content,
         ));
       }

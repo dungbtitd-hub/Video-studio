@@ -299,6 +299,18 @@ int main(void) {
         vs_free(undo_after);
     }
 
+    /* Video effects: catalog, a thumbnail, a bad id refused. */
+    {
+        char* vfx = vs_video_fx_json();
+        EXPECT(vfx && strstr(vfx, "\"reflect_water\"") && strstr(vfx, "\"zoom_in\"") && strstr(vfx, "\"rot_90\""));
+        vs_free(vfx);
+        uint8_t px[48 * 27 * 4];
+        EXPECT(vs_video_fx_icon("reflect_water", 1.0, NULL, 0, 0, px, 48, 27) == 0 && px[3] == 255);
+        EXPECT(vs_video_fx_icon("nope", 1.0, NULL, 0, 0, px, 48, 27) != 0);
+        EXPECT(vs_set_clip_video_fx(s, "[\"missing\"]", "zoom", "zoom_in", 1, 1, -1) != 0);
+        EXPECT(vs_set_clip_video_fx(s, "[]", "nope", "zoom_in", 1, 1, -1) != 0);
+    }
+
     /* Recent projects: a save writes the card, the start screen lists it, the recent list orders it. */
     EXPECT(vs_save(s, "capi_test_recent/Recent.vstudio") == 0);
     char* cards = vs_recent_projects_json(NULL, "capi_test_recent", 1, 10, NULL);

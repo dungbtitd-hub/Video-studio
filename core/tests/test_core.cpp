@@ -1993,3 +1993,107 @@ TEST("editor: live preview of a gesture leaves the project and the undo history 
     CHECK(f.ed.undo());
     CHECK_NEAR(f.ed.project().findClip(clip)->content.value("size", 0.0), 320.0, 1e-9);
 }
+
+// ------------------------------------------------------------------ video effects (zoom, rotate, reflect)
+
+#include "vstudio/video_fx.hpp"
+
+TEST("video effects: every one moves the picture smoothly, repeats exactly, reflections keep the top") {
+    using namespace videofx;
+    const auto& cat = videoFxCatalog();
+    CHECK(cat.size() >= 20);
+    std::set<std::string> groups;
+    for (const auto& fx : cat) groups.insert(fx.group);
+    CHECK_EQ(groups.size(), std::size_t(3));
+    VideoFrame base;
+    base.allocate(160, 90);
+    drawVideoFxIcon("zoom_in", 0, base);  // the landscape, untouched at t = 0
+    auto diff = [](const VideoFrame& a, const VideoFrame& b) {
+        double d = 0;
+        for (std::size_t i = 0; i < a.rgba.size(); ++i) d += std::abs(int(a.rgba[i]) - int(b.rgba[i]));
+        return d / a.rgba.size();
+    };
+    for (const auto& fx : cat) {
+        VideoFrame f = base;
+        applyVideoFx(f, Json{{"fx", fx.id}}, 2.3, 4.0);
+        double moved = 0;  // over a few moments (a beat is brief)
+        for (double t : {0.4, 1.3, 2.3}) {
+            VideoFrame g = base;
+            applyVideoFx(g, Json{{"fx", fx.id}}, t, 4.0);
+            moved = std::max(moved, diff(g, base));
+        }
+        if (moved < 0.5) std::printf("  %s does not change the picture\n", fx.id.c_str());
+        CHECK(moved >= 0.5);
+        VideoFrame again = base;
+        applyVideoFx(again, Json{{"fx", fx.id}}, 2.3, 4.0);
+        CHECK(again.rgba == f.rgba);  // a pure function of time
+        if (!fx.animated) continue;
+        // No jumps: a frame later the picture moved only a little.
+        VideoFrame next = base;
+        applyVideoFx(next, Json{{"fx", fx.id}}, 2.3 + 1.0 / 30, 4.0);
+        if (diff(next, f) > 12) std::printf("  %s jumps (%.1f)\n", fx.id.c_str(), diff(next, f));
+        CHECK(diff(next, f) <= 12);
+    }
+    // Slow zooms start (zoom in) or end (zoom out) on the untouched picture.
+    VideoFrame z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_in"}}, 0, 4);
+    CHECK(diff(z, base) < 0.01);
+    z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_out"}}, 4, 4);
+    CHECK(diff(z, base) < 0.01);
+    // Amount 0 leaves it alone.
+    z = base;
+    applyVideoFx(z, Json{{"fx", "zoom_pulse"}, {"amount", 0}}, 0.4, 4);
+    CHECK(diff(z, base) < 0.01);
+    // A 90° turn of a wide picture keeps its shape: transparent bars at the sides.
+    z = base;
+    applyVideoFx(z, Json{{"fx", "rot_90"}}, 0, 4);
+    CHECK_EQ(int(z.rgba[(45 * 160 + 2) * 4 + 3]), 0);
+    CHECK_EQ(int(z.rgba[(45 * 160 + 80) * 4 + 3]), 255);
+    // Water: the picture above the line is untouched, the water below changes over time.
+    VideoFrame w1 = base, w2 = base;
+    applyVideoFx(w1, Json{{"fx", "reflect_water"}, {"line", 0.6}}, 1.0, 4);
+    applyVideoFx(w2, Json{{"fx", "reflect_water"}, {"line", 0.6}}, 1.5, 4);
+    CHECK(std::equal(w1.rgba.begin(), w1.rgba.begin() + 50 * 160 * 4, base.rgba.begin()));
+    CHECK(!std::equal(w1.rgba.begin() + 60 * 160 * 4, w1.rgba.end(), w2.rgba.begin() + 60 * 160 * 4));
+}
+
+TEST("video effects on clips: one per group, after colour, fixed order, undoable, rendered") {
+    Fixture f;
+    const Id a = f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(4));
+    f.ed.setClipVideoFx({a}, "reflect", "reflect_water", 1.0, 1.0, 0.7);
+    f.ed.setClipLook({a}, "teal_orange");
+    f.ed.setClipVideoFx({a}, "zoom", "zoom_in", 1.5, 2.0);
+    auto types = [&] {
+        std::vector<std::string> out;
+        for (const auto& e : f.ed.project().findClip(a)->effects) out.push_back(e.value("type", std::string{}));
+        return out;
+    };
+    // The look stays first; geometry runs zoom -> reflect whatever the order they were added in.
+    CHECK((types() == std::vector<std::string>{kColorLookEffect, videofx::kZoomEffect, videofx::kReflectEffect}));
+    f.ed.setClipVideoFx({a}, "zoom", "zoom_pulse");  // replaces within the group
+    CHECK_EQ(types().size(), std::size_t(3));
+    const Json& zoom = f.ed.project().findClip(a)->effects[1]["params"];
+    CHECK_EQ(zoom.value("fx", std::string{}), std::string("zoom_pulse"));
+    CHECK_NEAR(f.ed.project().findClip(a)->effects[2]["params"].value("line", 0.0), 0.7, 1e-9);
+    bool refused = false;
+    try {
+        f.ed.setClipVideoFx({a}, "zoom", "reflect_water");  // wrong group
+    } catch (const EditError&) {
+        refused = true;
+    }
+    CHECK(refused);
+    f.ed.setClipVideoFx({a}, "reflect", "");
+    CHECK_EQ(types().size(), std::size_t(2));
+    CHECK(f.ed.undo());
+    CHECK_EQ(types().size(), std::size_t(3));
+    // Rendered through the effect modules, with the clip's length passed in.
+    ModuleRegistry mods;
+    registerBuiltinModules(mods);
+    VideoFrame frame;
+    frame.allocate(64, 36);
+    videofx::drawVideoFxIcon("zoom_in", 0, frame);
+    const VideoFrame before = frame;
+    applyClipEffects(mods, *f.ed.project().findClip(a), frame, sec(1), nullptr, {});
+    CHECK(frame.rgba != before.rgba);
+}

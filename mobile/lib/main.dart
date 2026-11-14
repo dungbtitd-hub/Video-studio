@@ -23,6 +23,7 @@ import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
 import 'ui/transition_sheet.dart';
+import 'ui/video_fx_sheet.dart';
 
 void main() => runApp(const VideoStudioApp());
 
@@ -978,6 +979,25 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     );
   }
 
+  /// Zoom, rotate and reflection effects for the selected media clip.
+  Future<void> _videoFx() async {
+    final vs = _vs, clip = _selectedMediaClip;
+    if (vs == null || clip == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26, // keep the preview visible while trying effects
+      builder: (context) => VideoFxSheet(
+        vs: vs,
+        clip: clip,
+        onSet: (group, fx, amount, speed, line) {
+          _edit((vs) => vs.setClipVideoFx([clip.id], group, fx, amount: amount, speed: speed, line: line));
+          _vs?.seek(_playhead);
+        },
+      ),
+    );
+  }
+
   static String _ago(DateTime t) {
     final d = DateTime.now().difference(t);
     if (d.inMinutes < 1) return 'vừa xong';
@@ -1318,6 +1338,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
             _Tool(icon: Icons.ac_unit, label: 'Lớp phủ', onTap: _vs == null ? null : _overlays),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
+            _Tool(icon: Icons.zoom_in_map, label: 'Hiệu ứng', onTap: _selectedMediaClip == null ? null : _videoFx),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(
