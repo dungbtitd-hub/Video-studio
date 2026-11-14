@@ -15,6 +15,7 @@ qt_add_executable(VideoStudio
   OverlayPanel.cpp OverlayPanel.h
   RecentStrip.cpp RecentStrip.h
   VideoFxPanel.cpp VideoFxPanel.h
+  SubtitlePanel.cpp SubtitlePanel.h
 )
 target_link_libraries(VideoStudio PRIVATE vstudio_desktop_common Qt6::Widgets)
 set_target_properties(VideoStudio PROPERTIES WIN32_EXECUTABLE ON MACOSX_BUNDLE ON

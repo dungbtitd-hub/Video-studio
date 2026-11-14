@@ -19,6 +19,7 @@ import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/recent_strip.dart';
+import 'ui/subtitle_sheet.dart';
 import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
@@ -690,11 +691,68 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     );
   }
 
+  /// "Phụ đề": lines, look, place and AI translation of subtitle tracks.
+  Future<void> _subtitles() async {
+    final vs = _vs;
+    if (vs == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => SubtitleSheet(
+        vs: vs,
+        project: () {
+          _refresh();
+          return _project!;
+        },
+        playhead: () => _playhead,
+        selected: () => _selected,
+        onEdited: () {
+          setState(_refresh);
+          _scheduleSave();
+          _vs?.seek(_playhead);
+        },
+        onSelect: (id, at) {
+          setState(() => _selected = id);
+          _seek(at);
+        },
+      ),
+    );
+  }
+
+  /// A subtitle line dragged on the preview moves the whole track (or the line, when it has its own
+  /// place); pulling a corner changes the text size. Rects are 0..1 of the frame.
+  void _commitSubtitle(ClipView clip, Rect from, Rect to) {
+    final track = _project?.tracks.where((t) => t.clips.any((c) => c.id == clip.id)).firstOrNull;
+    if (track == null || from.width <= 0) return;
+    final k = to.width / from.width;
+    if ((k - 1).abs() > 0.01) {
+      final style = track.subtitle?['style'];
+      final size = (((style is Map ? style['size'] : null) ?? 56) as num).toDouble() * k;
+      _edit((vs) => vs.setSubtitleSettings(track.id, {
+            'style': {'size': size.clamp(12, 400).roundToDouble()}
+          }));
+    } else {
+      final pos = {
+        'anchor': 'custom',
+        'h': 'center',
+        'x': to.center.dx.clamp(0.0, 1.0),
+        'y': to.center.dy.clamp(0.0, 1.0),
+      };
+      _edit((vs) => clip.content?['position'] is Map
+          ? vs.updateClipContent(clip.id, {'position': pos})
+          : vs.setSubtitleSettings(track.id, {'position': pos}));
+    }
+    _vs?.seek(_playhead);
+  }
+
   /// The object's box was dragged / pinched on the preview: one edit (a key when it is animated).
   /// The selected text/sticker/overlay follows the fingers live (one edit when they lift).
   void _previewObject(Rect from, Rect to) {
     final clip = _selectedObject, project = _project;
-    if (clip == null || project == null) return;
+    // Subtitles are placed by their track's position: only the box follows the finger until it lifts.
+    if (clip == null || project == null || clip.kind == 'subtitle') return;
     _live((vs) {
       if (clip.kind == 'overlay') return vs.liveOverlayRegion(clip.id, _playhead, to.left, to.top, to.width, to.height);
       final st = vs.clipStateAt(clip.id, _playhead);
@@ -711,6 +769,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (clip.kind == 'overlay') {
       _edit((vs) => vs.setOverlayRegion(clip.id, _playhead, to.left, to.top, to.width, to.height));
       vs.seek(_playhead);
+      return;
+    }
+    if (clip.kind == 'subtitle') {
+      _commitSubtitle(clip, from, to);
       return;
     }
     final st = vs.clipStateAt(clip.id, _playhead);
@@ -740,7 +802,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
         onChanged: _commitObject,
         onChanging: _previewObject,
-        onDoubleTap: switch (clip.kind) { 'text' => _text, 'overlay' => _overlays, _ => _stickers },
+        onDoubleTap: switch (clip.kind) { 'text' => _text, 'overlay' => _overlays, 'subtitle' => _subtitles, _ => _stickers },
         freeShape: clip.kind == 'overlay',
       ),
     ]);
@@ -1337,6 +1399,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             _Tool(icon: Icons.title, label: 'Chữ', onTap: _vs == null ? null : _text),
             _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _vs == null ? null : _stickers),
             _Tool(icon: Icons.ac_unit, label: 'Lớp phủ', onTap: _vs == null ? null : _overlays),
+            _Tool(icon: Icons.closed_caption_outlined, label: 'Phụ đề', onTap: _vs == null ? null : _subtitles),
             _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedMediaClip == null ? null : _looks),
             _Tool(icon: Icons.zoom_in_map, label: 'Hiệu ứng', onTap: _selectedMediaClip == null ? null : _videoFx),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),

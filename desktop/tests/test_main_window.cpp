@@ -34,6 +34,14 @@
 #include "TextPanel.h"
 #include "RecentStrip.h"
 #include "VideoFxPanel.h"
+#include "SubtitlePanel.h"
+#include <QTableView>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include "vstudio/subtitles.hpp"
 #include <QPlainTextEdit>
 #include <QMimeData>
 
@@ -594,6 +602,123 @@ private slots:
         QCOMPARE(RecentStrip::ago(1000, 1030), QString("Vừa xong"));
         QCOMPARE(RecentStrip::ago(1000, 1000 + 7200), QString("2 giờ trước"));
         QCOMPARE(RecentStrip::length(83), QString("1:23"));
+    }
+
+    void subtitles() {
+        SubtitlePanel* sp = win_->subtitlePanel();
+        ctrl_->seek(1.0);
+        const int tracksBefore = int(ctrl_->project()->tracks.size());
+        sp->addButton()->click();
+        const QString line = ctrl_->selectedClip();
+        QVERIFY(!line.isEmpty());
+        QCOMPARE(int(ctrl_->project()->tracks.size()), tracksBefore + 1);
+        const QString track = ctrl_->currentSubtitleTrack();
+        QVERIFY(!track.isEmpty());
+        QVERIFY(win_->findChild<QDockWidget*>("subtitles")->isVisible());
+        sp->textEdit()->setPlainText(QString::fromUtf8("Xin chào các bạn"));
+        sp->commitText();
+        QCOMPARE(QString::fromStdString(ctrl_->selectedContent()->value("text", std::string{})), QString::fromUtf8("Xin chào các bạn"));
+        QVERIFY(win_->timeline()->clipLabel(line).contains(QString::fromUtf8("Xin chào")));
+        QCOMPARE(sp->cueList()->model()->rowCount(), 1);
+        // Import a file: a new track with its lines in the list.
+        QTemporaryDir dir;
+        const QString srt = dir.filePath("phim.srt");
+        {
+            QFile f(srt);
+            QVERIFY(f.open(QIODevice::WriteOnly));
+            f.write("1\n00:00:00,500 --> 00:00:01,500\nHello\n\n2\n00:00:02,000 --> 00:00:03,000\nWorld\n");
+        }
+        QVERIFY(ctrl_->importSubtitles(QUrl::fromLocalFile(srt)));
+        const QString imported = ctrl_->currentSubtitleTrack();
+        QVERIFY(imported != track);
+        QTRY_COMPARE(sp->cueList()->model()->rowCount(), 2);
+        QCOMPARE(sp->trackBox()->count(), 2);
+        // Style and position for the whole track.
+        QListWidgetItem* yellow = nullptr;
+        for (int i = 0; i < sp->styles()->count(); ++i)
+            if (sp->styles()->item(i)->data(Qt::UserRole) == "cinema_yellow") yellow = sp->styles()->item(i);
+        QVERIFY(yellow);
+        emit sp->styles()->itemClicked(yellow);
+        auto settings = [&](const QString& t) {
+            return ctrl_->project()->findTrack(t.toStdString())->extra["subtitle"];
+        };
+        QCOMPARE(QString::fromStdString(settings(imported)["style"].value("color", std::string{})), QString("#ffe14d"));
+        sp->positionButton(4)->click();  // top
+        QCOMPARE(QString::fromStdString(settings(imported)["position"].value("anchor", std::string{})), QString("top"));
+        // Dragging a line on the preview places the whole track freely.
+        ctrl_->seek(0.7);
+        sp->cueList()->selectRow(0);
+        QTRY_VERIFY(!ctrl_->objectCanvasRect().isEmpty());
+        const QRectF r = ctrl_->objectCanvasRect();
+        ctrl_->setObjectCanvasRect(r, r.translated(0, 0.3));
+        QCOMPARE(QString::fromStdString(settings(imported)["position"].value("anchor", std::string{})), QString("custom"));
+        QVERIFY(std::abs(ctrl_->objectCanvasRect().center().y() - (r.center().y() + 0.3)) < 0.01);
+        // Export.
+        const QString out = dir.filePath("out.vtt");
+        QVERIFY(ctrl_->exportSubtitles(imported, QUrl::fromLocalFile(out)));
+        QFile vtt(out);
+        QVERIFY(vtt.open(QIODevice::ReadOnly) && vtt.readAll().startsWith("WEBVTT"));
+
+        // AI translation through the open protocol, served by a local test server.
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        int requests = 0;
+        connect(&server, &QTcpServer::newConnection, this, [&] {
+            QTcpSocket* sock = server.nextPendingConnection();
+            auto buf = std::make_shared<QByteArray>();
+            connect(sock, &QTcpSocket::readyRead, sock, [sock, buf, &requests] {
+                buf->append(sock->readAll());
+                const int head = int(buf->indexOf("\r\n\r\n"));
+                if (head < 0) return;
+                const int len = QString::fromLatin1(*buf).section("Content-Length:", 1).section("\r\n", 0, 0).trimmed().toInt();
+                if (buf->size() < head + 4 + len) return;
+                const QJsonObject req = QJsonDocument::fromJson(buf->mid(head + 4, len)).object();
+                QJsonArray items;
+                for (const auto& v : req["items"].toArray())
+                    items.append(QJsonObject{{"id", v.toObject()["id"]}, {"text", "VI " + v.toObject()["text"].toString()}});
+                const QByteArray body = QJsonDocument(QJsonObject{{"items", items}}).toJson(QJsonDocument::Compact);
+                ++requests;
+                sock->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " +
+                            QByteArray::number(body.size()) + "\r\n\r\n" + body);
+                sock->disconnectFromHost();
+            });
+        });
+        QSignalSpy done(ctrl_, &EditorController::translationFinished);
+        const vstudio::Json cfg{{"provider", "custom"}, {"url", QString("http://127.0.0.1:%1/translate").arg(server.serverPort()).toStdString()}};
+        ctrl_->translateSubtitles(imported, cfg, "en", "vi", {}, 2, 1);  // one line per request
+        QTRY_COMPARE_WITH_TIMEOUT(done.count(), 1, 10000);
+        QVERIFY2(done.first().at(0).toBool(), qPrintable(done.first().at(1).toString()));
+        QCOMPARE(requests, 2);
+        const QString vi = ctrl_->currentSubtitleTrack();
+        QVERIFY(vi != imported);
+        const auto cues = vstudio::subtitles::cuesOf(*ctrl_->project()->findTrack(vi.toStdString()));
+        QCOMPARE(int(cues.size()), 2);
+        QCOMPARE(QString::fromStdString(cues[1].text), QString("VI World"));
+        QCOMPARE(QString::fromStdString(settings(vi)["position"].value("anchor", std::string{})), QString("above"));
+        // A program on this computer speaks the same protocol over stdin/stdout.
+        const QString python = QStandardPaths::findExecutable("python3");
+        const QString script = QFINDTESTDATA("../../tools/subtitle-translate/echo_translator.py");
+        if (!python.isEmpty() && !script.isEmpty()) {
+            done.clear();
+            ctrl_->translateSubtitles(imported, {{"provider", "command"}, {"command", ("\"" + python + "\" \"" + script + "\"").toStdString()}},
+                                      "en", "ja", {}, 0, 40);
+            QTRY_COMPARE_WITH_TIMEOUT(done.count(), 1, 20000);
+            QVERIFY2(done.first().at(0).toBool(), qPrintable(done.first().at(1).toString()));
+            const auto replaced = vstudio::subtitles::cuesOf(*ctrl_->project()->findTrack(imported.toStdString()));
+            QCOMPARE(QString::fromStdString(replaced[0].text), QString("[ja] Hello"));
+            ctrl_->undo();
+        }
+        // A wrong address fails cleanly, nothing applied.
+        const int tracks = int(ctrl_->project()->tracks.size());
+        server.close();
+        done.clear();
+        ctrl_->translateSubtitles(imported, {{"provider", "custom"}, {"url", "http://127.0.0.1:1/x"}}, "en", "vi", {}, 1);
+        QTRY_COMPARE_WITH_TIMEOUT(done.count(), 1, 20000);
+        QVERIFY(!done.first().at(0).toBool());
+        QCOMPARE(int(ctrl_->project()->tracks.size()), tracks);
+        // Everything undoes back to before.
+        while (int(ctrl_->project()->tracks.size()) > tracksBefore) ctrl_->undo();
+        QVERIFY(!ctrl_->project()->findClip(line.toStdString()));
     }
 
     void layoutResets() {

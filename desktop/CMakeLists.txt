@@ -2,16 +2,17 @@
 # (chosen over Qt Quick in P0, see docs/benchmarks/qml-vs-widgets.md).
 #   common/  UI-independent controller: core session, preview, audio
 #   widgets/ the app -> bin/VideoStudio
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Multimedia)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Multimedia Network)
 qt_standard_project_setup()
 
 # UI-independent glue: owns the core session, preview engine and audio output.
 qt_add_library(vstudio_desktop_common STATIC
   common/EditorController.cpp common/EditorController.h
   common/AudioOutput.cpp common/AudioOutput.h
+  common/TranslationClient.cpp common/TranslationClient.h
 )
 target_include_directories(vstudio_desktop_common PUBLIC common)
-target_link_libraries(vstudio_desktop_common PUBLIC Qt6::Core Qt6::Gui Qt6::Multimedia vstudio::core)
+target_link_libraries(vstudio_desktop_common PUBLIC Qt6::Core Qt6::Gui Qt6::Multimedia Qt6::Network vstudio::core)
 if(VSTUDIO_WITH_FFMPEG)
   target_link_libraries(vstudio_desktop_common PUBLIC vstudio::ffmpeg)
 endif()

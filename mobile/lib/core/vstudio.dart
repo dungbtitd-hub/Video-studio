@@ -201,6 +201,54 @@ class TextCatalog {
   }
 }
 
+class SubtitleCatalog {
+  SubtitleCatalog({required this.styles, required this.positions, required this.languages, required this.providers});
+  final List<Map<String, dynamic>> styles; // {"id","name","style"}
+  final List<Map<String, dynamic>> positions; // {"id","name","position"}
+  final List<Map<String, dynamic>> languages; // {"code","name","english"}
+  final List<Map<String, dynamic>> providers; // {"id","name","provider","url","model","needs_key","hint"}
+}
+
+/// One HTTP request of a translation, built by the core.
+class TranslationRequest {
+  TranslationRequest(this.method, this.url, this.headers, this.body);
+  final String method, url, body;
+  final List<(String, String)> headers;
+}
+
+/// A translation in progress (vs_translation). Free it with [dispose].
+class SubtitleTranslation {
+  SubtitleTranslation._(this._vs, this._t);
+  final VStudio _vs;
+  Pointer<VsTranslation> _t;
+
+  int get count => _t == nullptr ? 0 : _vs._b.translationCount(_t);
+  int get done => _t == nullptr ? 0 : _vs._b.translationDone(_t);
+  String get error => _t == nullptr ? '' : _vs._b.translationError(_t).toDartString();
+
+  TranslationRequest request(int i) {
+    final p = _vs._b.translationRequestJson(_t, i);
+    if (p == nullptr) throw VStudioException(error);
+    final j = jsonDecode(p.toDartString()) as Map<String, dynamic>;
+    _vs._b.free(p.cast());
+    return TranslationRequest(j['method'] as String, j['url'] as String,
+        [for (final h in (j['headers'] as List)) ((h as List)[0] as String, h[1] as String)], j['body'] as String);
+  }
+
+  /// The reply for batch [i]; null when accepted, else why it was not (retry).
+  String? accept(int i, String body) =>
+      using((a) => _vs._b.translationAccept(_t, i, body.toNativeUtf8(allocator: a)) == 0 ? null : error);
+
+  /// Puts the result in the project (mode 0 replace, 1 new track, 2 bilingual); returns the track id.
+  String apply(int mode) => _vs._take(_vs._b.translationApply(_vs._s, _t, mode));
+
+  void dispose() {
+    if (_t == nullptr) return;
+    _vs._b.translationFree(_t);
+    _t = nullptr;
+  }
+}
+
 class VStudio {
   VStudio._(this._b, this._s);
 
@@ -733,6 +781,64 @@ class VStudio {
         }
         return Uint8List.fromList(buf.asTypedList(n));
       });
+
+  // ---- subtitles: a subtitle track holds lines {"kind": "subtitle", "text"}; its look is on the track ----
+
+  static SubtitleCatalog? _subCatalog;
+
+  /// Styles, positions, languages and AI connectors (read once).
+  SubtitleCatalog subtitleCatalog() {
+    final cached = _subCatalog;
+    if (cached != null) return cached;
+    List<Map<String, dynamic>> list(String s) => (jsonDecode(s) as List).cast<Map<String, dynamic>>();
+    return _subCatalog = SubtitleCatalog(
+      styles: list(_take(_b.subtitleStylesJson())),
+      positions: list(_take(_b.subtitlePositionsJson())),
+      languages: list(_take(_b.subtitleLanguagesJson())),
+      providers: list(_take(_b.translationProvidersJson())),
+    );
+  }
+
+  /// A new subtitle track on top of the picture; returns its id.
+  String addSubtitleTrack({String name = 'Phụ đề', Map<String, dynamic>? settings}) =>
+      using((a) => _take(_b.addSubtitleTrack(
+          _s, name.toNativeUtf8(allocator: a), jsonEncode(settings ?? const {}).toNativeUtf8(allocator: a))));
+
+  /// A line at [at] on [trackId] (or the topmost subtitle track, created when needed); returns the clip id.
+  String addSubtitle(double at, String text, {String? trackId, double seconds = 2}) =>
+      using((a) => _take(_b.addSubtitle(_s, (trackId ?? '').toNativeUtf8(allocator: a), secondsToTicks(at),
+          text.toNativeUtf8(allocator: a), secondsToTicks(seconds))));
+
+  /// The text of an .srt / .vtt / .ass file as a new track; returns its id.
+  String importSubtitles(String fileText, {String name = 'Phụ đề', String lang = '', double offset = 0}) =>
+      using((a) => _take(_b.importSubtitles(_s, fileText.toNativeUtf8(allocator: a), name.toNativeUtf8(allocator: a),
+          lang.toNativeUtf8(allocator: a), secondsToTicks(offset))));
+
+  /// The track as an .srt (or .vtt) file.
+  String exportSubtitles(String trackId, {String format = 'srt'}) => using(
+      (a) => _take(_b.exportSubtitles(_s, trackId.toNativeUtf8(allocator: a), format.toNativeUtf8(allocator: a))));
+
+  /// JSON merge patch into the track's subtitle settings (style, position, max_width, lang).
+  void setSubtitleSettings(String trackId, Map<String, dynamic> patch) => using((a) => _check(
+      _b.setSubtitleSettings(_s, trackId.toNativeUtf8(allocator: a), jsonEncode(patch).toNativeUtf8(allocator: a))));
+
+  void shiftSubtitles(String trackId, double seconds) =>
+      using((a) => _check(_b.shiftSubtitles(_s, trackId.toNativeUtf8(allocator: a), secondsToTicks(seconds))));
+
+  /// An AI translation of a track: the app sends [SubtitleTranslation.request]s, hands back the replies.
+  SubtitleTranslation beginTranslation(String trackId, Map<String, dynamic> config,
+      {String from = '', required String to, String notes = '', int batchSize = 40}) {
+    final t = using((a) => _b.translationBegin(
+        _s,
+        trackId.toNativeUtf8(allocator: a),
+        jsonEncode(config).toNativeUtf8(allocator: a),
+        from.toNativeUtf8(allocator: a),
+        to.toNativeUtf8(allocator: a),
+        notes.toNativeUtf8(allocator: a),
+        batchSize));
+    if (t == nullptr) throw VStudioException(_b.lastError(_s).toDartString());
+    return SubtitleTranslation._(this, t);
+  }
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
   Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {

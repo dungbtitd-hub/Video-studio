@@ -19,6 +19,7 @@
 #include "vstudio/history.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
+#include "vstudio/subtitles.hpp"
 #include "vstudio/timeline.hpp"
 #include "vstudio/transitions.hpp"
 
@@ -109,6 +110,29 @@ public:
     // Sets the region an overlay effect covers to the canvas box {x, y, w, h} (canvas px) as seen
     // at `sourceTime`: its "w"/"h" and its position, scale kept (keyed when animated). One undo step.
     void setOverlayRegion(const Id& clipId, Time sourceTime, double x, double y, double w, double h);
+
+    // ---- subtitles (subtitles.hpp); each call is one undo step ----
+    // A new subtitle track on top of every video track. `settings` is merged over
+    // subtitles::defaultTrackSettings (text size scaled to the canvas).
+    Id addSubtitleTrack(const std::string& name = "Phụ đề", const Json& settings = Json::object());
+    // Inserts a line at `at` (moved past a line already there) lasting `duration`, cut short
+    // so it never covers the next line. Empty `trackId`: the topmost subtitle track, created
+    // when there is none (same undo step). Returns the clip id; throws when there is no room.
+    Id addSubtitle(const Id& trackId, Time at, const std::string& text, Time duration = Time::fromSeconds(2.0));
+    // A new subtitle track holding `cues` (normalised, shifted by `offset`). Returns the track id.
+    Id importSubtitles(const std::vector<subtitles::Cue>& cues, const std::string& name, const std::string& lang = {},
+                       Time offset = Time::zero());
+    // Merges `patch` into the track's subtitle settings (style, position, max_width, lang).
+    void setSubtitleSettings(const Id& trackId, const Json& patch);
+    // Moves every line of the track by `delta` (subtitles out of sync with the voice).
+    void shiftSubtitles(const Id& trackId, Time delta);
+    // Puts a translation in place: Replace changes the texts of the track; NewTrack adds a
+    // track with the same timing and look and hides the source; Bilingual adds it and keeps
+    // both, the translation stacked right above the source lines. Returns the track written.
+    enum class TranslationMode { Replace, NewTrack, Bilingual };
+    Id applySubtitleTranslation(const Id& sourceTrackId, const std::map<Id, std::string>& texts, const std::string& lang,
+                                TranslationMode mode);
+
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.
     // Adds or replaces the single effect of `type` on each clip, as one undo step; null
