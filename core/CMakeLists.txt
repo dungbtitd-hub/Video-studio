@@ -39,6 +39,7 @@ add_library(vstudio_core STATIC
   src/subtitles.cpp
   src/audio_fx.cpp
   src/clip_tools.cpp
+  src/plugins.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/embedded_fonts.cpp
 )
 add_library(vstudio::core ALIAS vstudio_core)
@@ -63,3 +64,7 @@ target_compile_features(vstudio_core PUBLIC cxx_std_20)
 if(VSTUDIO_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# Plugin API (beta): the C ABI header lives with the C API; plugins are opened with dlopen.
+target_include_directories(vstudio_core PRIVATE ${PROJECT_SOURCE_DIR}/capi/include)
+target_link_libraries(vstudio_core PRIVATE ${CMAKE_DL_LIBS})

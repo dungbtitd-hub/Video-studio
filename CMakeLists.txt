@@ -37,6 +37,11 @@ if(VSTUDIO_BUILD_TESTS)
   enable_testing()
 endif()
 
+# Example plugin (Plugin API beta): used by the tests and shipped with the desktop app.
+if((VSTUDIO_BUILD_TESTS OR VSTUDIO_BUILD_DESKTOP) AND NOT ANDROID AND NOT IOS)
+  add_subdirectory(plugins)
+endif()
+
 add_subdirectory(core)
 
 if(VSTUDIO_WITH_FFMPEG)
@@ -89,6 +94,7 @@ endif()
 if(VSTUDIO_BUILD_DESKTOP)
   add_subdirectory(desktop)
 endif()
+
 
 # ---- release packages (cpack): .deb + .tar.gz on Linux; Windows and macOS are
 # packaged by .github/workflows/release.yml (NSIS installer, .dmg). See packaging/README.md.

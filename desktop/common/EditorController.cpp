@@ -22,6 +22,7 @@
 #include <QHash>
 #include <QImage>
 #include <QMetaObject>
+#include <QCoreApplication>
 #include <QStandardPaths>
 
 #include "AudioOutput.h"
@@ -91,6 +92,16 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 #if defined(VSTUDIO_HAS_LIBRAW)
     libraw::registerModule(modules_);  // camera RAW photos, loaded on the first RAW file
 #endif
+    // Plugin effects (Plugin API beta): only manifests are read here, libraries open on first use.
+    {
+        const QString app = QCoreApplication::applicationDirPath();
+        QStringList dirs{app + "/plugins", app + "/../PlugIns",
+                         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/plugins"};
+        for (const QString& d : qEnvironmentVariable("VSTUDIO_PLUGIN_PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts))
+            dirs << d;
+        dirs.removeDuplicates();
+        for (const QString& d : dirs) loadPlugins(QDir::cleanPath(d));
+    }
     std::string err;
     backend_ = withStillDecoders(modules_.best<IMediaBackend>("decode", &err), modules_);
     jobs_ = std::make_unique<JobScheduler>();

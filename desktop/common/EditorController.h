@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 
+#include "vstudio/plugins.hpp"
 #include "vstudio/clip_tools.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/media_library.hpp"
@@ -299,6 +300,16 @@ public:
     [[nodiscard]] double stabilizeProgress() const { return stabProgress_; }
     void cancelStabilize() { stabCancel_.cancel(); }
 
+    // ---- plugins (Plugin API beta, vstudio/plugins.hpp) ----
+    // Reads the manifests under `dir` (the libraries open on first use). The app loads
+    // <app>/plugins and <AppData>/plugins at start-up.
+    void loadPlugins(const QString& dir);
+    [[nodiscard]] const std::vector<vstudio::plugins::PluginEffect>& pluginEffects() const { return pluginEffects_; }
+    [[nodiscard]] QStringList pluginErrors() const { return pluginErrors_; }
+    // Turns plugin effect `id` on (with its default params) or off for the clips.
+    void setPluginEffect(const QStringList& clipIds, const QString& id, bool on);
+    [[nodiscard]] bool hasPluginEffect(const QString& clipId, const QString& id) const;
+
     // ---- favourites (looks, transitions, video effects, stickers, overlays...) ----
     [[nodiscard]] bool isFavorite(const QString& category, const QString& id) const;
     void toggleFavorite(const QString& category, const QString& id);
@@ -422,5 +433,7 @@ private:
     void onVoiceRecorded(const QString& file, double at);
     mutable std::unique_ptr<vstudio::cliptools::Favorites> favorites_;
     QString favoritesFile_;
+    std::vector<vstudio::plugins::PluginEffect> pluginEffects_;
+    QStringList pluginErrors_;
     vstudio::cliptools::Favorites& favoriteStore() const;
 };

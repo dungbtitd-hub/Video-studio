@@ -7,6 +7,8 @@
 
 class EditorController;
 class QCheckBox;
+class QComboBox;
+class QGroupBox;
 class QDoubleSpinBox;
 class QLabel;
 class QProgressBar;
@@ -21,6 +23,8 @@ public:
     [[nodiscard]] QPushButton* freezeButton() const { return freeze_; }
     [[nodiscard]] QCheckBox* chroma() const { return chroma_; }
     [[nodiscard]] QPushButton* stabilizeButton() const { return stab_; }
+    [[nodiscard]] QComboBox* pluginList() const { return pluginList_; }
+    [[nodiscard]] QCheckBox* pluginOn() const { return pluginOn_; }
 
 private:
     void refresh();
@@ -42,4 +46,9 @@ private:
     QPushButton* stab_;
     QPushButton* stabRemove_;
     QProgressBar* stabProgress_;
+    QGroupBox* pluginBox_;
+    QComboBox* pluginList_;
+    QCheckBox* pluginOn_;
+    QLabel* pluginNote_;
+    int pluginCount_ = -1;
 };

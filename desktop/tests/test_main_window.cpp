@@ -306,6 +306,33 @@ private slots:
         QTRY_VERIFY(!list->item(0)->text().startsWith(QString::fromUtf8("★")));
     }
 
+    void pluginEffects() {
+#ifdef VSTUDIO_TEST_PLUGIN_DIR
+        ClipToolsPanel* panel = win_->clipToolsPanel();
+        ctrl_->loadPlugins(VSTUDIO_TEST_PLUGIN_DIR);
+        QVERIFY(ctrl_->pluginErrors().isEmpty());
+        QCOMPARE(int(ctrl_->pluginEffects().size()), 2);
+        const QString clip = QString::fromStdString(ctrl_->project()->tracks.front().clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        QComboBox* list = panel->pluginList();
+        QTRY_COMPARE(list->count(), 2);
+        for (const QString id : {QString("example.invert"), QString("example.gain")}) {
+            list->setCurrentIndex(list->findData(id));
+            panel->pluginOn()->setChecked(true);
+            QVERIFY(ctrl_->hasPluginEffect(clip, id));
+        }
+        QVERIFY(ctrl_->clipAudio(clip)["effects"].is_array());
+        ctrl_->seek(ctrl_->project()->findClip(clip.toStdString())->timelineIn.seconds() + 0.2);
+        QTest::qWait(100);  // a frame through the plugin, no crash
+        panel->pluginOn()->setChecked(false);
+        QVERIFY(!ctrl_->hasPluginEffect(clip, "example.gain"));
+        ctrl_->undo();
+        QVERIFY(ctrl_->hasPluginEffect(clip, "example.gain"));
+#else
+        QSKIP("example plugin not built");
+#endif
+    }
+
     void oneTapLooks() {
         LooksPanel* panel = win_->looks();
         QListWidget* list = panel->list();

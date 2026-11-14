@@ -9,6 +9,7 @@
 #include "EditorController.h"
 #include "VoiceRecorder.h"
 #include "vstudio/audio_fx.hpp"
+#include "vstudio/plugins.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
 
@@ -290,4 +291,47 @@ QStringList EditorController::favorites(const QString& category) const {
     QStringList out;
     for (const auto& id : favoriteStore().list(s(category))) out << q(id);
     return out;
+}
+
+// ---- plugins (Plugin API beta) ----
+
+void EditorController::loadPlugins(const QString& dir) {
+    const auto res = plugins::loadPlugins(modules_, s(dir));
+    for (const auto& p : res.plugins)
+        for (const auto& fx : p.effects) pluginEffects_.push_back(fx);
+    for (const auto& e : res.errors) pluginErrors_ << q(e);
+    if (!res.plugins.empty() || !res.errors.empty()) emit toolsChanged();
+}
+
+bool EditorController::hasPluginEffect(const QString& clipId, const QString& id) const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c) return false;
+    if (effectParams(c, s(id).c_str())) return true;
+    const Json a = audiofx::clipAudio(*c);
+    if (a.contains("effects") && a["effects"].is_array())
+        for (const auto& e : a["effects"])
+            if (e.is_object() && e.value("type", std::string{}) == s(id)) return true;
+    return false;
+}
+
+void EditorController::setPluginEffect(const QStringList& clipIds, const QString& id, bool on) {
+    const auto it = std::find_if(pluginEffects_.begin(), pluginEffects_.end(), [&](const auto& fx) { return fx.id == s(id); });
+    if (it == pluginEffects_.end() || clipIds.isEmpty()) return;
+    if (!it->audio) {
+        VS_EDIT(editor_->setClipEffect(ids(clipIds), it->id, on ? it->params : Json(), false,
+                                       (on ? "Add " : "Remove ") + it->name));
+        return;
+    }
+    // Audio plugin effects live in the clip's "audio.effects" list (audio_fx.hpp).
+    for (const QString& cid : clipIds) {
+        const Clip* c = snapshot_ ? snapshot_->findClip(s(cid)) : nullptr;
+        if (!c) continue;
+        const Json a = audiofx::clipAudio(*c);
+        Json list = Json::array();
+        if (a.contains("effects") && a["effects"].is_array())
+            for (const auto& e : a["effects"])
+                if (!(e.is_object() && e.value("type", std::string{}) == it->id)) list.push_back(e);
+        if (on) list.push_back(Json{{"type", it->id}, {"params", it->params}});
+        VS_EDIT(editor_->setClipAudio({s(cid)}, {{"effects", list.empty() ? Json() : list}}));
+    }
 }

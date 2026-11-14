@@ -4,6 +4,7 @@
 #include <QColorDialog>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QComboBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -90,6 +91,21 @@ ClipToolsPanel::ClipToolsPanel(EditorController* editor, QWidget* parent) : QWid
     stl->addRow(stRow);
     stl->addRow(stabProgress_);
     bl->addWidget(stabBox);
+
+    // Plugin API (beta): effects from installed plugins; hidden when none is installed.
+    pluginBox_ = new QGroupBox("Hiệu ứng plugin (beta)", body_);
+    auto* pl = new QVBoxLayout(pluginBox_);
+    pluginList_ = new QComboBox(pluginBox_);
+    pluginList_->setObjectName("pluginEffects");
+    pluginOn_ = new QCheckBox("Áp dụng cho clip", pluginBox_);
+    pluginOn_->setObjectName("pluginOn");
+    pluginNote_ = new QLabel(pluginBox_);
+    pluginNote_->setWordWrap(true);
+    pluginNote_->setStyleSheet("color: #a4abb8; font-size: 11px;");
+    pl->addWidget(pluginList_);
+    pl->addWidget(pluginOn_);
+    pl->addWidget(pluginNote_);
+    bl->addWidget(pluginBox_);
     l->addWidget(body_);
     l->addStretch(1);
 
@@ -117,6 +133,12 @@ ClipToolsPanel::ClipToolsPanel(EditorController* editor, QWidget* parent) : QWid
     });
     connect(stabRemove_, &QPushButton::clicked, editor_, &EditorController::removeStabilize);
     connect(stabStrength_, &QSlider::sliderReleased, this, [this] { editor_->setStabilizeStrength(stabStrength_->value() / 100.0); });
+    connect(pluginList_, &QComboBox::currentIndexChanged, this, &ClipToolsPanel::refresh);
+    connect(pluginOn_, &QCheckBox::toggled, this, [this](bool on) {
+        const QString sel = editor_->selectedClip();
+        if (!sel.isEmpty() && pluginList_->currentIndex() >= 0)
+            editor_->setPluginEffect({sel}, pluginList_->currentData().toString(), on);
+    });
     connect(editor_, &EditorController::selectionChanged, this, &ClipToolsPanel::refresh);
     connect(editor_, &EditorController::projectChanged, this, &ClipToolsPanel::refresh);
     connect(editor_, &EditorController::toolsChanged, this, &ClipToolsPanel::refresh);
@@ -148,6 +170,24 @@ void ClipToolsPanel::refresh() {
     stab_->setText(busy ? "Hủy" : "Chống rung");
     stabProgress_->setVisible(busy);
     stabProgress_->setValue(int(editor_->stabilizeProgress() * 100));
+    const auto& fx = editor_->pluginEffects();
+    if (int(fx.size()) != pluginCount_) {
+        QSignalBlocker bp(pluginList_);
+        pluginList_->clear();
+        for (const auto& e : fx)
+            pluginList_->addItem(QString::fromStdString(e.name) + (e.audio ? "  (âm thanh)" : ""), QString::fromStdString(e.id));
+        pluginCount_ = int(fx.size());
+    }
+    pluginBox_->setVisible(!fx.empty() || !editor_->pluginErrors().isEmpty());
+    pluginList_->setEnabled(!fx.empty());
+    pluginNote_->setText(editor_->pluginErrors().isEmpty() ? "Plugin chạy trong ứng dụng: chỉ cài plugin bạn tin cậy."
+                                                           : "Không nạp được: " + editor_->pluginErrors().join("; "));
+    {
+        QSignalBlocker bo(pluginOn_);
+        pluginOn_->setEnabled(video && pluginList_->currentIndex() >= 0);
+        pluginOn_->setChecked(video && pluginList_->currentIndex() >= 0 &&
+                              editor_->hasPluginEffect(sel, pluginList_->currentData().toString()));
+    }
     if (!video) return;
     QSignalBlocker b1(reverse_), b2(chroma_), b3(similarity_), b4(smoothness_), b5(spill_), b6(stabStrength_);
     const bool isVideo = a->type == vstudio::MediaType::Video;
