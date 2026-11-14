@@ -1865,6 +1865,13 @@ Json toolCommand(vs_session* s, const Json& in) {
         ed.setTrackMix(in.at("track").get<std::string>(), in.value("pan", 0.0), in.value("solo", false));
     } else if (cmd == "set_track_volume") {
         ed.setTrackVolume(in.at("track").get<std::string>(), in.value("volume", 1.0));
+    } else if (cmd == "clip_orientation") {
+        out["orient"] = toJson(clipOrientation(clip()));
+    } else if (cmd == "set_clip_orientation") {
+        ed.setClipOrientation(idList(in.at("clips")), orientationFromJson(in));
+    } else if (cmd == "set_generated_span") {
+        ed.setGeneratedClipSpan(clip().id, Time::fromTicks(in.value("start", std::int64_t{0})),
+                                Time::fromTicks(in.value("end", std::int64_t{0})));
     } else if (cmd == "set_clip_volume") {
         ed.setClipVolume(clip().id, in.value("volume", 1.0));
     } else if (cmd == "speed_presets") {
@@ -2040,7 +2047,7 @@ Json toolCommand(vs_session* s, const Json& in) {
                         e.setClipAudio({id}, {{"denoise", {{"amount", value}, {"profile", prof}}}});
                     };
             } else {
-                IMediaDecoder* d = pool.decoder(asset, "stabilize", &err, 320, 320);
+                IMediaDecoder* d = pool.decoder(asset, "stabilize", &err, 320, 320, false, false, combinedOrientation(asset, &c));
                 auto path = d ? cliptools::analyzeClipShake(*d, c, fps, &s->toolCancel, [s](double p) { s->toolProgress = p; })
                               : std::vector<cliptools::ShakeSample>{};
                 if (path.size() >= 3)

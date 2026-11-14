@@ -1,4 +1,5 @@
 #include "vstudio/cover.hpp"
+#include "vstudio/orientation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -107,8 +108,9 @@ std::optional<std::array<double, 4>> sourceRectOnCanvas(const Project& p, const 
     if (!a || a->width <= 0 || a->height <= 0) return std::nullopt;
     const double W = p.canvas.width, H = p.canvas.height;
     const Transform tf = animatedTransform(c, sourceTime);
-    const double fit = std::min(W / a->width, H / a->height) * tf.scale;
-    const double w = a->width * fit, h = a->height * fit;
+    const auto [aw, ah] = orientedSize(*a, combinedOrientation(*a, &c));  // the picture as shown
+    const double fit = std::min(W / aw, H / ah) * tf.scale;
+    const double w = aw * fit, h = ah * fit;
     return std::array<double, 4>{W / 2 + tf.x - w / 2, H / 2 + tf.y - h / 2, w, h};
 }
 

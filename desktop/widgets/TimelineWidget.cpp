@@ -42,6 +42,7 @@ TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWid
     });
     connect(editor_, &EditorController::selectionChanged, this, qOverload<>(&QWidget::update));
     connect(editor_, &EditorController::cutChanged, this, qOverload<>(&QWidget::update));
+    connect(editor_, &EditorController::rangeChanged, this, qOverload<>(&QWidget::update));
     connect(editor_, &EditorController::mediaLibraryChanged, this, qOverload<>(&QWidget::update));
     rebuild();
 }
@@ -281,6 +282,22 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
         p.setPen(Theme::fg3());
         p.setFont(small);
         p.drawText(QRect(4, 0, kHeaderW - 8, kRulerH), Qt::AlignVCenter, tr("Hít: tắt (N)"));
+    }
+
+    // "Đoạn áp dụng": a lit band between Điểm đầu and Điểm cuối (to the playhead while choosing).
+    if (editor_->hasRange()) {
+        const double a = editor_->rangeStart(), b = editor_->rangeComplete() ? editor_->rangeEnd() : editor_->playhead();
+        const double x0 = std::max<double>(kHeaderW, timeToX(std::min(a, b))), x1 = timeToX(std::max(a, b));
+        if (x1 > x0) {
+            QColor band = Theme::accent();
+            band.setAlpha(editor_->rangeComplete() ? 60 : 30);
+            p.fillRect(QRectF(x0, kRulerH, x1 - x0, h - kRulerH), band);
+            p.setPen(QPen(Theme::accent(), 2));
+            for (double x : {timeToX(a), editor_->rangeComplete() ? timeToX(b) : -1.0}) {
+                if (x < kHeaderW) continue;
+                p.drawLine(QPointF(x, kRulerH), QPointF(x, h));
+            }
+        }
     }
 
     // Playhead

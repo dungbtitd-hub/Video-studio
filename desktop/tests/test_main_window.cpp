@@ -977,6 +977,180 @@ private slots:
         QVERIFY(!ctrl_->project()->findClip(line.toStdString()));
     }
 
+    // "Đoạn áp dụng" as a person uses it: Điểm đầu (I) at one place, playhead on, Điểm cuối (O),
+    // then "Zoom dần 1.6×" changes only that part (a key at each end, bigger at the end).
+    void rangeZoomsOnlyThatPart() {
+        auto* bar = win_->findChild<QWidget*>("rangeBar");
+        QVERIFY(bar);
+        QVERIFY(!bar->isVisible());
+        ctrl_->setSelectedClip({});
+        ctrl_->seek(3.5);  // Video 2 [2,7) is on top here
+        key(Qt::Key_I);
+        QVERIFY(ctrl_->hasRange() && !ctrl_->rangeComplete());
+        QVERIFY(bar->isVisible());
+        const QString clip = ctrl_->rangeClip();
+        QVERIFY(!clip.isEmpty());
+        QCOMPARE(ctrl_->selectedClip(), clip);
+        ctrl_->seek(5.5);
+        key(Qt::Key_O);
+        QVERIFY(ctrl_->rangeComplete());
+        QCOMPARE(ctrl_->rangeStart(), 3.5);
+        QCOMPARE(ctrl_->rangeEnd(), 5.5);
+        auto* zoom = bar->findChild<QToolButton*>("rangeZoom16");
+        QVERIFY(zoom && zoom->isVisible());
+        zoom->click();
+        QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 2);
+        ctrl_->seek(5.5);
+        QVERIFY(std::abs(ctrl_->keyState().scale - 1.6) < 0.01);
+        ctrl_->seek(3.5);
+        QVERIFY(std::abs(ctrl_->keyState().scale - 1.0) < 0.01);
+        ctrl_->seek(4.5);
+        QVERIFY(ctrl_->keyState().scale > 1.05 && ctrl_->keyState().scale < 1.55);  // gradual
+        // Speed on a part: the clip is cut at both ends, only the middle runs at 2x.
+        ctrl_->setSelectedClip({});
+        ctrl_->seek(1.0);
+        key(Qt::Key_I);
+        const auto clipsBefore = ctrl_->project()->trackOfClip(ctrl_->rangeClip().toStdString())->clips.size();
+        ctrl_->seek(2.0);  // inside the same clip: cut at both ends
+        key(Qt::Key_O);
+        bar->findChild<QToolButton*>("rangeFast")->click();
+        QVERIFY(!ctrl_->hasRange());
+        const auto* mid = ctrl_->project()->findClip(ctrl_->selectedClip().toStdString());
+        QVERIFY(mid);
+        QCOMPARE(mid->speed.toDouble(), 2.0);
+        QCOMPARE(ctrl_->project()->trackOfClip(mid->id)->clips.size(), clipsBefore + 2);
+        QCOMPARE(mid->timelineIn.seconds(), 1.0);
+        QCOMPARE(mid->timelineOut().seconds(), 1.5);  // 1 s of picture at 2x
+        // ✕ (or Alt+X) drops a part being chosen.
+        key(Qt::Key_I);
+        QVERIFY(ctrl_->hasRange());
+        bar->findChild<QToolButton*>("rangeClear")->click();
+        QVERIFY(!ctrl_->hasRange() && !bar->isVisible());
+    }
+
+    void rotateAndFlipTheClipUnderThePlayhead() {
+        ctrl_->setSelectedClip({});
+        ctrl_->seek(1.0);
+        auto* right = win_->findChild<QPushButton*>("orientRight");
+        QVERIFY(right);
+        right->click();
+        QVariantMap o = ctrl_->clipOrientation();
+        QVERIFY(o["valid"].toBool());
+        QCOMPARE(o["rotate"].toInt(), 90);
+        QCOMPARE(ctrl_->selectedClip(), o["clip"].toString());
+        key(Qt::Key_R, Qt::ControlModifier);  // Xoay phải again
+        QCOMPARE(ctrl_->clipOrientation()["rotate"].toInt(), 180);
+        win_->findChild<QPushButton*>("orientFlipH")->click();
+        QVERIFY(ctrl_->clipOrientation()["flipH"].toBool());
+        win_->findChild<QPushButton*>("orientReset")->click();
+        o = ctrl_->clipOrientation();
+        QCOMPARE(o["rotate"].toInt(), 0);
+        QVERIFY(!o["flipH"].toBool() && !o["flipV"].toBool());
+        ctrl_->undo();
+        QVERIFY(ctrl_->clipOrientation()["flipH"].toBool());
+    }
+
+    void overlayRunsOverTheWholeVideo() {
+        ctrl_->seek(2.0);
+        const QString id = ctrl_->addOverlay("snow");
+        QVERIFY(!id.isEmpty());
+        auto* all = win_->findChild<QPushButton*>("overlaySpanAll");
+        QVERIFY(all);
+        all->click();
+        const auto* c = ctrl_->project()->findClip(id.toStdString());
+        QVERIFY(c);
+        QCOMPARE(c->timelineIn.seconds(), 0.0);
+        QVERIFY(std::abs(c->timelineOut().seconds() - 9.0) < 1e-6);  // the end of everything else
+        ctrl_->seek(4.0);
+        win_->findChild<QPushButton*>("overlaySpanRest")->click();
+        c = ctrl_->project()->findClip(id.toStdString());
+        QCOMPARE(c->timelineIn.seconds(), 4.0);
+    }
+
+    void startPageListsAndDeletesProjects() {
+        QTemporaryDir tmp;
+        ctrl_->setRecentFile(tmp.filePath("recent.json"));
+        const QString a = tmp.filePath("A.vstudio"), b = tmp.filePath("B.vstudio");
+        ctrl_->saveProject(QUrl::fromLocalFile(a));
+        ctrl_->saveProject(QUrl::fromLocalFile(b));  // B is the open one now
+        ctrl_->newProject("Dự án mới", 1080, 1920, 30);
+        win_->showHome();
+        QVERIFY(win_->homeShown());
+        auto* home = win_->findChild<QWidget*>("homePage");
+        QVERIFY(home && home->isVisible());
+        QCOMPARE(home->findChildren<QWidget*>("homeProject").size(), 2);
+        QVERIFY(home->findChild<QWidget*>("homeNew9x16"));
+        QVERIFY(ctrl_->deleteProject(a));
+        QVERIFY(!QFileInfo::exists(a));
+        win_->showHome();
+        QCOMPARE(home->findChildren<QWidget*>("homeProject").size(), 1);
+        // A folder that is not a project is never deleted.
+        QDir(tmp.path()).mkdir("C");
+        QFile(tmp.filePath("C/keep.txt")).open(QIODevice::WriteOnly);
+        ctrl_->deleteProject(tmp.filePath("C"));
+        QVERIFY(QFileInfo::exists(tmp.filePath("C/keep.txt")));
+    }
+
+    // The whole thing with real media, as a person uses it (skipped without
+    // VSTUDIO_WALKTHROUGH_MEDIA = a folder with portrait.mp4, landscape.mp4, photo.jpg).
+    // With VSTUDIO_WALKTHROUGH_OUT each screen is saved as a PNG.
+    void walkthroughWithRealMedia() {
+        const QString media = qEnvironmentVariable("VSTUDIO_WALKTHROUGH_MEDIA");
+        if (media.isEmpty() || !QFileInfo::exists(media + "/portrait.mp4")) QSKIP("VSTUDIO_WALKTHROUGH_MEDIA not set");
+        const QString out = qEnvironmentVariable("VSTUDIO_WALKTHROUGH_OUT");
+        if (!out.isEmpty()) QDir().mkpath(out);
+        win_->resize(1440, 900);
+        // Default panels as a new user sees them (another test may have saved a different layout).
+        win_->resetLayout();
+        for (const char* name : {"media", "inspector"})
+            if (auto* d = win_->findChild<QDockWidget*>(name)) d->raise();
+        auto shot = [&](const QString& name) {
+            QTest::qWait(700);  // frames and thumbnails arrive
+            if (!out.isEmpty()) win_->grab().save(out + "/" + name + ".png");
+        };
+        QTemporaryDir tmp;
+        ctrl_->setRecentFile(tmp.filePath("recent.json"));
+        ctrl_->saveProject(QUrl::fromLocalFile(tmp.filePath("Du lich Da Lat.vstudio")));
+        win_->showHome();
+        shot("desk_01_trang_bat_dau");
+        // Dự án mới 9:16 with a portrait phone video, a landscape video and a photo.
+        ctrl_->newProject("Dự án mới", 1080, 1920, 30);
+        win_->hideHome();
+        ctrl_->importMedia({QUrl::fromLocalFile(media + "/portrait.mp4"), QUrl::fromLocalFile(media + "/landscape.mp4"),
+                            QUrl::fromLocalFile(media + "/photo.jpg")},
+                           true);
+        QTRY_COMPARE_WITH_TIMEOUT(ctrl_->assets().size(), 3, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(std::abs(ctrl_->duration() - 19.0) < 0.05, 10000);
+        ctrl_->setSelectedClip({});
+        ctrl_->seek(3.0);
+        shot("desk_02_da_nhap");
+        // Part 4.0 → 5.5 of the portrait video, zoom in gradually.
+        ctrl_->seek(1.0);
+        key(Qt::Key_I);
+        ctrl_->seek(4.5);
+        shot("desk_03_diem_dau");
+        key(Qt::Key_O);
+        shot("desk_04_diem_cuoi");
+        win_->findChild<QToolButton*>("rangeZoom16")->click();
+        QCOMPARE(ctrl_->keyframeTimes(ctrl_->selectedClip(), false).size(), 2);
+        ctrl_->seek(4.4);
+        shot("desk_05_zoom_dan");
+        // The photo, rotated right.
+        ctrl_->setSelectedClip({});
+        ctrl_->seek(16.0);
+        win_->findChild<QPushButton*>("orientRight")->click();
+        QCOMPARE(ctrl_->clipOrientation()["rotate"].toInt(), 90);
+        if (auto* d = win_->findChild<QDockWidget*>("inspector")) d->raise();
+        shot("desk_06_xoay_anh");
+        // Snow over the whole video.
+        ctrl_->seek(8.0);
+        QVERIFY(!ctrl_->addOverlay("snow").isEmpty());
+        win_->findChild<QPushButton*>("overlaySpanAll")->click();
+        const auto* ov = ctrl_->project()->findClip(ctrl_->selectedClip().toStdString());
+        QVERIFY(ov && ov->timelineIn.seconds() == 0.0 && std::abs(ov->timelineOut().seconds() - 19.0) < 0.05);
+        shot("desk_07_lop_phu_ca_video");
+    }
+
     void layoutResets() {
         auto* media = win_->findChild<QDockWidget*>("media");
         QVERIFY(media);

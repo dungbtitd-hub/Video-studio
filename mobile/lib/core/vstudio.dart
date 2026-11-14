@@ -357,6 +357,9 @@ class VStudio {
 
   String get version => _b.version().toDartString();
 
+  /// The core library's version, without a session (loads the library).
+  static String get coreVersion => _bindings.version().toDartString();
+
   /// Projects in [folder], newest first; [unfinishedOnly] keeps those changed since their last export,
   /// [exclude] (the open project) is left out. Instant: reads each package's small card file.
   static List<ProjectCard> recentProjects(String folder, {bool unfinishedOnly = true, int max = 12, String? exclude}) =>
@@ -413,6 +416,25 @@ class VStudio {
     if (n < 0) throw VStudioException(_b.lastError(_s).toDartString());
     return n;
   }
+
+  /// Splits one clip at timeline time [t]; returns the new (right-hand) clip's id.
+  String splitClip(String clipId, double t) =>
+      using((a) => _take(_b.splitClip(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t))));
+
+  // ---- picture orientation and layer length (orientation.hpp) ----
+
+  /// The user's rotate / flip of a clip: (clockwise degrees, flip left-right, flip upside down).
+  (int, bool, bool) clipOrientation(String clipId) {
+    final o = tool({'cmd': 'clip_orientation', 'clip': clipId})['orient'] as Map<String, dynamic>;
+    return ((o['rotate'] as num).toInt(), o['flip_h'] == true, o['flip_v'] == true);
+  }
+
+  void setClipOrientation(List<String> clipIds, int rotate, {bool flipH = false, bool flipV = false}) =>
+      tool({'cmd': 'set_clip_orientation', 'clips': clipIds, 'rotate': rotate, 'flip_h': flipH, 'flip_v': flipV});
+
+  /// A text / sticker / overlay over [start, end) seconds, in one step.
+  void setGeneratedSpan(String clipId, double start, double end) => tool(
+      {'cmd': 'set_generated_span', 'clip': clipId, 'start': secondsToTicks(start), 'end': secondsToTicks(end)});
 
   void removeTrack(String trackId) => using((a) => _check(_b.removeTrack(_s, trackId.toNativeUtf8(allocator: a))));
   void renameTrack(String trackId, String name) =>

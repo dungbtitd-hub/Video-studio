@@ -93,8 +93,8 @@ int main(int argc, char* argv[]) {
         return app.exec();
     }
     if (!files.isEmpty()) editor.importMedia(files, true);
-    // Plain start: unfinished projects slide up at the bottom, once the window has painted.
-    else if (subtitleFiles.isEmpty()) QTimer::singleShot(150, &win, [&win] { win.showRecentProjects(); });
+    // Plain start: the start page (new project, recent projects), as in the prototype.
+    else if (subtitleFiles.isEmpty()) win.showHome();
     if (!subtitleFiles.isEmpty())
         QTimer::singleShot(1500, &editor, [&] {
             for (const QUrl& f : subtitleFiles) editor.importSubtitles(f);

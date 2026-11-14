@@ -123,7 +123,8 @@ class TrackView {
       this.subtitle,
       this.volume = 1,
       this.pan = 0,
-      this.solo = false});
+      this.solo = false,
+      this.lane = ''});
   final String id;
   final String type; // "video" | "audio"
   final String name;
@@ -136,7 +137,29 @@ class TrackView {
   final double volume; // mixer: track gain
   final double pan; // mixer: -1 left .. 1 right
   final bool solo; // mixer: only soloed tracks are heard
+  final String lane; // the core's mark for lanes of generated clips ("text", "sticker", "overlay"), else ""
   bool get audio => type == 'audio';
+
+  /// What the track holds: "audio", "subtitle", "text", "sticker", "overlay", "media" (video and
+  /// photos), "mixed", or "" for an empty video track. Each kind is a lane of its own.
+  String get laneKind {
+    if (audio) return 'audio';
+    if (isSubtitle) return 'subtitle';
+    if (lane.isNotEmpty) return lane;
+    String k = '';
+    for (final c in clips) {
+      final ck = c.generated ? c.kind : 'media';
+      if (k.isEmpty) {
+        k = ck;
+      } else if (k != ck) {
+        return 'mixed';
+      }
+    }
+    return k;
+  }
+
+  /// A lane media can go on: a video track without texts, stickers, overlays or subtitles.
+  bool get takesMedia => !audio && (laneKind == 'media' || laneKind == '');
   bool get isSubtitle => subtitle != null;
 }
 
@@ -264,6 +287,7 @@ class ProjectView {
         volume: (t['volume'] as num?)?.toDouble() ?? 1,
         pan: (t['pan'] as num?)?.toDouble() ?? 0,
         solo: t['solo'] == true,
+        lane: (t['lane'] ?? '') as String,
       );
     }
 

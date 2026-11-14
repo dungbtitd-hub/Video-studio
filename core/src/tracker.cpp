@@ -275,7 +275,7 @@ CoverTrack trackCoverInClip(const Project& project, MediaPool& pool, const Id& c
         return out;
     }
     std::string err;
-    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480);
+    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480, false, false, combinedOrientation(*asset, clip));
     if (!dec) {
         out.result.error = err.empty() ? "không mở được media" : err;
         return out;
@@ -304,8 +304,9 @@ std::optional<TrackBox> followStartBox(const Project& project, const Id& followe
     const Transform f = animatedTransform(*follower, follower->toSource(std::clamp(t, follower->timelineIn, follower->timelineOut())));
     const double cx = (project.canvas.width / 2.0 + f.x - (*r)[0]) / (*r)[2];
     const double cy = (project.canvas.height / 2.0 + f.y - (*r)[1]) / (*r)[3];
-    const double side = std::clamp(size, 0.03, 0.6) * std::min(asset->width, asset->height);
-    const double w = side / asset->width, h = side / asset->height;
+    const auto [aw, ah] = orientedSize(*asset, combinedOrientation(*asset, target));
+    const double side = std::clamp(size, 0.03, 0.6) * std::min(aw, ah);
+    const double w = side / aw, h = side / ah;
     return TrackBox{std::clamp(cx - w / 2, 0.0, 1.0 - w), std::clamp(cy - h / 2, 0.0, 1.0 - h), w, h};
 }
 
@@ -345,7 +346,7 @@ FollowTrack trackFollow(const Project& project, MediaPool& pool, const Id& follo
         return out;
     }
     std::string err;
-    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480);
+    IMediaDecoder* dec = pool.decoder(*asset, "track", &err, 480, 480, false, false, combinedOrientation(*asset, target));
     if (!dec) {
         out.result.error = err.empty() ? "không mở được media" : err;
         return out;

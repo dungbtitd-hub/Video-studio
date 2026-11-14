@@ -197,6 +197,22 @@ Clip clipFrom(const Json& j) {
     return c;
 }
 
+}  // namespace
+
+std::string trackLane(const Track& t) {
+    if (auto it = t.extra.find("lane"); it != t.extra.end() && it->is_string()) return it->get<std::string>();
+    if (t.extra.contains("subtitle")) return "subtitle";
+    std::string lane;
+    for (const Clip& c : t.clips) {
+        const std::string k = c.generated() ? c.content.value("kind", std::string{}) : std::string("media");
+        if (lane.empty()) lane = k;
+        else if (lane != k) return "mixed";
+    }
+    return lane;
+}
+
+namespace {
+
 Json trackJ(const Track& t, int order) {
     Json clips = Json::array();
     for (const auto& c : t.clips) clips.push_back(clipJ(c, t.id));

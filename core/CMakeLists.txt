@@ -19,6 +19,7 @@ add_library(vstudio_core STATIC
   src/scopes.cpp
   src/stills.cpp
   src/transfer.cpp
+    src/orientation.cpp
     src/pixel.cpp
     src/color_space.cpp
     src/keyframes.cpp

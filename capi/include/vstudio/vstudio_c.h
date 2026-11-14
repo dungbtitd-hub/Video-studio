@@ -410,7 +410,11 @@ VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_
  *   save_export_preset {name, data: {base, format, fps?, video_mbps?, audio_kbps?, audio?}}
  *   remove_preset {kind, name}; rename_preset {kind, from, to}
  *   export_preset_info {name | data} -> {"width","height","fps","video_bitrate","audio","estimated_bytes","summary"}
- *   export_user_preset {name, path}             starts the export (vs_export_status as for presets) */
+ *   export_user_preset {name, path}             starts the export (vs_export_status as for presets)
+ * Picture orientation (orientation.hpp) and layer length:
+ *   clip_orientation {clip} -> {"orient": {"rotate","flip_h","flip_v"}}
+ *   set_clip_orientation {clips, rotate (0|90|180|270), flip_h, flip_v}  one undo step
+ *   set_generated_span {clip, start, end (ticks)}  a text/sticker/overlay over [start, end), one undo step */
 VS_API char* vs_tool_command(vs_session* s, const char* command_json);
 
 #ifdef __cplusplus

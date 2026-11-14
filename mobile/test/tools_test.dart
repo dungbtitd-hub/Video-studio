@@ -38,6 +38,9 @@ void main() {
     });
     test('phone landscape goes side by side', () {
       expect(workspaceLayoutFor(const Size(800, 360), const [], 56).kind, WorkspaceKind.sideBySide);
+      // Galaxy Z Fold unfolded, no fold reported: nearly square, still two panes.
+      expect(workspaceLayoutFor(const Size(884, 1000), const [], 0).kind, WorkspaceKind.sideBySide);
+      expect(workspaceLayoutFor(const Size(412, 900), const [], 0).kind, WorkspaceKind.phone);
     });
   });
 
@@ -82,7 +85,12 @@ void main() {
     final track = vs.addTrack(audio: false, name: 'V1');
     final clip = vs.appendClip(track, vs.importMedia(media!));
     expect(vs.eqPresets().map((p) => p.id), containsAll(['flat', 'voice', 'bass']));
-    vs.setClipAudio([clip], {'fade_in': 0.5, 'eq': {'preset': 'voice'}});
+    vs.setClipAudio([
+      clip
+    ], {
+      'fade_in': 0.5,
+      'eq': {'preset': 'voice'}
+    });
     expect(vs.clipSound(clip).fadeIn, 0.5);
     expect(vs.clipSound(clip).eq?['preset'], 'voice');
     final a = vs.detachAudio(clip);
@@ -170,7 +178,8 @@ void main() {
     }
 
     Widget host(Widget child) => MaterialApp(
-        home: Scaffold(body: Align(alignment: Alignment.bottomCenter, child: SizedBox(width: 360, height: 560, child: child))));
+        home: Scaffold(
+            body: Align(alignment: Alignment.bottomCenter, child: SizedBox(width: 360, height: 560, child: child))));
     await tester.pumpWidget(host(AudioSheet(vs: vs, clipId: clip, onEdit: onEdit)));
     await tester.tap(find.text('Tăng bass'));
     await tester.pump();

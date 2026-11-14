@@ -45,6 +45,11 @@ WorkspaceLayout workspaceLayoutFor(Size size, List<DisplayFeature> features, dou
       return WorkspaceLayout(WorkspaceKind.tabletop, split: top, gap: b.height);
     }
   }
+  if (size.width >= 700 && size.width >= size.height * 0.75) {
+    // Unfolded foldable held upright (Galaxy Z Fold: ~884 x 1030 dp, nearly square) when the
+    // fold is not reported: two panes, as in the prototype, never a stretched phone layout.
+    return WorkspaceLayout(WorkspaceKind.sideBySide, split: (size.width * 0.58).roundToDouble());
+  }
   if (size.width >= kWideWorkspace && size.width > size.height) {
     // Tablet in landscape (or an unfolded foldable without a reported hinge): preview keeps 58 %.
     return WorkspaceLayout(WorkspaceKind.sideBySide, split: (size.width * 0.58).roundToDouble());
