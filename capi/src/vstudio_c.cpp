@@ -12,6 +12,8 @@
 #include "vstudio/color_space.hpp"
 #include "vstudio/cover.hpp"
 #include "vstudio/tracker.hpp"
+#include "vstudio/audio_fx.hpp"
+#include "vstudio/clip_tools.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
@@ -178,6 +180,17 @@ struct vs_session {
     void edited() {
         if (preview) preview->setProject(editor->snapshot());
     }
+
+    // Sound / clip-tool jobs (vs_tool_command "start"): noise analysis, stabilisation.
+    // 0 idle, 1 running, 3 result ready (applied by the next "job_status"), 2 done, -1 failed, -2 cancelled.
+    std::atomic<int> toolStatus{0};
+    std::atomic<double> toolProgress{0.0};
+    std::atomic<bool> toolCancel{false};
+    std::mutex toolMu;
+    std::string toolError;
+    std::function<void(Editor&)> toolApply;
+    // Declared last: destroyed first, so a running job never outlives what it uses.
+    std::unique_ptr<JobScheduler> toolJobs;
 };
 
 namespace {
@@ -1801,5 +1814,172 @@ void vs_live_end(vs_session* s) {
     try {
         s->edited();  // back to the project as it is
     } catch (...) {
+    }
+}
+
+// ---------------------------------------------------------------- sound + clip tools (JSON commands)
+
+namespace {
+
+std::vector<Id> idList(const Json& j) {
+    if (!j.is_array()) throw std::runtime_error("clips must be a JSON array");
+    std::vector<Id> v;
+    for (const auto& x : j) v.push_back(x.get<std::string>());
+    return v;
+}
+
+const Json* effectOf(const Clip& c, const std::string& type) {
+    if (!c.effects.is_array()) return nullptr;
+    for (const auto& e : c.effects)
+        if (e.is_object() && e.value("type", std::string{}) == type && e.contains("params")) return &e["params"];
+    return nullptr;
+}
+
+Json toolCommand(vs_session* s, const Json& in) {
+    const std::string cmd = in.value("cmd", std::string{});
+    Editor& ed = *s->editor;
+    Json out{{"ok", true}};
+    auto clip = [&]() -> const Clip& { return clipOrThrow(s, in.value("clip", std::string{}).c_str()); };
+    if (cmd == "eq_presets") {
+        Json arr = Json::array();
+        for (const auto& p : audiofx::eqPresets()) arr.push_back({{"id", p.id}, {"name", p.name}, {"gains", p.gains}});
+        out["presets"] = arr;
+    } else if (cmd == "clip_audio") {
+        const Clip& c = clip();
+        out["audio"] = audiofx::clipAudio(c);
+        out["volume"] = c.volume;
+        out["reversed"] = c.reversed;
+        out["freeze"] = cliptools::isFreeze(c);
+    } else if (cmd == "set_clip_audio") {
+        ed.setClipAudio(idList(in.at("clips")), in.at("patch"));
+    } else if (cmd == "detach_audio") {
+        out["clip"] = ed.detachAudio(clip().id);
+    } else if (cmd == "place_audio") {
+        out["clip"] = ed.placeAudio(in.at("asset").get<std::string>(), Time::fromTicks(in.value("at", std::int64_t{0})),
+                                    in.value("track", std::string("Thu âm")));
+    } else if (cmd == "set_track_mix") {
+        ed.setTrackMix(in.at("track").get<std::string>(), in.value("pan", 0.0), in.value("solo", false));
+    } else if (cmd == "set_track_volume") {
+        ed.setTrackVolume(in.at("track").get<std::string>(), in.value("volume", 1.0));
+    } else if (cmd == "set_clip_volume") {
+        ed.setClipVolume(clip().id, in.value("volume", 1.0));
+    } else if (cmd == "set_reversed") {
+        ed.setClipReversed(idList(in.at("clips")), in.value("on", true));
+    } else if (cmd == "freeze_frame") {
+        out["clip"] = ed.freezeFrame(clip().id, Time::fromTicks(in.value("at", std::int64_t{0})),
+                                     in.contains("duration") ? Time::fromTicks(in["duration"].get<std::int64_t>())
+                                                             : Time::fromSeconds(3.0));
+    } else if (cmd == "set_effect") {
+        const Json params = in.value("params", Json());
+        ed.setClipEffect(idList(in.at("clips")), in.at("type").get<std::string>(), params, false,
+                         params.is_null() ? "Remove effect" : "Effect");
+    } else if (cmd == "effect") {
+        const Json* p = effectOf(clip(), in.at("type").get<std::string>());
+        out["params"] = p ? *p : Json();
+    } else if (cmd == "guess_key_color") {
+        std::shared_ptr<const VideoFrame> f;
+        {
+            std::lock_guard lk(s->frameMu);
+            f = s->latest;
+        }
+        out["color"] = f ? cliptools::guessKeyColor(*f) : std::string("#00ff00");
+    } else if (cmd == "stabilize_strength") {
+        const Clip& c = clip();
+        const Json* p = effectOf(c, cliptools::kStabilizeEffect);
+        if (!p || !p->contains("path")) throw std::runtime_error("clip is not stabilised");
+        std::vector<cliptools::ShakeSample> path;
+        for (const auto& x : (*p)["path"]) path.push_back({x[0].get<double>(), x[1].get<double>(), x[2].get<double>()});
+        ed.setClipEffect({c.id}, cliptools::kStabilizeEffect, cliptools::stabilizeParams(path, in.value("strength", 0.7)), false,
+                         "Stabilise");
+    } else if (cmd == "start") {
+        if (s->toolStatus == 1) throw std::runtime_error("another job is running");
+        if (!s->media()) throw std::runtime_error("no media module available");
+        const Clip c = clip();
+        const MediaAsset* a = ed.project().findAsset(c.assetId);
+        if (!a) throw std::runtime_error("clip has no media");
+        const MediaAsset asset = *a;
+        const std::string job = in.at("job").get<std::string>();
+        const double value = in.value("value", 0.7);
+        const int sr = ed.project().sampleRate;
+        const Rational fps = a->fps.num > 0 ? a->fps : ed.project().fps;
+        if (job == "noise" && !a->audio) throw std::runtime_error("clip has no sound");
+        if (job == "stabilize" && a->type != MediaType::Video) throw std::runtime_error("stabilisation needs a video clip");
+        if (job != "noise" && job != "stabilize") throw std::runtime_error("unknown job: " + job);
+        if (!s->toolJobs) s->toolJobs = std::make_unique<JobScheduler>(1);
+        s->toolCancel = false;
+        s->toolProgress = 0.0;
+        s->toolStatus = 1;
+        const std::string base = mediaBaseDir(s->packageDir);
+        s->toolJobs->submit("tool", JobPriority::Normal, [s, c, asset, job, value, sr, fps, base](const CancelToken&) {
+            MediaPool pool(s->backend, base);
+            std::string err;
+            std::function<void(Editor&)> apply;
+            if (job == "noise") {
+                IMediaDecoder* d = pool.decoder(asset, "analyze", &err);
+                auto prof = d ? audiofx::analyzeClipNoise(*d, c, sr, 20.0, &s->toolCancel, &err) : std::vector<float>{};
+                if (!prof.empty())
+                    apply = [id = c.id, prof, value](Editor& e) {
+                        e.setClipAudio({id}, {{"denoise", {{"amount", value}, {"profile", prof}}}});
+                    };
+            } else {
+                IMediaDecoder* d = pool.decoder(asset, "stabilize", &err, 320, 320);
+                auto path = d ? cliptools::analyzeClipShake(*d, c, fps, &s->toolCancel, [s](double p) { s->toolProgress = p; })
+                              : std::vector<cliptools::ShakeSample>{};
+                if (path.size() >= 3)
+                    apply = [id = c.id, params = cliptools::stabilizeParams(path, value)](Editor& e) {
+                        e.setClipEffect({id}, cliptools::kStabilizeEffect, params, false, "Stabilise");
+                    };
+                else if (err.empty()) err = "not enough frames";
+            }
+            std::lock_guard lk(s->toolMu);
+            s->toolApply = apply;
+            s->toolError = err;
+            s->toolStatus = s->toolCancel ? -2 : (apply ? 3 : -1);
+        });
+    } else if (cmd == "job_status") {
+        int st = s->toolStatus.load();
+        if (st == 3) {  // apply on the editing thread, once
+            std::function<void(Editor&)> apply;
+            {
+                std::lock_guard lk(s->toolMu);
+                apply = std::move(s->toolApply);
+            }
+            try {
+                if (apply) apply(ed);
+                s->edited();
+                st = 2;
+            } catch (const std::exception& e) {
+                std::lock_guard lk(s->toolMu);
+                s->toolError = e.what();
+                st = -1;
+            }
+            s->toolStatus = st;
+        }
+        out["status"] = st;
+        out["progress"] = s->toolProgress.load();
+        std::lock_guard lk(s->toolMu);
+        out["error"] = s->toolError;
+    } else if (cmd == "job_cancel") {
+        s->toolCancel = true;
+    } else {
+        throw std::runtime_error("unknown command: " + cmd);
+    }
+    return out;
+}
+
+}  // namespace
+
+char* vs_tool_command(vs_session* s, const char* command_json) {
+    if (!s) return dup(R"({"ok":false,"error":"no session"})");
+    try {
+        const Json in = Json::parse(str(command_json));
+        const std::uint64_t before = s->editor->revision();
+        Json out = toolCommand(s, in);
+        if (s->editor->revision() != before) s->edited();
+        s->error.clear();
+        return dup(out.dump());
+    } catch (const std::exception& e) {
+        s->error = e.what();
+        return dup(Json{{"ok", false}, {"error", e.what()}}.dump());
     }
 }

@@ -1,0 +1,13 @@
+{
+  "abi": 1,
+  "id": "example",
+  "name": "Ví dụ plugin",
+  "version": "1.0.0",
+  "library": {
+    "windows": "vstudio_example_plugin.dll",
+    "macos": "libvstudio_example_plugin.dylib",
+    "linux": "libvstudio_example_plugin.so"
+  },
+  "video_effects": [{"id": "example.invert", "name": "Âm bản", "params": {"amount": 1.0}}],
+  "audio_effects": [{"id": "example.gain", "name": "Giảm âm lượng", "params": {"gain": 0.5}}]
+}

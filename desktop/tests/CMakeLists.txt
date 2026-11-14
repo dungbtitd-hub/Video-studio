@@ -25,6 +25,10 @@ qt_add_executable(main_window_tests
   ../widgets/RecentStrip.cpp ../widgets/RecentStrip.h
   ../widgets/VideoFxPanel.cpp ../widgets/VideoFxPanel.h
   ../widgets/SubtitlePanel.cpp ../widgets/SubtitlePanel.h
+  ../widgets/AudioPanel.cpp ../widgets/AudioPanel.h
+  ../widgets/MixerPanel.cpp ../widgets/MixerPanel.h
+  ../widgets/ClipToolsPanel.cpp ../widgets/ClipToolsPanel.h
+  ../widgets/Favorites.cpp ../widgets/Favorites.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )
@@ -32,3 +36,7 @@ target_include_directories(main_window_tests PRIVATE ../widgets ${PROJECT_SOURCE
 target_link_libraries(main_window_tests PRIVATE vstudio_desktop_common Qt6::Widgets Qt6::Test)
 add_test(NAME main_window_tests COMMAND main_window_tests)
 set_tests_properties(main_window_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+if(TARGET vstudio_example_plugin)
+  add_dependencies(main_window_tests vstudio_example_plugin)
+  target_compile_definitions(main_window_tests PRIVATE VSTUDIO_TEST_PLUGIN_DIR="${CMAKE_BINARY_DIR}/plugins")
+endif()

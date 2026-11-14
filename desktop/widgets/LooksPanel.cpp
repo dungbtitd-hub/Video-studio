@@ -12,6 +12,7 @@
 #include <QVBoxLayout>
 
 #include "EditorController.h"
+#include "Favorites.h"
 #include "vstudio/color_space.hpp"
 #include "vstudio/looks.hpp"
 
@@ -63,6 +64,7 @@ LooksPanel::LooksPanel(EditorController* editor, QWidget* parent) : QWidget(pare
     hint_->setWordWrap(true);
     l->addWidget(hint_);
     list_ = new QListWidget(this);
+    favorites::attach(list_, editor_, "look");
     list_->setViewMode(QListView::IconMode);
     list_->setIconSize(QSize(kIconW, kIconH));
     list_->setGridSize(QSize(kIconW + 14, kIconH + 36));

@@ -16,6 +16,7 @@
 #include <cstring>
 
 #include "EditorController.h"
+#include "Favorites.h"
 #include "TimelineWidget.h"
 #include "vstudio/transitions.hpp"
 
@@ -85,6 +86,7 @@ TransitionsPanel::TransitionsPanel(EditorController* editor, QWidget* parent) : 
     l->addWidget(place_);
 
     list_ = new TransitionList(this);
+    favorites::attach(list_, editor_, "transition");
     list_->setViewMode(QListView::IconMode);
     list_->setIconSize(QSize(kIconW, kIconH));
     list_->setGridSize(QSize(kIconW + 14, kIconH + 36));

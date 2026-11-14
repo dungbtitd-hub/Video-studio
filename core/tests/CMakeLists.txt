@@ -1,3 +1,7 @@
-add_executable(vstudio_core_tests main.cpp test_core.cpp test_grade.cpp test_subtitles.cpp)
+add_executable(vstudio_core_tests main.cpp test_core.cpp test_grade.cpp test_subtitles.cpp test_tools.cpp test_plugins.cpp)
 target_link_libraries(vstudio_core_tests PRIVATE vstudio::core)
+if(TARGET vstudio_example_plugin)
+  add_dependencies(vstudio_core_tests vstudio_example_plugin)
+  target_compile_definitions(vstudio_core_tests PRIVATE VSTUDIO_TEST_PLUGIN_DIR="${CMAKE_BINARY_DIR}/plugins")
+endif()
 add_test(NAME core_tests COMMAND vstudio_core_tests)

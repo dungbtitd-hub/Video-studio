@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 
+#include "detail/parallel.hpp"
 #include "vstudio/pixel.hpp"
 
 namespace vstudio {
@@ -90,12 +91,29 @@ void applyColorLook(VideoFrame& f, const Json& p) {
     const float cx = f.width / 2.0f, cy = f.height / 2.0f, inv = 1.0f / std::sqrt(cx * cx + cy * cy);
     const float st = static_cast<float>(strength);
 
+    // Vignette as a table over the squared distance to the centre (0 at the centre, 1 in the
+    // corners): no square root per pixel. 1024 steps are finer than an 8-bit output step.
+    constexpr int kVigSteps = 1024;
+    std::array<float, kVigSteps + 1> vigLut{};
+    if (vig > 0.0f)
+        for (int i = 0; i <= kVigSteps; ++i) {
+            const float d = std::sqrt(static_cast<float>(i) / kVigSteps);
+            const float t = std::clamp((d - 0.45f) / 0.55f, 0.0f, 1.0f);
+            vigLut[i] = 1.0f - vig * t * t * (3.0f - 2.0f * t);
+        }
+    std::vector<float> dx2(vig > 0.0f ? static_cast<std::size_t>(f.width) : 0);
+    for (int x = 0; x < static_cast<int>(dx2.size()); ++x) {
+        const float dx = (x + 0.5f - cx) * inv;
+        dx2[x] = dx * dx;
+    }
+
     // Colour, split toning and vignette on curve output (floats 0..1).
-    auto grade = [&](float& r, float& g, float& b, int x, float dy) {
+    auto grade = [&](float& r, float& g, float& b, int x, float dy2) {
         if (colour) {
             const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
             float s = mono ? 0.0f : sat;
-            if (vib != 0.0f && !mono) s *= 1.0f + vib * (1.0f - (std::max({r, g, b}) - std::min({r, g, b})));
+            if (vib != 0.0f && !mono)
+                s *= 1.0f + vib * (1.0f - (std::max(r, std::max(g, b)) - std::min(r, std::min(g, b))));
             r = l + (r - l) * s;
             g = l + (g - l) * s;
             b = l + (b - l) * s;
@@ -107,53 +125,134 @@ void applyColorLook(VideoFrame& f, const Json& p) {
             }
         }
         if (vig > 0.0f) {
-            const float dx = (x + 0.5f - cx) * inv, d2 = dx * dx + dy * dy;
-            if (d2 > 0.45f * 0.45f) {  // centre untouched: skip the sqrt there
-                const float t = std::min(1.0f, (std::sqrt(d2) - 0.45f) / 0.55f);
-                const float m = 1.0f - vig * t * t * (3.0f - 2.0f * t);
-                r *= m;
-                g *= m;
-                b *= m;
-            }
+            const float d2 = std::min(1.0f, dx2[static_cast<std::size_t>(x)] + dy2);
+            const float m = vigLut[static_cast<std::size_t>(d2 * kVigSteps + 0.5f)];
+            r *= m;
+            g *= m;
+            b *= m;
         }
     };
 
     if (f.deep()) {
-        for (int y = 0; y < f.height; ++y) {
+        detail::parallelRows(f.height, static_cast<std::size_t>(f.width) * f.height, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
             std::uint16_t* row = f.half.data() + static_cast<std::size_t>(y) * f.width * 4;
-            const float dy = (y + 0.5f - cy) * inv;
+            const float dy = (y + 0.5f - cy) * inv, dy2 = dy * dy;
             for (int x = 0; x < f.width; ++x) {
                 std::uint16_t* px = row + static_cast<std::size_t>(x) * 4;
                 const float in[3] = {halfToFloat(px[0]), halfToFloat(px[1]), halfToFloat(px[2])};
                 float r = deepCurve(0, in[0]), g = deepCurve(1, in[1]), b = deepCurve(2, in[2]);
-                grade(r, g, b, x, dy);
+                grade(r, g, b, x, dy2);
                 const float out[3] = {r, g, b};
                 for (int c = 0; c < 3; ++c)
                     px[c] = floatToHalf(in[c] + (std::clamp(out[c], 0.0f, 1.0f) - in[c]) * st);
             }
         }
+        });
         return;
     }
-    for (int y = 0; y < f.height; ++y) {
-        std::uint8_t* row = f.rgba.data() + static_cast<std::size_t>(y) * f.width * 4;
-        const float dy = (y + 0.5f - cy) * inv;
-        for (int x = 0; x < f.width; ++x) {
-            std::uint8_t* px = row + static_cast<std::size_t>(x) * 4;
-            if (!colour && vig == 0.0f && st == 1.0f) {  // tone curve only: pure table lookup
-                px[0] = lut[0][px[0]];
-                px[1] = lut[1][px[1]];
-                px[2] = lut[2][px[2]];
-                continue;
+    const std::size_t pixels = static_cast<std::size_t>(f.width) * f.height;
+    if (!colour && vig == 0.0f && st == 1.0f) {  // tone curve only: pure table lookup
+        std::uint8_t* px = f.rgba.data();
+        for (std::size_t i = 0; i < pixels; ++i, px += 4) {
+            px[0] = lut[0][px[0]];
+            px[1] = lut[1][px[1]];
+            px[2] = lut[2][px[2]];
+        }
+        return;
+    }
+    // Row at a time in three float planes: gather through the curve tables, then a
+    // branch-free pass the compiler vectorises (the options are template flags), then
+    // blend back to 8 bits.
+    const int w = f.width;
+    const float keep = 1.0f - st, st255 = st * 255.0f;
+    const float sVib = mono ? 0.0f : vib, sSat = mono ? 0.0f : sat;
+    struct Planes {
+        float *R, *G, *B, *V;
+    };
+    auto rowPass = [&]<bool kColour, bool kVib, bool kSplit, bool kVig>(Planes q) {
+        float* __restrict R = q.R;
+        float* __restrict G = q.G;
+        float* __restrict B = q.B;
+        const float* __restrict V = q.V;
+        for (int x = 0; x < w; ++x) {
+            float r = R[x], g = G[x], b = B[x];
+            if constexpr (kColour) {
+                const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                float sx = sSat;
+                if constexpr (kVib) {
+                    const float mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b));
+                    sx *= 1.0f + sVib * (1.0f - (mx - mn));
+                }
+                r = l + (r - l) * sx;
+                g = l + (g - l) * sx;
+                b = l + (b - l) * sx;
+                if constexpr (kSplit) {
+                    const float ws = (1.0f - l) * (1.0f - l), wh = l * l;
+                    r += ws * sh[0] + wh * hi[0];
+                    g += ws * sh[1] + wh * hi[1];
+                    b += ws * sh[2] + wh * hi[2];
+                }
             }
-            float r = lutf[0][px[0]], g = lutf[1][px[1]], b = lutf[2][px[2]];
-            grade(r, g, b, x, dy);
-            const float out[3] = {r, g, b};
-            for (int c = 0; c < 3; ++c) {
-                const float v = std::clamp(out[c], 0.0f, 1.0f) * 255.0f;
-                px[c] = static_cast<std::uint8_t>(px[c] + (v - px[c]) * st + 0.5f);
+            if constexpr (kVig) {
+                const float m = V[x];
+                r *= m;
+                g *= m;
+                b *= m;
+            }
+            R[x] = std::clamp(r, 0.0f, 1.0f) * st255;
+            G[x] = std::clamp(g, 0.0f, 1.0f) * st255;
+            B[x] = std::clamp(b, 0.0f, 1.0f) * st255;
+        }
+    };
+    using Pass = void (*)(decltype(rowPass)&, Planes);
+    // Pick the specialisation once per frame.
+    auto pick = [&]<bool C, bool Vb, bool S, bool Vg>() -> Pass {
+        return +[](decltype(rowPass)& fn, Planes q) { fn.template operator()<C, Vb, S, Vg>(q); };
+    };
+    const bool useVib = colour && !mono && vib != 0.0f;
+    Pass pass = nullptr;
+    const int key = (colour ? 8 : 0) | (useVib ? 4 : 0) | (colour && split ? 2 : 0) | (vig > 0.0f ? 1 : 0);
+    switch (key) {
+        case 0: pass = pick.template operator()<false, false, false, false>(); break;
+        case 1: pass = pick.template operator()<false, false, false, true>(); break;
+        case 8: pass = pick.template operator()<true, false, false, false>(); break;
+        case 9: pass = pick.template operator()<true, false, false, true>(); break;
+        case 10: pass = pick.template operator()<true, false, true, false>(); break;
+        case 11: pass = pick.template operator()<true, false, true, true>(); break;
+        case 12: pass = pick.template operator()<true, true, false, false>(); break;
+        case 13: pass = pick.template operator()<true, true, false, true>(); break;
+        case 14: pass = pick.template operator()<true, true, true, false>(); break;
+        default: pass = pick.template operator()<true, true, true, true>(); break;
+    }
+    // Large frames split their rows across cores (detail/parallel.hpp); each part has its own planes.
+    detail::parallelRows(f.height, pixels, [&](int y0, int y1) {
+        std::vector<float> buf(static_cast<std::size_t>(w) * 4);
+        float* R = buf.data();
+        float* G = R + w;
+        float* B = G + w;
+        float* V = B + w;
+        for (int y = y0; y < y1; ++y) {
+            std::uint8_t* row = f.rgba.data() + static_cast<std::size_t>(y) * w * 4;
+            const float dy = (y + 0.5f - cy) * inv, dy2 = dy * dy;
+            for (int x = 0; x < w; ++x) {
+                const std::uint8_t* px = row + static_cast<std::size_t>(x) * 4;
+                R[x] = lutf[0][px[0]];
+                G[x] = lutf[1][px[1]];
+                B[x] = lutf[2][px[2]];
+            }
+            if (vig > 0.0f)
+                for (int x = 0; x < w; ++x)
+                    V[x] = vigLut[static_cast<std::size_t>(std::min(1.0f, dx2[x] + dy2) * kVigSteps + 0.5f)];
+            pass(rowPass, Planes{R, G, B, V});
+            for (int x = 0; x < w; ++x) {
+                std::uint8_t* px = row + static_cast<std::size_t>(x) * 4;
+                px[0] = static_cast<std::uint8_t>(px[0] * keep + R[x] + 0.5f);
+                px[1] = static_cast<std::uint8_t>(px[1] * keep + G[x] + 0.5f);
+                px[2] = static_cast<std::uint8_t>(px[2] * keep + B[x] + 0.5f);
             }
         }
-    }
+    });
 }
 
 const std::vector<ColorLook>& colorLooks() {

@@ -128,7 +128,18 @@ void trimClip(Project& p, const Id& clipId, TrimEdge edge, Time t) {
     Clip& orig = requireClip(p, clipId, &owner);
     Clip c = orig;
     t = t.snapToFrame(p.fps);
-    if (edge == TrimEdge::Start) {
+    if (c.reversed) {
+        // Backwards clip: the timeline start shows sourceOut, the end shows sourceIn.
+        const Time d = (t - c.timelineIn).scaled(c.speed);
+        if (edge == TrimEdge::Start) {
+            if (t >= c.timelineOut()) throw EditError("trim start past clip end");
+            c.sourceOut = c.sourceOut - d;
+            c.timelineIn = t;
+        } else {
+            if (t <= c.timelineIn) throw EditError("trim end before clip start");
+            c.sourceIn = c.sourceOut - d;
+        }
+    } else if (edge == TrimEdge::Start) {
         if (t >= c.timelineOut()) throw EditError("trim start past clip end");
         const Time out = c.timelineOut();
         c.sourceIn = c.toSource(t);
@@ -157,10 +168,16 @@ void splitClip(Project& p, const Id& clipId, Time t, const Id& newClipId) {
         throw EditError("split point must be inside the clip");
     Clip right = left;
     right.id = newClipId;
-    const Time cutSource = left.toSource(t);
     right.timelineIn = t;
-    right.sourceIn = cutSource;
-    left.sourceOut = cutSource;
+    if (left.reversed) {
+        const Time cutSource = left.sourceOut - (t - left.timelineIn).scaled(left.speed);
+        left.sourceIn = cutSource;
+        right.sourceOut = cutSource;
+    } else {
+        const Time cutSource = left.toSource(t);
+        right.sourceIn = cutSource;
+        left.sourceOut = cutSource;
+    }
     // The left half keeps how the clip starts, the right half how it ends; the new cut has none.
     right.transitionIn = nullptr;
     left.transitionOut = nullptr;

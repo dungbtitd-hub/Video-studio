@@ -78,9 +78,12 @@ Các kỹ thuật chính:
   Hiệu ứng không có module trên máy đang mở vẫn được giữ nguyên trong project (cảnh báo "chỉ xem").
 - Các loại module hiện có:
   - `media.backend` (`IMediaBackend`): probe, decode, encode. Đã có: FFmpeg. Sắp có: Apple, MediaCodec.
-  - `effect.video` (`IVideoEffect`): khung hình vào, khung hình ra. Đã có: `builtin.color_adjust`, `builtin.grayscale`.
+  - `effect.video` (`IVideoEffect`): khung hình vào, khung hình ra. Đã có: chỉnh màu, Look, hiệu ứng hình, chroma key, chống rung…
+  - `effect.audio` (`IAudioEffect`): khối mẫu âm thanh vào/ra, có `margin` để kết quả không phụ thuộc cách cắt khối. Đã có: `builtin.eq`, `builtin.denoise`.
 - Thêm một module mới = viết một lớp theo interface + một dòng `registry.add<...>(info, factory)`. Không sửa lõi.
-- Từ V2.0, Plugin API nạp module từ `.dll/.so/.dylib` qua C API ổn định (`capi/`).
+- Plugin API (beta, desktop): hiệu ứng hình/tiếng từ `.dll/.so/.dylib` qua C ABI ổn định
+  (`capi/include/vstudio/vstudio_plugin.h`). Khi khởi động chỉ đọc `plugin.json`; thư viện mở lần đầu hiệu ứng được dùng;
+  plugin hỏng bị bỏ qua và báo lỗi. Xem [plugins/README.md](../plugins/README.md).
 
 ## 5. Định dạng dự án `.vstudio` (schema v0)
 
@@ -118,4 +121,6 @@ Một file duy nhất (tar ustar, file > 8 GiB dùng kích thước base-256 c�
 | `mobile/` | ứng dụng Flutter |
 | `tools/vstudio-cli/` | công cụ dòng lệnh chạy luồng P0 không cần giao diện |
 | `bench/` | benchmark P0 |
+| `plugins/` | plugin mẫu cho Plugin API (beta) |
+| `packaging/` | icon, bộ cài Windows, file .desktop Linux, hướng dẫn phát hành |
 | `design/tokens.json` | design token dùng chung cho Qt và Flutter |

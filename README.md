@@ -13,8 +13,11 @@ Hai nguyên tắc của mã nguồn:
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | kiến trúc, luồng xử lý, module, định dạng `.vstudio` |
 | [docs/p0-status.md](docs/p0-status.md) | tiến độ P0 và cách build/chạy |
+| [docs/sound-and-tools.md](docs/sound-and-tools.md) | âm thanh, mixer, thu âm, phát ngược, đóng băng khung, chroma key, chống rung, yêu thích, tablet |
+| [plugins/README.md](plugins/README.md) | Plugin API (beta): viết hiệu ứng ngoài |
 | [docs/benchmarks/](docs/benchmarks/) | số đo hiệu năng |
 | [mobile/README.md](mobile/README.md) | ứng dụng Flutter |
+| [packaging/README.md](packaging/README.md) | đóng gói bản cài cho Windows, macOS, Linux, Android, iOS |
 
 ## Build nhanh
 

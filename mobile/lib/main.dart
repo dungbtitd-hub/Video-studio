@@ -8,12 +8,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
+import 'core/favorites.dart';
 import 'core/project_model.dart';
 import 'core/native_preview.dart';
 import 'core/project_store.dart';
 import 'core/transfer.dart';
 import 'core/vstudio.dart';
+import 'ui/audio_sheet.dart';
+import 'ui/clip_tools_sheet.dart';
 import 'ui/cover_panel.dart';
 import 'ui/grade_panel.dart';
 import 'ui/keyframes.dart';
@@ -26,6 +30,7 @@ import 'ui/theme.dart';
 import 'ui/timeline.dart';
 import 'ui/transition_sheet.dart';
 import 'ui/video_fx_sheet.dart';
+import 'ui/workspace_layout.dart';
 
 void main() => runApp(const VideoStudioApp());
 
@@ -99,6 +104,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       final store = ProjectStore(Directory('${docs.path}/VideoStudio'));
       await store.ensure();
       _store = store;
+      FavoritesStore.init(store.root.path);
       final last = await store.lastProject();
       VStudio vs;
       String path;
@@ -1140,6 +1146,85 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   }
 
   /// Zoom, rotate and reflection effects for the selected media clip.
+  Future<void> _audio() async {
+    final vs = _vs;
+    if (vs == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.7,
+        child: AudioSheet(vs: vs, clipId: _selectedClip?.generated == false ? _selectedClip!.id : null, onEdit: _edit),
+      ),
+    );
+  }
+
+  Future<void> _clipTools() async {
+    final vs = _vs, clip = _selectedMediaClip;
+    if (vs == null || clip == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.7,
+        child: ClipToolsSheet(
+          vs: vs,
+          clipId: clip.id,
+          playhead: _playhead,
+          onEdit: _edit,
+          onFrozen: (id) => setState(() => _selected = id),
+        ),
+      ),
+    );
+  }
+
+  // ---- voice-over (FR-020): the microphone records while the timeline plays ----
+  AudioRecorder? _recorder;
+  double _recordStart = 0;
+  bool get _recording => _recorder != null;
+
+  Future<void> _voiceOver() async {
+    final vs = _vs, store = _store;
+    if (vs == null || store == null) return;
+    final rec = _recorder;
+    if (rec != null) {
+      _recorder = null;
+      final path = await rec.stop();
+      await rec.dispose();
+      vs.pause();
+      if (path == null) {
+        setState(() => _status = 'Ghi âm không thành công');
+        return;
+      }
+      _edit((vs) {
+        final asset = vs.importMedia(path);
+        vs.placeAudio(asset, _recordStart);
+      });
+      setState(() => _status = 'Đã thêm bản ghi âm vào track "Thu âm"');
+      return;
+    }
+    final r = AudioRecorder();
+    if (!await r.hasPermission()) {
+      await r.dispose();
+      setState(() => _status = 'Cần quyền micro để thu âm');
+      return;
+    }
+    final dir = Directory('${store.root.path}/recordings');
+    await dir.create(recursive: true);
+    final file = '${dir.path}/thu-am-${DateTime.now().millisecondsSinceEpoch}.m4a';
+    await r.start(const RecordConfig(encoder: AudioEncoder.aacLc, sampleRate: 48000, numChannels: 1), path: file);
+    _recordStart = _playhead;
+    vs.play(_playhead);
+    setState(() {
+      _recorder = r;
+      _status = 'Đang thu âm… chạm "Dừng" để kết thúc';
+    });
+  }
+
   Future<void> _videoFx() async {
     final vs = _vs, clip = _selectedMediaClip;
     if (vs == null || clip == null) return;
@@ -1376,6 +1461,36 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         child: preview,
       );
 
+  /// Phone: preview on top, controls and timeline below. Tablet / unfolded foldable
+  /// (Galaxy Z Fold, foldable iPhone) held wide: preview on the left, controls on the right,
+  /// split at the hinge when there is one so nothing sits across the fold. Half-folded flat
+  /// on a table (horizontal hinge): preview above the fold, controls below it.
+  Widget _adaptiveLayout(BuildContext context, {required Widget preview, required List<Widget> controls}) {
+    return LayoutBuilder(builder: (context, box) {
+      final mq = MediaQuery.of(context);
+      final mode = workspaceLayoutFor(box.biggest, mq.displayFeatures, mq.padding.top + kToolbarHeight);
+      final scrollControls = SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: controls),
+      );
+      switch (mode.kind) {
+        case WorkspaceKind.phone:
+          return Column(children: [Expanded(child: preview), ...controls]);
+        case WorkspaceKind.sideBySide:
+          return Row(children: [
+            SizedBox(width: mode.split, child: preview),
+            SizedBox(width: mode.gap),
+            Expanded(child: Container(color: VsColors.panel, child: scrollControls)),
+          ]);
+        case WorkspaceKind.tabletop:
+          return Column(children: [
+            SizedBox(height: mode.split, child: preview),
+            SizedBox(height: mode.gap),
+            Expanded(child: scrollControls),
+          ]);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
@@ -1401,10 +1516,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         ],
       ),
       body: Stack(children: [
-        Column(
-          children: [
-            Expanded(
-              child: Stack(children: [
+        _adaptiveLayout(
+          context,
+          preview: Stack(children: [
                 Positioned.fill(
                   child: Container(
                     color: Colors.black,
@@ -1432,7 +1546,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                     ),
                   ),
               ]),
-            ),
+          controls: [
             Container(
               color: VsColors.panel,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -1557,6 +1671,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                           _status = 'Kéo để xem ngay; nhấc tay là lưu (hoàn tác được)';
                         })),
             _Tool(icon: Icons.zoom_in_map, label: 'Hiệu ứng', onTap: _selectedMediaClip == null ? null : _videoFx),
+            _Tool(icon: Icons.graphic_eq, label: 'Âm thanh', onTap: _vs == null ? null : _audio),
+            _Tool(
+                icon: _recording ? Icons.stop_circle : Icons.mic_none,
+                label: _recording ? 'Dừng' : 'Thu âm',
+                onTap: _vs == null ? null : _voiceOver),
+            _Tool(icon: Icons.handyman_outlined, label: 'Công cụ', onTap: _selectedMediaClip == null ? null : _clipTools),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
             _Tool(

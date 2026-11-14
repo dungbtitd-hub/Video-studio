@@ -86,7 +86,10 @@ class TrackView {
       this.locked = false,
       this.muted = false,
       this.indexInType = 0,
-      this.subtitle});
+      this.subtitle,
+      this.volume = 1,
+      this.pan = 0,
+      this.solo = false});
   final String id;
   final String type; // "video" | "audio"
   final String name;
@@ -96,6 +99,9 @@ class TrackView {
   final bool muted; // audio: silent
   final int indexInType; // order among tracks of this type in the project (0 = bottom video layer / first audio)
   final Map<String, dynamic>? subtitle; // subtitle track settings (style, position, lang), else null
+  final double volume; // mixer: track gain
+  final double pan; // mixer: -1 left .. 1 right
+  final bool solo; // mixer: only soloed tracks are heard
   bool get audio => type == 'audio';
   bool get isSubtitle => subtitle != null;
 }
@@ -208,6 +214,9 @@ class ProjectView {
         muted: (t['muted'] ?? false) as bool,
         indexInType: indexInType,
         subtitle: t['subtitle'] is Map<String, dynamic> ? t['subtitle'] as Map<String, dynamic> : null,
+        volume: (t['volume'] as num?)?.toDouble() ?? 1,
+        pan: (t['pan'] as num?)?.toDouble() ?? 0,
+        solo: t['solo'] == true,
       );
     }
 

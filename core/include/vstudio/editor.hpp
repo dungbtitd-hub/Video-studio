@@ -155,6 +155,25 @@ public:
     // grade, keeping its place in the effect chain; null or neutral params remove it.
     void setClipGrade(const std::vector<Id>& clipIds, const Json& params);
 
+    // ---- sound (audio_fx.hpp); each call is one undo step ----
+    // Merges `patch` into each clip's "audio" settings (fade_in / fade_out seconds, eq, denoise);
+    // a null value removes that key. Fades are capped to half the clip and 10 s.
+    void setClipAudio(const std::vector<Id>& clipIds, const Json& patch);
+    // "Tách âm thanh": copies the clip's sound to an audio track (a free one, else a new one)
+    // with the same timing, and silences the clip (audio.detached). Returns the new audio clip.
+    Id detachAudio(const Id& clipId);
+    // Puts an audio asset (a recorded voice-over) at `at` on the first audio track named
+    // `trackName` that is free there, creating it when none is. Returns the clip id.
+    Id placeAudio(const Id& assetId, Time at, const std::string& trackName = "Thu âm");
+    // Mixer: pan -1..1 (left..right), solo. Soloed tracks are the only ones heard.
+    void setTrackMix(const Id& trackId, double pan, bool solo);
+
+    // ---- clip tools (clip_tools.hpp); each call is one undo step ----
+    void setClipReversed(const std::vector<Id>& clipIds, bool reversed);
+    // Holds the frame shown at timeline time `t` for `duration`: splits the clip there, inserts
+    // the still and pushes the rest of the track right. Returns the freeze clip's id.
+    Id freezeFrame(const Id& clipId, Time t, Time duration = Time::fromSeconds(3.0));
+
     bool undo();
     bool redo();
     [[nodiscard]] bool canUndo() const { return history_.canUndo(); }

@@ -1,0 +1,296 @@
+name: Release
+
+# Builds the installable apps for every platform.
+#   - push a tag "v1.2.3": builds everything and publishes a GitHub Release with the files
+#   - "Run workflow" (manual) or a pull request touching packaging: builds and keeps the files
+#     as workflow artifacts (no release)
+# Signing is optional and comes from repository secrets (packaging/README.md); without them
+# the apps are built unsigned (Windows/macOS/iOS) or signed with a debug key (Android).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'packaging/**'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.10.*'
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      build: ${{ steps.v.outputs.build }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="0.9.0"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows installer (x64)
+    needs: version
+    runs-on: windows-2022
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-windows-
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        shell: bash
+        run: |
+          mkdir -p vcpkg-cache
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET=x64-windows \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVSTUDIO_RELEASE_VERSION=$VERSION -DVSTUDIO_BUILD_DESKTOP=ON \
+            -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
+          test -d build/adapters/ffmpeg  # the installer must include the FFmpeg module
+      - name: Build
+        run: cmake --build build --target VideoStudio
+      - name: Stage the app (Qt + FFmpeg DLLs next to the exe)
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp build/bin/VideoStudio.exe stage/
+          cp build/bin/*.dll stage/ 2>/dev/null || true
+          cp build/vcpkg_installed/x64-windows/bin/*.dll stage/
+          windeployqt --release --no-translations --compiler-runtime stage/VideoStudio.exe
+          ls stage
+      - name: Smoke test (starts, renders a frame, exits)
+        shell: bash
+        env:
+          QT_FORCE_STDERR_LOGGING: '1'
+        run: stage/VideoStudio.exe --bench-timeline 50 --screenshot win-smoke.png
+      - name: Installer (NSIS) and portable zip
+        shell: pwsh
+        run: |
+          makensis /DVERSION=$env:VERSION /DSTAGE="$pwd\stage" /DOUT="$pwd\VideoStudio-$env:VERSION-windows-x64-setup.exe" /DICON="$pwd\packaging\icons\videostudio.ico" packaging\windows\installer.nsi
+          Compress-Archive -Path stage\* -DestinationPath "VideoStudio-$env:VERSION-windows-x64-portable.zip"
+      - name: Sign (when a certificate is configured)
+        if: ${{ env.WIN_CERT != '' }}
+        shell: pwsh
+        env:
+          WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WIN_CERT))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
+          & $signtool.FullName sign /f cert.pfx /p $env:WIN_CERT_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 "VideoStudio-$env:VERSION-windows-x64-setup.exe"
+          Remove-Item cert.pfx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            VideoStudio-*-setup.exe
+            VideoStudio-*-portable.zip
+            win-smoke.png
+
+  macos:
+    name: macOS app (.dmg, Apple silicon)
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
+          cache: true
+      - run: brew install ninja nlohmann-json
+      - name: Configure and build
+        # Media on macOS goes through AVFoundation/VideoToolbox (adapters/apple); LibRaw is built
+        # from source and linked statically, so the app needs no Homebrew libraries.
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVSTUDIO_RELEASE_VERSION=$VERSION \
+            -DVSTUDIO_BUILD_DESKTOP=ON -DVSTUDIO_WITH_FFMPEG=OFF -DVSTUDIO_LIBRAW_FROM_SOURCE=ON \
+            -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
+          cmake --build build --target VideoStudio
+      - name: Bundle Qt, sign, make the .dmg
+        env:
+          MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MAC_SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          app="build/bin/VideoStudio.app"
+          macdeployqt "$app" -always-overwrite
+          id="-"  # ad-hoc: required for the app to start on Apple silicon at all
+          if [ -n "$MAC_CERT" ]; then
+            echo "$MAC_CERT" | base64 --decode > cert.p12
+            security create-keychain -p ci build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p ci build.keychain
+            security import cert.p12 -k build.keychain -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+            rm cert.p12
+            id="$MAC_SIGN_ID"
+          fi
+          codesign --force --deep --options runtime --timestamp=none -s "$id" "$app"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/VideoStudio" --bench-timeline 50 --screenshot mac-smoke.png
+          mkdir dmg && cp -R "$app" "dmg/Video Studio.app" && ln -s /Applications dmg/Applications
+          # hdiutil on hosted runners often fails with "Resource busy" while the app was just
+          # run (XProtect scan / disk arbitration): retry a few times with a pause.
+          for i in 1 2 3 4 5; do
+            hdiutil create -volname "Video Studio" -srcfolder dmg -ov -format UDZO "VideoStudio-$VERSION-macos-arm64.dmg" && break
+            [ "$i" = 5 ] && exit 1
+            echo "hdiutil failed (attempt $i), retrying"; sleep $((i * 10))
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: |
+            VideoStudio-*.dmg
+            mac-smoke.png
+
+  linux:
+    name: Linux (.deb, .tar.gz)
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nlohmann-json3-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+            qt6-base-dev qt6-multimedia-dev libraw-dev xvfb
+      - name: Build and package
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DVSTUDIO_RELEASE_VERSION=$VERSION -DVSTUDIO_BUILD_DESKTOP=ON \
+            -DVSTUDIO_BUILD_TESTS=OFF -DVSTUDIO_BUILD_BENCH=OFF -DVSTUDIO_BUILD_CLI=OFF
+          cmake --build build --target VideoStudio
+          (cd build && cpack)
+          dpkg-deb --info build/videostudio_*.deb
+      - name: Install the .deb and start the app
+        run: |
+          sudo apt-get install -y ./build/videostudio_*.deb
+          xvfb-run -a -s "-screen 0 1440x900x24" VideoStudio --bench-timeline 50 --screenshot linux-smoke.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: |
+            build/videostudio_*.deb
+            build/videostudio-*.tar.gz
+            linux-smoke.png
+
+  android:
+    name: Android (.apk, .aab)
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Release key (when configured)
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 --decode > mobile/android/app/release.jks
+            printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > mobile/android/key.properties
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: signed with the debug key (not for Google Play)"
+          fi
+      - name: Build
+        working-directory: mobile
+        run: |
+          flutter build apk --release --build-name=$VERSION --build-number=$BUILD
+          flutter build appbundle --release --build-name=$VERSION --build-number=$BUILD
+          cp build/app/outputs/flutter-apk/app-release.apk ../VideoStudio-$VERSION-android.apk
+          cp build/app/outputs/bundle/release/app-release.aab ../VideoStudio-$VERSION-android.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: VideoStudio-*-android.*
+
+  ios:
+    name: iOS (.ipa)
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - name: Build static core for iOS
+        run: ./scripts/build_ios_core.sh build-ios
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build the app
+        working-directory: mobile
+        # Unsigned: installing on an iPhone or uploading to App Store Connect needs an Apple
+        # Developer account (packaging/README.md, "iOS").
+        run: |
+          flutter build ios --release --no-codesign --build-name=$VERSION --build-number=$BUILD
+          mkdir -p Payload && cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry ../VideoStudio-$VERSION-ios-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-ios
+          path: VideoStudio-*-ios-unsigned.ipa
+
+  publish:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, windows, macos, linux, android, ios]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: |
+          cd dist && rm -f *.png
+          sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Video Studio ${{ needs.version.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}

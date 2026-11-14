@@ -1006,4 +1006,83 @@ class VStudio {
   void relink(String assetId, String path) =>
       using((a) => _check(_b.relinkAsset(_s, assetId.toNativeUtf8(allocator: a), path.toNativeUtf8(allocator: a))));
   String get lastError => _b.lastError(_s).toDartString();
+
+  // ---- sound and clip tools (vs_tool_command: JSON in, JSON out) ----
+
+  /// Runs one tool command; throws [VStudioException] when the core refuses it.
+  Map<String, dynamic> tool(Map<String, dynamic> command) {
+    final out = jsonDecode(using((a) => _take(_b.toolCommand(_s, jsonEncode(command).toNativeUtf8(allocator: a)))))
+        as Map<String, dynamic>;
+    if (out['ok'] != true) throw VStudioException('${out['error']}');
+    return out;
+  }
+
+  List<EqPresetInfo> eqPresets() => [
+        for (final e in (tool({'cmd': 'eq_presets'})['presets'] as List).cast<Map<String, dynamic>>())
+          EqPresetInfo(e['id'] as String, e['name'] as String,
+              [for (final g in e['gains'] as List) (g as num).toDouble()])
+      ];
+
+  ClipSound clipSound(String clipId) => ClipSound(tool({'cmd': 'clip_audio', 'clip': clipId}));
+  void setClipAudio(List<String> clipIds, Map<String, dynamic> patch) =>
+      tool({'cmd': 'set_clip_audio', 'clips': clipIds, 'patch': patch});
+  String detachAudio(String clipId) => tool({'cmd': 'detach_audio', 'clip': clipId})['clip'] as String;
+
+  /// A recorded take at [at] seconds on a free "Thu âm" track. Returns the clip id.
+  String placeAudio(String assetId, double at) =>
+      tool({'cmd': 'place_audio', 'asset': assetId, 'at': secondsToTicks(at)})['clip'] as String;
+  void setTrackMix(String trackId, {double pan = 0, bool solo = false}) =>
+      tool({'cmd': 'set_track_mix', 'track': trackId, 'pan': pan, 'solo': solo});
+  void setTrackVolume(String trackId, double volume) =>
+      tool({'cmd': 'set_track_volume', 'track': trackId, 'volume': volume});
+  void setClipVolume(String clipId, double volume) => tool({'cmd': 'set_clip_volume', 'clip': clipId, 'volume': volume});
+  void setReversed(List<String> clipIds, bool on) => tool({'cmd': 'set_reversed', 'clips': clipIds, 'on': on});
+  String freezeFrame(String clipId, double at, {double seconds = 3}) => tool({
+        'cmd': 'freeze_frame',
+        'clip': clipId,
+        'at': secondsToTicks(at),
+        'duration': secondsToTicks(seconds)
+      })['clip'] as String;
+  void setEffect(List<String> clipIds, String type, Map<String, dynamic>? params) =>
+      tool({'cmd': 'set_effect', 'clips': clipIds, 'type': type, 'params': params});
+  Map<String, dynamic>? effect(String clipId, String type) =>
+      tool({'cmd': 'effect', 'clip': clipId, 'type': type})['params'] as Map<String, dynamic>?;
+  String guessKeyColor() => tool({'cmd': 'guess_key_color'})['color'] as String;
+
+  /// Background job: "noise" (then noise reduction at [value]) or "stabilize" (strength [value]).
+  void startToolJob(String job, String clipId, double value) =>
+      tool({'cmd': 'start', 'job': job, 'clip': clipId, 'value': value});
+
+  /// (status, progress, error): 1 running, 2 done (applied, one undo step), -1 failed, -2 cancelled.
+  (int, double, String) toolJobStatus() {
+    final r = tool({'cmd': 'job_status'});
+    return (r['status'] as int, (r['progress'] as num).toDouble(), r['error'] as String? ?? '');
+  }
+
+  void cancelToolJob() => tool({'cmd': 'job_cancel'});
+  void setStabilizeStrength(String clipId, double strength) =>
+      tool({'cmd': 'stabilize_strength', 'clip': clipId, 'strength': strength});
+}
+
+class EqPresetInfo {
+  const EqPresetInfo(this.id, this.name, this.gains);
+  final String id, name;
+  final List<double> gains;
+}
+
+/// A clip's sound settings (clip "audio" in the project) and its direction.
+class ClipSound {
+  ClipSound(Map<String, dynamic> j)
+      : audio = (j['audio'] as Map?)?.cast<String, dynamic>() ?? const {},
+        volume = (j['volume'] as num?)?.toDouble() ?? 1,
+        reversed = j['reversed'] == true,
+        freeze = j['freeze'] == true;
+  final Map<String, dynamic> audio;
+  final double volume;
+  final bool reversed, freeze;
+  double get fadeIn => (audio['fade_in'] as num?)?.toDouble() ?? 0;
+  double get fadeOut => (audio['fade_out'] as num?)?.toDouble() ?? 0;
+  bool get detached => audio['detached'] == true;
+  Map<String, dynamic>? get eq => (audio['eq'] as Map?)?.cast<String, dynamic>();
+  Map<String, dynamic>? get denoise => (audio['denoise'] as Map?)?.cast<String, dynamic>();
 }

@@ -1,4 +1,6 @@
 #include "vstudio/modules.hpp"
+#include "vstudio/audio_fx.hpp"
+#include "vstudio/clip_tools.hpp"
 #include "vstudio/video_fx.hpp"
 
 #include "vstudio/generators.hpp"
@@ -236,6 +238,8 @@ void registerBuiltinModules(ModuleRegistry& r) {
                         [] { return std::make_shared<Grayscale>(); });
     registerGeneratorModules(r);
     registerVideoFxModules(r);
+    audiofx::registerAudioModules(r);
+    cliptools::registerClipToolModules(r);
 }
 
 void applyClipEffects(ModuleRegistry& r, const Clip& clip, VideoFrame& frame, Time localTime,

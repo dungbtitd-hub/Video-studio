@@ -125,6 +125,27 @@ int main(void) {
         EXPECT(vs_preview_scope(s, 0, 64, 32, scope) != 0); /* no frame yet */
         EXPECT(vs_preview_scope(s, 9, 64, 32, scope) != 0);
     }
+    /* Sound + clip tools through the JSON command entry point. */
+    {
+        char* r = vs_tool_command(s, "{\"cmd\":\"eq_presets\"}");
+        EXPECT(r && strstr(r, "\"ok\":true") && strstr(r, "\"voice\""));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"set_reversed\",\"clips\":[\"nope\"],\"on\":true}");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"what\"}");
+        EXPECT(r && strstr(r, "unknown command"));
+        vs_free(r);
+        r = vs_tool_command(s, "not json");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"job_status\"}");
+        EXPECT(r && strstr(r, "\"status\":0"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"set_track_mix\",\"track\":\"nope\",\"pan\":0.5}");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
+    }
     /* Keyframes: unknown clips and bad input are refused with a message. */
     EXPECT(vs_add_keyframe(s, "nope", 0, 0) != 0);
     EXPECT(strstr(vs_last_error(s), "unknown clip") != NULL);
@@ -321,7 +342,9 @@ int main(void) {
     vs_preview_set_size(s, 64, 36);
     vs_preview_set_sink(s, sink, &st);
     vs_preview_seek(s, 0);
-    for (int i = 0; i < 200 && atomic_get(&st.calls) == 0; ++i) sleep_ms(10);
+    /* A frame requested before the resize (vs_set_effect_preview above made the preview at its
+       default size) may still be in flight: wait for one at the new size. */
+    for (int i = 0; i < 300 && !(atomic_get(&st.calls) > 0 && st.w == 64); ++i) sleep_ms(10);
     EXPECT(st.calls > 0);
     EXPECT(st.w == 64 && st.h == 36 && st.stride == 64 * 4);
     EXPECT(st.first == 255); /* opaque canvas */

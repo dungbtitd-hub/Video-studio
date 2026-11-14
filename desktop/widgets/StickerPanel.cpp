@@ -15,6 +15,7 @@
 
 #include "AnimationBox.h"
 #include "EditorController.h"
+#include "Favorites.h"
 #include "vstudio/stickers.hpp"
 
 namespace {
@@ -39,6 +40,7 @@ StickerPanel::StickerPanel(EditorController* editor, QWidget* parent) : QWidget(
         category_->addItem(QString::fromStdString(c), QString::fromStdString(c));
     l->addWidget(category_);
     list_ = new QListWidget(this);
+    favorites::attach(list_, editor_, "sticker");
     list_->setViewMode(QListView::IconMode);
     list_->setIconSize(QSize(kIcon, kIcon));
     list_->setGridSize(QSize(kIcon + 22, kIcon + 34));

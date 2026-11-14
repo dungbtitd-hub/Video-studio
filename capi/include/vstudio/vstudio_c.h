@@ -383,6 +383,22 @@ VS_API int vs_recent_touch(const char* recent_file, const char* package_dir);
 VS_API int vs_recent_remove(const char* recent_file, const char* package_dir);
 VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacity, int* width, int* height);
 
+/* ---- sound and clip tools: one JSON command entry point (audio_fx.hpp, clip_tools.hpp) ----
+ * command_json {"cmd": ...}; returns {"ok": true, ...} or {"ok": false, "error"} (free with vs_free).
+ *   eq_presets                                  -> {"presets": [{"id","name","gains"}]}
+ *   clip_audio {clip}                           -> {"audio", "volume", "reversed", "freeze"}
+ *   set_clip_audio {clips: [...], patch}        fades (s), eq {preset|gains}, denoise {amount}; null removes
+ *   detach_audio {clip}                         -> {"clip"}: the sound on an audio track
+ *   place_audio {asset, at (ticks), track?}     -> {"clip"}: a voice-over take on a free "Thu âm" track
+ *   set_track_mix {track, pan (-1..1), solo}; set_track_volume {track, volume}; set_clip_volume {clip, volume}
+ *   set_reversed {clips, on}; freeze_frame {clip, at, duration?} -> {"clip"}
+ *   set_effect {clips, type, params|null}; effect {clip, type} -> {"params"}  (builtin.chroma_key...)
+ *   guess_key_color                             -> {"color": "#rrggbb"} from the last preview frame
+ *   start {job: "noise"|"stabilize", clip, value (amount|strength)}; job_status -> {"status","progress",
+ *     "error"} (0 idle, 1 running, 2 done and applied as one undo step, -1 failed, -2 cancelled); job_cancel
+ *   stabilize_strength {clip, strength}         re-smooths without measuring again */
+VS_API char* vs_tool_command(vs_session* s, const char* command_json);
+
 #ifdef __cplusplus
 }
 #endif

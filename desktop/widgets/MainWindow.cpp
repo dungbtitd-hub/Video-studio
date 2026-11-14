@@ -39,6 +39,9 @@
 #include "RecentStrip.h"
 #include "VideoFxPanel.h"
 #include "SubtitlePanel.h"
+#include "AudioPanel.h"
+#include "ClipToolsPanel.h"
+#include "MixerPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -293,6 +296,24 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     subtitleDock->setWidget(subtitles_);
     addDockWidget(Qt::RightDockWidgetArea, subtitleDock);
     tabifyDockWidget(overlayDock, subtitleDock);
+    auto* audioDock = new QDockWidget("Âm thanh", this);
+    audioDock->setObjectName("audio");
+    audio_ = new AudioPanel(editor_, audioDock);
+    audioDock->setWidget(audio_);
+    addDockWidget(Qt::RightDockWidgetArea, audioDock);
+    tabifyDockWidget(subtitleDock, audioDock);
+    auto* mixerDock = new QDockWidget("Mixer", this);
+    mixerDock->setObjectName("mixer");
+    mixer_ = new MixerPanel(editor_, mixerDock);
+    mixerDock->setWidget(mixer_);
+    addDockWidget(Qt::RightDockWidgetArea, mixerDock);
+    tabifyDockWidget(audioDock, mixerDock);
+    auto* toolsDock = new QDockWidget("Công cụ clip", this);
+    toolsDock->setObjectName("clipTools");
+    clipTools_ = new ClipToolsPanel(editor_, toolsDock);
+    toolsDock->setWidget(clipTools_);
+    addDockWidget(Qt::RightDockWidgetArea, toolsDock);
+    tabifyDockWidget(looksDock, toolsDock);
     looksDock->raise();
     // Selecting a text, sticker, overlay or subtitle line on the timeline brings its panel forward.
     connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock, subtitleDock] {

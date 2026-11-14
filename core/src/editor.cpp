@@ -1,4 +1,5 @@
 #include "vstudio/editor.hpp"
+#include "vstudio/audio_fx.hpp"
 #include "vstudio/video_fx.hpp"
 
 #include <cmath>
@@ -973,6 +974,209 @@ Id Editor::applySubtitleTranslation(const Id& sourceTrackId, const std::map<Id, 
             if (Track* s = p.findTrack(sourceTrackId)) s->enabled = false;
     });
     return id;
+}
+
+// ---------------------------------------------------------------- sound
+
+namespace {
+void mergePatch(Json& target, const Json& patch) {
+    if (!target.is_object()) target = Json::object();
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        if (it->is_null()) target.erase(it.key());
+        else target[it.key()] = *it;
+    }
+}
+
+std::vector<Id> tracksOf(const Project& p, const std::vector<Id>& clipIds) {
+    if (clipIds.empty()) throw EditError("no clip selected");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = p.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    return tracks;
+}
+
+// First audio track (preferring `name`) with nothing in [range); nullptr when none.
+const Track* freeAudioTrack(const Project& p, TimeRange range, const std::string& name) {
+    const Track* any = nullptr;
+    for (const Track& t : p.tracks) {
+        if (t.type != TrackType::Audio || t.locked) continue;
+        const bool busy = std::any_of(t.clips.begin(), t.clips.end(), [&](const Clip& c) {
+            return c.timelineIn < range.end && range.start < c.timelineOut();
+        });
+        if (busy) continue;
+        if (name.empty() || t.name == name) return &t;
+        if (!any) any = &t;
+    }
+    return name.empty() ? any : nullptr;
+}
+}  // namespace
+
+void Editor::setClipAudio(const std::vector<Id>& clipIds, const Json& patch) {
+    if (!patch.is_object()) throw EditError("audio settings must be an object");
+    const auto tracks = tracksOf(project_, clipIds);
+    run("Sound", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& id : clipIds) {
+            Clip* c = p.trackOfClip(id)->findClip(id);
+            Json a = c->extra.contains("audio") ? c->extra["audio"] : Json::object();
+            mergePatch(a, patch);
+            const double cap = std::min(audiofx::kMaxFadeSeconds, c->duration().seconds() / 2);
+            for (const char* k : {"fade_in", "fade_out"})
+                if (a.contains(k)) {
+                    if (!a[k].is_number()) throw EditError(std::string(k) + " must be a number");
+                    const double v = std::clamp(a[k].get<double>(), 0.0, cap);
+                    if (v <= 0) a.erase(k);
+                    else a[k] = v;
+                }
+            if (a.contains("eq") && a["eq"].is_object() && a["eq"].contains("gains")) {
+                const Json& g = a["eq"]["gains"];
+                if (!g.is_array() || g.size() != audiofx::kEqBands) throw EditError("eq needs 5 band gains");
+            }
+            if (a.contains("denoise") && a["denoise"].is_object())
+                a["denoise"]["amount"] = std::clamp(a["denoise"].value("amount", 0.6), 0.0, 1.0);
+            if (a.empty()) c->extra.erase("audio");
+            else c->extra["audio"] = a;
+        }
+    });
+}
+
+Id Editor::detachAudio(const Id& clipId) {
+    const Track* src = project_.trackOfClip(clipId);
+    if (!src) throw EditError("clip not found");
+    if (src->locked) throw EditError("track is locked: " + src->name);
+    const Clip& c = *src->findClip(clipId);
+    const MediaAsset* a = project_.findAsset(c.assetId);
+    if (!a || !a->audio) throw EditError("this clip has no sound");
+    if (src->type == TrackType::Audio) throw EditError("already an audio clip");
+    if (audiofx::detached(c)) throw EditError("sound already detached");
+    Clip copy = c;
+    copy.id = newId();
+    copy.effects = Json::array();
+    copy.transform = Json::object();
+    copy.transitionIn = copy.transitionOut = nullptr;
+    copy.extra.erase("audio");
+    if (c.extra.contains("audio")) {
+        Json au = c.extra["audio"];
+        au.erase("detached");
+        if (!au.empty()) copy.extra["audio"] = au;
+    }
+    // Only volume keyframes travel with the sound.
+    Json keys = Json::object();
+    if (c.keyframes.is_object() && c.keyframes.contains(kf::kVolume)) keys[kf::kVolume] = c.keyframes[kf::kVolume];
+    copy.keyframes = keys;
+    const Track* target = freeAudioTrack(project_, c.range(), {});
+    Id targetId = target ? target->id : Id{};
+    const Id newTrack = target ? Id{} : newId();
+    const Id videoTrack = src->id;
+    run("Detach audio", EditCommand::Scope::AllTracks, {}, [=](Project& p) mutable {
+        if (targetId.empty()) {
+            Track t;
+            t.id = newTrack;
+            t.type = TrackType::Audio;
+            t.name = "Âm thanh tách";
+            edit::addTrack(p, t, p.tracks.size());
+            targetId = newTrack;
+        }
+        edit::insertClip(p, targetId, copy);
+        Clip* orig = p.findTrack(videoTrack)->findClip(clipId);
+        orig->extra["audio"]["detached"] = true;
+    });
+    return copy.id;
+}
+
+Id Editor::placeAudio(const Id& assetId, Time at, const std::string& trackName) {
+    const MediaAsset* a = project_.findAsset(assetId);
+    if (!a || !a->audio) throw EditError("not an audio asset");
+    if (at < Time::zero()) throw EditError("negative time");
+    Clip c;
+    c.id = newId();
+    c.assetId = assetId;
+    c.timelineIn = at.snapToFrame(project_.fps);
+    c.sourceIn = Time::zero();
+    c.sourceOut = a->duration;
+    const Track* target = freeAudioTrack(project_, c.range(), trackName);
+    Id targetId = target ? target->id : Id{};
+    const Id newTrack = newId();
+    run("Voice-over", EditCommand::Scope::AllTracks, {}, [=](Project& p) mutable {
+        if (targetId.empty()) {
+            Track t;
+            t.id = newTrack;
+            t.type = TrackType::Audio;
+            t.name = trackName;
+            edit::addTrack(p, t, p.tracks.size());
+            targetId = newTrack;
+        }
+        edit::insertClip(p, targetId, c);
+    });
+    return c.id;
+}
+
+void Editor::setTrackMix(const Id& trackId, double pan, bool solo) {
+    if (!project_.findTrack(trackId)) throw EditError("track not found");
+    if (!(pan >= -1.0 && pan <= 1.0)) throw EditError("pan must be within -1..1");
+    run("Mixer", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) {
+        Track* t = p.findTrack(trackId);
+        if (std::abs(pan) < 1e-6) t->extra.erase("pan");
+        else t->extra["pan"] = pan;
+        if (solo) t->extra["solo"] = true;
+        else t->extra.erase("solo");
+    });
+}
+
+// ---------------------------------------------------------------- clip tools
+
+void Editor::setClipReversed(const std::vector<Id>& clipIds, bool reversed) {
+    const auto tracks = tracksOf(project_, clipIds);
+    for (const Id& id : clipIds) {
+        const Clip* c = project_.findClip(id);
+        if (c->generated()) throw EditError("text and stickers cannot be reversed");
+        const MediaAsset* a = project_.findAsset(c->assetId);
+        if (a && a->type == MediaType::Image) throw EditError("photos cannot be reversed");
+    }
+    run(reversed ? "Reverse" : "Play forwards", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& id : clipIds) p.trackOfClip(id)->findClip(id)->reversed = reversed;
+    });
+}
+
+Id Editor::freezeFrame(const Id& clipId, Time t, Time duration) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    if (tr->locked) throw EditError("track is locked: " + tr->name);
+    const Clip& c = *tr->findClip(clipId);
+    const MediaAsset* a = project_.findAsset(c.assetId);
+    if (c.generated() || !a || a->type != MediaType::Video) throw EditError("freeze frame needs a video clip");
+    t = t.snapToFrame(project_.fps);
+    if (t < c.timelineIn || t >= c.timelineOut()) throw EditError("playhead is not on the clip");
+    duration = std::max(duration.snapToFrame(project_.fps), Time::fromFrame(1, project_.fps));
+    const Rational fps = a->fps.num > 0 ? a->fps : project_.fps;
+    Clip still = c;
+    still.id = newId();
+    still.reversed = false;
+    still.sourceIn = c.toSource(t).snapToFrame(fps);
+    if (still.sourceIn >= a->duration) still.sourceIn = Time::fromFrame(std::max<std::int64_t>(0, a->duration.toFrame(fps) - 1), fps);
+    const Time frame = Time::fromFrame(1, fps);
+    still.sourceOut = std::min(still.sourceIn + frame, a->duration);
+    // One source frame spread over `duration`: speed = frame / duration.
+    still.speed = Rational{(still.sourceOut - still.sourceIn).ticks(), duration.ticks()}.reduced();
+    still.timelineIn = t;
+    still.transitionIn = still.transitionOut = nullptr;
+    still.keyframes = Json::object();
+    still.extra["freeze"] = true;
+    const Id trackId = tr->id, rightId = newId();
+    const bool split = t > c.timelineIn;
+    run("Freeze frame", EditCommand::Scope::Tracks, {trackId}, [=](Project& p) {
+        if (split) edit::splitClip(p, clipId, t, rightId);
+        Track* track = p.findTrack(trackId);
+        for (Clip& x : track->clips)
+            if (x.timelineIn >= t) x.timelineIn = x.timelineIn + duration;
+        Clip s = still;
+        // The still is exactly `duration` long whatever the rounding of the speed.
+        edit::insertClip(p, trackId, s);
+    });
+    return still.id;
 }
 
 }  // namespace vstudio

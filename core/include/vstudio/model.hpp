@@ -70,6 +70,9 @@ struct Clip {
     // Generated clips (text, stickers: generators.hpp) have no asset (assetId is empty) and
     // describe what they draw here: {"kind": "text", ...}. Null for media clips.
     Json content;
+    // Plays the source range backwards (clip_tools.hpp). Source times then run from
+    // sourceOut down to sourceIn; keyframes stay keyed in source time.
+    bool reversed = false;
     Json extra = Json::object();
 
     [[nodiscard]] bool generated() const { return content.is_object() && content.contains("kind"); }
@@ -78,9 +81,14 @@ struct Clip {
     [[nodiscard]] Time timelineOut() const { return timelineIn + duration(); }
     [[nodiscard]] TimeRange range() const { return {timelineIn, timelineOut()}; }
     // Maps a timeline time inside this clip to source time.
-    [[nodiscard]] Time toSource(Time timeline) const { return sourceIn + (timeline - timelineIn).scaled(speed); }
+    [[nodiscard]] Time toSource(Time timeline) const {
+        const Time d = (timeline - timelineIn).scaled(speed);
+        return reversed ? sourceOut - Time::fromTicks(1) - d : sourceIn + d;
+    }
     // Maps a source time to timeline time.
-    [[nodiscard]] Time toTimeline(Time source) const { return timelineIn + (source - sourceIn).scaled(speed.inverse()); }
+    [[nodiscard]] Time toTimeline(Time source) const {
+        return timelineIn + (reversed ? sourceOut - Time::fromTicks(1) - source : source - sourceIn).scaled(speed.inverse());
+    }
 };
 
 struct Track {
