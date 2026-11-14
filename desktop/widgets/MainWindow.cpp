@@ -9,6 +9,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSettings>
+#include <QSlider>
 #include <QTableWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -23,6 +24,7 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <cmath>
 
 #include "EditorController.h"
 #include "LooksPanel.h"
@@ -88,7 +90,64 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     for (auto* b : {home, back, playBtn_, fwd}) transport->addWidget(b);
     transport->addStretch();
     cl->addLayout(transport);
+
+    // Keyframes right under the picture: ◇ adds/removes a key at the playhead
+    // (picture and sound separately), drag on the picture to zoom, slider for volume.
+    auto* keys = new QHBoxLayout();
+    keys->setSpacing(6);
+    auto* kfTitle = new QLabel(tr("Keyframe"), centre);
+    kfTitle->setStyleSheet("color: #6e7685; font-size: 11px;");
+    keys->addWidget(kfTitle);
+    kfPrev_ = toolButton("◀◆", centre);
+    kfPicture_ = toolButton(tr("◇ Hình"), centre);
+    kfAudio_ = toolButton(tr("◇ Âm thanh"), centre);
+    kfNext_ = toolButton("◆▶", centre);
+    kfResetZoom_ = toolButton(tr("Bỏ zoom"), centre);
+    kfPicture_->setObjectName("kfPicture");
+    kfAudio_->setObjectName("kfAudio");
+    kfResetZoom_->setObjectName("kfResetZoom");
+    for (auto* b : {kfPicture_, kfAudio_}) b->setCheckable(true);
+    kfPrev_->setToolTip(tr("Keyframe trước ([)"));
+    kfNext_->setToolTip(tr("Keyframe sau (])"));
+    kfPicture_->setToolTip(tr("Thêm/bỏ keyframe hình ảnh tại playhead (Ctrl+K).\n"
+                              "Đặt một key ở điểm bắt đầu, sang điểm khác rồi kéo chuột trên khung hình để khoanh vùng phóng to: "
+                              "hình sẽ zoom mượt giữa hai điểm."));
+    kfAudio_->setToolTip(tr("Thêm/bỏ keyframe âm thanh tại playhead (Ctrl+Shift+K), độc lập với hình ảnh.\n"
+                            "Đặt key rồi đổi âm lượng ở điểm khác: âm thanh to/nhỏ dần giữa các điểm."));
+    kfResetZoom_->setToolTip(tr("Đưa hình về kích thước gốc tại playhead"));
+    for (auto* b : {kfPrev_, kfPicture_, kfAudio_, kfNext_, kfResetZoom_}) keys->addWidget(b);
+    keys->addSpacing(12);
+    auto* volIcon = new QLabel(tr("Âm lượng"), centre);
+    volIcon->setStyleSheet("color: #a4abb8;");
+    keys->addWidget(volIcon);
+    kfVolume_ = new QSlider(Qt::Horizontal, centre);
+    kfVolume_->setObjectName("kfVolume");
+    kfVolume_->setRange(0, 400);  // percent
+    kfVolume_->setSingleStep(5);
+    kfVolume_->setPageStep(25);
+    kfVolume_->setFixedWidth(160);
+    keys->addWidget(kfVolume_);
+    kfVolumeLabel_ = new QLabel(centre);
+    kfVolumeLabel_->setMinimumWidth(44);
+    keys->addWidget(kfVolumeLabel_);
+    kfInfo_ = new QLabel(centre);
+    kfInfo_->setStyleSheet("color: #6e7685; font-size: 11px;");
+    keys->addWidget(kfInfo_, 1);
+    cl->addLayout(keys);
     setCentralWidget(centre);
+    connect(kfPicture_, &QToolButton::clicked, this, [this] { editor_->toggleKeyframe(false); });
+    connect(kfAudio_, &QToolButton::clicked, this, [this] { editor_->toggleKeyframe(true); });
+    connect(kfPrev_, &QToolButton::clicked, this, [this] { editor_->jumpKeyframe(false); });
+    connect(kfNext_, &QToolButton::clicked, this, [this] { editor_->jumpKeyframe(true); });
+    connect(kfResetZoom_, &QToolButton::clicked, editor_, &EditorController::resetZoom);
+    connect(preview_, &PreviewWidget::regionSelected, editor_, &EditorController::zoomToRegion);
+    // The label follows the drag; the edit (one undo step) happens on release or a key press.
+    connect(kfVolume_, &QSlider::valueChanged, this, [this](int v) {
+        kfVolumeLabel_->setText(QString("%1%").arg(v));
+        if (!kfVolume_->isSliderDown()) editor_->setVolumeAtPlayhead(v / 100.0);
+    });
+    connect(kfVolume_, &QSlider::sliderReleased, this,
+            [this] { editor_->setVolumeAtPlayhead(kfVolume_->value() / 100.0); });
     connect(home, &QToolButton::clicked, this, [this] { editor_->seek(0); });
     connect(back, &QToolButton::clicked, this, [this] { editor_->stepFrames(-1); });
     connect(fwd, &QToolButton::clicked, this, [this] { editor_->stepFrames(1); });
@@ -267,6 +326,36 @@ void MainWindow::refreshState() {
     exportBtn_->setText(editor_->exporting() ? QString("Đang xuất %1%  ✕").arg(int(editor_->exportProgress() * 100))
                                              : "Xuất video");
     inspector_->setText(editor_->selectedClip().isEmpty() ? "Chọn một clip trên Timeline" : "Clip đã chọn");
+    refreshKeyframes();
+}
+
+void MainWindow::refreshKeyframes() {
+    const EditorController::KeyState k = editor_->keyState();
+    const bool video = k.valid && k.video;
+    kfPicture_->setEnabled(video);
+    kfAudio_->setEnabled(k.valid);
+    kfResetZoom_->setEnabled(video && (std::abs(k.scale - 1) > 1e-3 || k.pictureAnimated));
+    kfVolume_->setEnabled(k.valid);
+    const bool anyKeys = !editor_->selectedClip().isEmpty() &&
+                         (!editor_->keyframeTimes(editor_->selectedClip(), false).isEmpty() ||
+                          !editor_->keyframeTimes(editor_->selectedClip(), true).isEmpty());
+    kfPrev_->setEnabled(anyKeys);
+    kfNext_->setEnabled(anyKeys);
+    // Filled diamond = a key sits at the playhead.
+    kfPicture_->setChecked(k.pictureHere);
+    kfAudio_->setChecked(k.audioHere);
+    kfPicture_->setText(k.pictureHere ? tr("◆ Hình") : tr("◇ Hình"));
+    kfAudio_->setText(k.audioHere ? tr("◆ Âm thanh") : tr("◇ Âm thanh"));
+    if (!kfVolume_->isSliderDown()) {
+        const QSignalBlocker block(kfVolume_);
+        kfVolume_->setValue(int(std::lround(k.volume * 100)));
+        kfVolumeLabel_->setText(QString("%1%").arg(kfVolume_->value()));
+    }
+    preview_->setRegionSelectEnabled(video && !editor_->playing());
+    if (!k.valid) kfInfo_->setText(editor_->selectedClip().isEmpty() ? tr("Chọn một clip để đặt keyframe")
+                                                                      : tr("Đưa playhead vào clip đã chọn"));
+    else if (video && !k.pictureAnimated) kfInfo_->setText(tr("Kéo chuột trên hình để phóng to"));
+    else kfInfo_->setText(video ? tr("Zoom ×%1").arg(k.scale, 0, 'f', 2) : QString());
 }
 
 void MainWindow::buildMenus() {
@@ -324,6 +413,10 @@ void MainWindow::buildMenus() {
         [this] { editor_->rippleDeleteSelected(); });
     act(editMenu, "Bỏ chọn", {K(Qt::Key_Escape)}, [this] { editor_->setSelectedClip({}); });
     editMenu->addSeparator();
+    act(editMenu, "Keyframe hình ảnh", {K("Ctrl+K")}, [this] { editor_->toggleKeyframe(false); });
+    act(editMenu, "Keyframe âm thanh", {K("Ctrl+Shift+K")}, [this] { editor_->toggleKeyframe(true); });
+    act(editMenu, "Bỏ zoom tại playhead", {}, [this] { editor_->resetZoom(); });
+    editMenu->addSeparator();
     act(editMenu, "Thêm track video", {K("Ctrl+Shift+V")}, [this] { editor_->addTrack(false); });
     act(editMenu, "Thêm track âm thanh", {K("Ctrl+Shift+A")}, [this] { editor_->addTrack(true); });
 
@@ -342,6 +435,8 @@ void MainWindow::buildMenus() {
     act(playMenu, "Tới 1 giây", {K("Shift+Right")}, [this] { editor_->seekBy(1); });
     act(playMenu, "Điểm cắt trước", {K(Qt::Key_Up)}, [this] { editor_->jumpEditPoint(false); });
     act(playMenu, "Điểm cắt sau", {K(Qt::Key_Down)}, [this] { editor_->jumpEditPoint(true); });
+    act(playMenu, "Keyframe trước", {K("[")}, [this] { editor_->jumpKeyframe(false); });
+    act(playMenu, "Keyframe sau", {K("]")}, [this] { editor_->jumpKeyframe(true); });
     act(playMenu, "Về đầu", {K(Qt::Key_Home)}, [this] { editor_->seek(0); });
     act(playMenu, "Về cuối", {K(Qt::Key_End)}, [this] { editor_->seek(editor_->duration()); });
 

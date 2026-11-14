@@ -1156,3 +1156,121 @@ TEST("transfer: LUT files used by clips travel inside the package") {
     CHECK(fs::exists(dir / "phone" / "media" / "grey.cube"));
     fs::remove_all(dir);
 }
+
+// ------------------------------------------------------------------ keyframes
+
+#include "vstudio/keyframes.hpp"
+
+TEST("keyframes: eased curves, hold, values outside the keys") {
+    Json keys = Json::array({keyframeJson({sec(1), 0.0, Ease::Smooth}), keyframeJson({sec(3), 10.0, Ease::Linear}),
+                             keyframeJson({sec(4), 20.0, Ease::Hold}), keyframeJson({sec(5), 0.0, Ease::Smooth})});
+    KeyframeCurve c(keys);
+    CHECK_EQ(c.at(sec(0)), 0.0);   // before the first key: its value
+    CHECK_EQ(c.at(sec(9)), 0.0);   // after the last key: its value
+    CHECK(std::abs(c.at(sec(2)) - 5.0) < 1e-9);    // smooth: symmetric at the middle...
+    CHECK(c.at(sec(1.25)) < 10.0 * 0.125);         // ...slow start
+    CHECK(c.at(sec(2.75)) > 10.0 * 0.875);         // ...slow finish
+    CHECK(std::abs(c.at(sec(3.5)) - 15.0) < 1e-9);  // linear
+    CHECK_EQ(c.at(sec(4.9)), 20.0);                 // hold until the next key
+}
+
+TEST("keyframes: zoom looks even and the zoom target travels in a straight line") {
+    Fixture f;
+    const Id clip = f.ed.appendClip(f.v1, f.asset, sec(0), sec(8));
+    const double W = 1280, H = 720;
+    // Key 1 at 1 s: whole picture. Key 2 at 3 s: the region drawn around a face.
+    f.ed.addKeyframe(clip, kf::Group::Picture, sec(1));
+    const Transform z = zoomToRegion(Transform{}, W, H, 800, 100, 320, 180);
+    CHECK(std::abs(z.scale - 4.0) < 1e-9);
+    f.ed.setKeyframes(clip, sec(3), {{kf::kScale, z.scale}, {kf::kX, z.x}, {kf::kY, z.y}});
+    const Clip& c = *f.ed.project().findClip(clip);
+    CHECK(std::abs(animatedTransform(c, sec(2)).scale - 2.0) < 1e-9);  // geometric middle of 1x..4x
+    // The region's centre (960, 190) starts there and ends at the canvas centre, on a straight line.
+    const double px = 960 - W / 2, py = 190 - H / 2;  // offset from centre at 1x
+    double lastDist = 1e9;
+    for (int step = 0; step <= 20; ++step) {
+        const Transform tr = animatedTransform(c, sec(1.0 + step * 0.1));
+        const double ox = tr.x + px * tr.scale, oy = tr.y + py * tr.scale;  // where it is now, from centre
+        CHECK(std::abs(ox * py - oy * px) < 1e-6 * (std::abs(ox) + std::abs(oy) + 1));  // collinear with start
+        const double d = std::hypot(ox, oy);
+        CHECK(d <= lastDist + 1e-9);  // only ever moves towards the centre
+        lastDist = d;
+    }
+    CHECK(lastDist < 1e-6);
+    // Splitting the clip keeps the motion seamless across the cut.
+    const Transform before = animatedTransform(c, sec(2));
+    const Id right = f.ed.splitClip(clip, sec(2));
+    CHECK(std::abs(animatedTransform(*f.ed.project().findClip(right), sec(2)).scale - before.scale) < 1e-9);
+}
+
+TEST("keyframes: picture and audio keys are independent, auto-key, undo, limits") {
+    Fixture f;
+    const Id clip = f.ed.appendClip(f.v1, f.asset, sec(0), sec(8));
+    f.ed.addKeyframe(clip, kf::Group::Picture, sec(1));
+    f.ed.addKeyframe(clip, kf::Group::Audio, sec(1));
+    f.ed.setKeyframes(clip, sec(5), {{kf::kVolume, 0.0}});
+    auto clipNow = [&] { return *f.ed.project().findClip(clip); };
+    CHECK_EQ(keyframeTimes(clipNow()).size(), 2u);
+    // Removing the picture key at 1 s leaves the audio keys alone.
+    CHECK(f.ed.removeKeyframe(clip, kf::Group::Picture, sec(1)));
+    CHECK(!clipNow().keyframes.contains(kf::kScale));
+    CHECK_EQ(clipNow().keyframes[kf::kVolume].size(), 2u);
+    CHECK(!f.ed.removeKeyframe(clip, kf::Group::Picture, sec(1)));  // nothing left there
+    // Setting a key within half a frame of an existing one replaces it.
+    f.ed.setKeyframes(clip, sec(5) + Time::fromMilliseconds(5), {{kf::kVolume, 0.5}});
+    CHECK_EQ(clipNow().keyframes[kf::kVolume].size(), 2u);
+    CHECK_EQ(clipNow().keyframes[kf::kVolume][1]["v"].get<double>(), 0.5);
+    // Auto-key: an animated property is keyed at the playhead; a static one changes the clip.
+    f.ed.setPropertyAt(clip, sec(3), {{kf::kVolume, 2.0}, {kf::kScale, 1.5}});
+    CHECK_EQ(clipNow().keyframes[kf::kVolume].size(), 3u);
+    CHECK_EQ(clipNow().transform["scale"].get<double>(), 1.5);
+    CHECK(f.ed.undo());
+    CHECK_EQ(clipNow().keyframes[kf::kVolume].size(), 2u);
+    // Values are clamped; keys outside the clip, unknown properties and locked tracks are refused.
+    f.ed.setKeyframes(clip, sec(2), {{kf::kVolume, 99.0}, {kf::kScale, 0.0}});
+    CHECK_EQ(*keyframeValue(clipNow(), kf::kVolume, sec(2)), 4.0);
+    CHECK_EQ(*keyframeValue(clipNow(), kf::kScale, sec(2)), 0.05);
+    CHECK_THROWS(f.ed.setKeyframes(clip, sec(30), {{kf::kVolume, 1.0}}));
+    CHECK_THROWS(f.ed.setKeyframes(clip, sec(2), {{"rotation", 1.0}}));
+    f.ed.clearKeyframes(clip, kf::Group::Audio);
+    CHECK(!clipNow().keyframes.contains(kf::kVolume));
+    CHECK(clipNow().keyframes.contains(kf::kScale));  // picture keys untouched
+    f.ed.setTrackFlags(f.v1, true, true, false);
+    CHECK_THROWS(f.ed.addKeyframe(clip, kf::Group::Audio, sec(1)));
+    // Saved and loaded with the project.
+    const Project back = projectFromJson(toJson(f.ed.project()));
+    CHECK(back.findClip(clip)->keyframes == clipNow().keyframes);
+}
+
+TEST("keyframes: preview/export follow picture keys; volume fades without clicks") {
+    Fixture f;
+    const Id clip = f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    f.ed.setKeyframes(clip, sec(1), {{kf::kOpacity, 0.0}});
+    f.ed.setKeyframes(clip, sec(2), {{kf::kOpacity, 1.0}});
+    f.ed.setClipVolume(clip, 0.0);  // only the audio track's clip is heard
+    const Id a = f.ed.appendClip(f.a1, f.asset, sec(0), sec(4));
+    f.ed.setKeyframes(a, sec(1), {{kf::kVolume, 0.0}});
+    f.ed.setKeyframes(a, sec(2), {{kf::kVolume, 1.0}});
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    Renderer r(f.ed.project(), pool);
+    const std::size_t centre = (36 * 128 + 64) * 4;
+    auto lum = [&](double t) { return r.renderVideo(sec(t), 128, 72).rgba[centre + 1]; };
+    CHECK_EQ(int(lum(0.5)), 0);  // faded out (black canvas)
+    CHECK(lum(1.5) > 0 && lum(1.5) < lum(2.5));
+    // Audio: silent before 1 s, full after 2 s, and the gain never jumps between samples.
+    const AudioBuffer au = r.renderAudio(0, 48000 * 3);
+    double early = 0, late = 0;
+    for (int i = 0; i < 48000; ++i) early = std::max(early, double(std::abs(au.samples[i * 2])));
+    for (int i = 48000 * 2; i < 48000 * 3; ++i) late = std::max(late, double(std::abs(au.samples[i * 2])));
+    CHECK(early < 1e-6 && late > 0.2);
+    // The fake source is a 0..0.25 sawtooth with period 48; compare each period's peak to the previous.
+    double prevPeak = 0;
+    for (int p = 48000 / 48; p < 2 * 48000 / 48; ++p) {
+        double peak = 0;
+        for (int i = 0; i < 48; ++i) peak = std::max(peak, double(au.samples[(p * 48 + i) * 2]));
+        CHECK(peak >= prevPeak - 1e-6);  // rises steadily through the fade
+        CHECK(peak - prevPeak < 0.01);   // in small steps
+        prevPeak = peak;
+    }
+}

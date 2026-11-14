@@ -105,6 +105,28 @@ private slots:
         QCOMPARE(track("Video 1").clips.size(), size_t(2));
         QCOMPARE(track("Video 2").clips.back().timelineIn.seconds(), 10.0);
     }
+
+    // Keyframe diamonds: picture keys on a clip's top edge, audio keys on the
+    // bottom edge; clicking one seeks to it and never moves the clip.
+    void keyframeDiamondsSeek() {
+        const QString clip = QString::fromStdString(track("Video 1").clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        for (const double t : {1.0, 2.0}) {
+            ctrl_->seek(t);
+            ctrl_->toggleKeyframe(false);
+        }
+        ctrl_->seek(1.5);
+        ctrl_->toggleKeyframe(true);
+        QCOMPARE(ctrl_->keyframeTimes(clip, false), (QList<double>{1.0, 2.0}));
+        QCOMPARE(ctrl_->keyframeTimes(clip, true), (QList<double>{1.5}));
+        ctrl_->seek(0);
+        const int top = kRulerH + 4;  // clip rect of row 0
+        QTest::mouseClick(w_, Qt::LeftButton, {}, QPoint(timeX(2.0), top + 6));
+        QCOMPARE(ctrl_->playhead(), 2.0);
+        QTest::mouseClick(w_, Qt::LeftButton, {}, QPoint(timeX(1.5), top + kTrackH - 10 - 6));
+        QCOMPARE(ctrl_->playhead(), 1.5);
+        QCOMPARE(track("Video 1").clips.front().timelineIn.seconds(), 0.0);  // not moved
+    }
 };
 
 QTEST_MAIN(TimelineWidgetTest)

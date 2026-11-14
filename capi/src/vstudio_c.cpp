@@ -11,6 +11,7 @@
 #include "vstudio/color_space.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
+#include "vstudio/keyframes.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
 #include "vstudio/media_library.hpp"
@@ -180,6 +181,17 @@ char* guardStr(vs_session* s, F&& f) {
 }
 
 std::string str(const char* c) { return c ? std::string(c) : std::string(); }
+
+// Kept out of the extern "C" block: MSVC (/EHsc) assumes C-linkage functions never throw.
+const Clip& clipOrThrow(vs_session* s, const char* clip_id) {
+    const Clip* c = s->editor->project().findClip(str(clip_id));
+    if (!c) throw std::runtime_error("unknown clip");
+    return *c;
+}
+kf::Group groupFrom(int g) {
+    if (g != 0 && g != 1) throw std::runtime_error("group must be 0 (picture) or 1 (audio)");
+    return g == 1 ? kf::Group::Audio : kf::Group::Picture;
+}
 
 }  // namespace
 
@@ -400,6 +412,89 @@ int vs_set_clip_lut(vs_session* s, const char* clip_ids_json, const char* path, 
         }
         s->editor->setClipLut(clipIdsFrom(clip_ids_json), p, strength);
         s->edited();
+    });
+}
+
+int vs_add_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        s->editor->addKeyframe(c.id, groupFrom(group), c.toSource(Time::fromTicks(t)));
+        s->edited();
+    });
+}
+
+int vs_remove_keyframe(vs_session* s, const char* clip_id, int group, int64_t t) {
+    bool removed = false;
+    if (guard(s, [&] {
+            const Clip& c = clipOrThrow(s, clip_id);
+            removed = s->editor->removeKeyframe(c.id, groupFrom(group), c.toSource(Time::fromTicks(t)));
+            if (removed) s->edited();
+        }) != 0)
+        return -1;
+    return removed ? 1 : 0;
+}
+
+int vs_clear_keyframes(vs_session* s, const char* clip_id, int group) {
+    return guard(s, [&] {
+        s->editor->clearKeyframes(clipOrThrow(s, clip_id).id, groupFrom(group));
+        s->edited();
+    });
+}
+
+int vs_set_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Json j = Json::parse(str(values_json));
+        if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
+        std::map<std::string, double> values;
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (!kf::isProperty(it.key()) || !it.value().is_number())
+                throw std::runtime_error("not an animatable number: " + it.key());
+            values[it.key()] = it.value().get<double>();
+        }
+        s->editor->setPropertyAt(c.id, c.toSource(Time::fromTicks(t)), values);
+        s->edited();
+    });
+}
+
+int vs_zoom_to_region(vs_session* s, const char* clip_id, int64_t t, double rx, double ry, double rw, double rh) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        if (!(rw > 0 && rh > 0)) throw std::runtime_error("empty region");
+        const Time src = c.toSource(Time::fromTicks(t));
+        const double W = s->editor->project().canvas.width, H = s->editor->project().canvas.height;
+        const Transform z = zoomToRegion(animatedTransform(c, src), W, H, rx * W, ry * H, rw * W, rh * H);
+        s->editor->setPropertyAt(c.id, src, {{kf::kScale, z.scale}, {kf::kX, z.x}, {kf::kY, z.y}});
+        s->edited();
+    });
+}
+
+char* vs_clip_state_at(vs_session* s, const char* clip_id, int64_t ticks) {
+    return guardStr(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Time t = Time::fromTicks(ticks), src = c.toSource(t);
+        const Time tol = Time::fromTicks(Time::fromFrame(1, s->editor->project().fps).ticks() / 2);
+        Json out;
+        out["inside"] = t >= c.timelineIn && t <= c.timelineOut();
+        const Transform tr = animatedTransform(c, src);
+        out["scale"] = tr.scale;
+        out["x"] = tr.x;
+        out["y"] = tr.y;
+        out["opacity"] = tr.opacity;
+        out["volume"] = animatedVolume(c, src);
+        for (const auto g : {kf::Group::Picture, kf::Group::Audio}) {
+            bool animated = false, here = false;
+            for (const auto& prop : kf::properties(g)) {
+                if (!c.keyframes.is_object() || !c.keyframes.contains(prop)) continue;
+                animated = true;
+                const KeyframeCurve curve(c.keyframes[prop]);
+                for (const auto& k : curve.keys()) here |= std::llabs((k.t - src).ticks()) <= tol.ticks();
+            }
+            const std::string name = g == kf::Group::Audio ? "audio" : "picture";
+            out[name + "_here"] = here;
+            out[name + "_animated"] = animated;
+        }
+        return out.dump();
     });
 }
 

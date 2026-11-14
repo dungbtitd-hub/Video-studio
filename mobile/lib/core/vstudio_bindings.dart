@@ -115,6 +115,19 @@ class VStudioBindings {
         suggestedLogFormat =
             lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
                 'vs_suggested_log_format'),
+        addKeyframe = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int64),
+            int Function(Pointer<VsSession>, CStr, int, int)>('vs_add_keyframe'),
+        removeKeyframe = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int64),
+            int Function(Pointer<VsSession>, CStr, int, int)>('vs_remove_keyframe'),
+        clearKeyframes = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_clear_keyframes'),
+        setPropertyAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64, CStr),
+            int Function(Pointer<VsSession>, CStr, int, CStr)>('vs_set_property_at'),
+        zoomToRegion = lib.lookupFunction<
+            Int32 Function(Pointer<VsSession>, CStr, Int64, Double, Double, Double, Double),
+            int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_zoom_to_region'),
+        clipStateAt = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, Int64),
+            CStr Function(Pointer<VsSession>, CStr, int)>('vs_clip_state_at'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
@@ -193,6 +206,12 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipColorSpace;
   final int Function(Pointer<VsSession>, CStr, CStr, double) setClipLut;
   final CStr Function(Pointer<VsSession>, CStr) suggestedLogFormat;
+  final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
+  final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
+  final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;
+  final int Function(Pointer<VsSession>, CStr, int, CStr) setPropertyAt;
+  final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) zoomToRegion;
+  final CStr Function(Pointer<VsSession>, CStr, int) clipStateAt;
   final int Function(Pointer<VsSession>, CStr, CStr) exportStartPreset;
   final int Function(Pointer<VsSession>, Pointer<Double>) exportStatus;
   final void Function(Pointer<VsSession>) exportCancel;

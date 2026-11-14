@@ -2,6 +2,7 @@
 
 #include "vstudio/color_space.hpp"
 #include "vstudio/export_presets.hpp"
+#include "vstudio/keyframes.hpp"
 #include "vstudio/looks.hpp"
 
 #include <QDir>
@@ -342,6 +343,103 @@ void EditorController::setClipLut(const QStringList& clipIds, const QString& fil
 QString EditorController::clipLut(const QString& clipId) const {
     const Json* p = clipEffect(snapshot_.get(), clipId, kLutEffect);
     return p ? q(p->value("path", std::string{})) : QString{};
+}
+
+// ---- keyframes ----
+
+EditorController::KeyState EditorController::keyState() const {
+    KeyState k;
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    const Track* tr = c ? snapshot_->trackOfClip(c->id) : nullptr;
+    const Time t = fromSecs(playhead_);
+    if (!c || t < c->timelineIn || t > c->timelineOut()) return k;
+    k.valid = true;
+    k.video = tr->type == TrackType::Video;
+    const Time src = c->toSource(t), tol = Time::fromTicks(Time::fromFrame(1, snapshot_->fps).ticks() / 2);
+    auto here = [&](kf::Group g, bool& animated) {
+        bool found = false;
+        for (const auto& prop : kf::properties(g)) {
+            if (!c->keyframes.is_object() || !c->keyframes.contains(prop)) continue;
+            animated = true;
+            const KeyframeCurve curve(c->keyframes[prop]);
+            for (const auto& key : curve.keys()) found |= std::llabs((key.t - src).ticks()) <= tol.ticks();
+        }
+        return found;
+    };
+    k.pictureHere = here(kf::Group::Picture, k.pictureAnimated);
+    k.audioHere = here(kf::Group::Audio, k.audioAnimated);
+    k.scale = animatedTransform(*c, src).scale;
+    k.volume = animatedVolume(*c, src);
+    return k;
+}
+
+void EditorController::toggleKeyframe(bool audio) {
+    const KeyState k = keyState();
+    if (!k.valid) return setStatus(tr("Select a clip and put the playhead inside it"));
+    const Clip* c = snapshot_->findClip(s(selected_));
+    const Time src = c->toSource(fromSecs(playhead_));
+    const auto g = audio ? kf::Group::Audio : kf::Group::Picture;
+    edit([&] {
+        if (!editor_->removeKeyframe(c->id, g, src)) editor_->addKeyframe(c->id, g, src);
+    });
+}
+
+void EditorController::zoomToRegion(const QRectF& r) {
+    const KeyState k = keyState();
+    if (!k.valid || !k.video) return setStatus(tr("Select a video or photo clip under the playhead"));
+    const Clip* c = snapshot_->findClip(s(selected_));
+    const Time src = c->toSource(fromSecs(playhead_));
+    const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
+    const Transform z = vstudio::zoomToRegion(animatedTransform(*c, src), W, H, r.x() * W, r.y() * H, r.width() * W,
+                                              r.height() * H);
+    edit([&] { editor_->setPropertyAt(c->id, src, {{kf::kScale, z.scale}, {kf::kX, z.x}, {kf::kY, z.y}}); });
+    if (!k.pictureAnimated)
+        setStatus(tr("Zoomed the whole clip. For a gradual zoom, add a picture keyframe (◇) where it should start."));
+}
+
+void EditorController::resetZoom() {
+    const KeyState k = keyState();
+    if (!k.valid || !k.video) return;
+    const Clip* c = snapshot_->findClip(s(selected_));
+    edit([&] {
+        editor_->setPropertyAt(c->id, c->toSource(fromSecs(playhead_)), {{kf::kScale, 1.0}, {kf::kX, 0.0}, {kf::kY, 0.0}});
+    });
+}
+
+void EditorController::setVolumeAtPlayhead(double v) {
+    const KeyState k = keyState();
+    if (!k.valid) return;
+    const Clip* c = snapshot_->findClip(s(selected_));
+    edit([&] { editor_->setPropertyAt(c->id, c->toSource(fromSecs(playhead_)), {{kf::kVolume, v}}); });
+}
+
+void EditorController::jumpKeyframe(bool forward) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c) return;
+    const Time now = fromSecs(playhead_), half = Time::fromTicks(Time::fromFrame(1, snapshot_->fps).ticks() / 2);
+    std::optional<Time> best;
+    for (const Time src : vstudio::keyframeTimes(*c)) {
+        const Time t = c->toTimeline(src);
+        if (t < c->timelineIn || t > c->timelineOut()) continue;
+        if (forward ? t > now + half && (!best || t < *best) : t < now - half && (!best || t > *best)) best = t;
+    }
+    if (best) seek(secs(*best));
+}
+
+QList<double> EditorController::keyframeTimes(const QString& clipId, bool audio) const {
+    QList<double> out;
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c || !c->keyframes.is_object()) return out;
+    for (const auto& prop : kf::properties(audio ? kf::Group::Audio : kf::Group::Picture)) {
+        if (!c->keyframes.contains(prop)) continue;
+        const KeyframeCurve curve(c->keyframes[prop]);
+        for (const auto& k : curve.keys()) {
+            const double t = secs(c->toTimeline(k.t));
+            if (!out.contains(t)) out << t;
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 QString EditorController::clipAsset(const QString& clipId) const {

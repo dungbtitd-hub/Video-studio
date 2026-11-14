@@ -7,12 +7,15 @@
 // in the preview engine (background threads) and on export.
 #pragma once
 
+#include <map>
+
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 
 #include "vstudio/history.hpp"
+#include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
 #include "vstudio/timeline.hpp"
 
@@ -51,6 +54,19 @@ public:
     int splitAt(Time timelineTime);
     void setClipVolume(const Id& clipId, double volume);
     void setClipTransform(const Id& clipId, const Json& transform);
+
+    // ---- keyframes (keyframes.hpp); each call is one undo step ----
+    // Sets keys at `sourceTime` (a key already within half a frame of it is replaced).
+    void setKeyframes(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values,
+                      Ease ease = Ease::Smooth);
+    // Adds a key for every property of `group` at `sourceTime`, holding the values shown there now.
+    void addKeyframe(const Id& clipId, kf::Group group, Time sourceTime);
+    // Removes the group's keys at `sourceTime` (half-frame tolerance). Returns false if there were none.
+    bool removeKeyframe(const Id& clipId, kf::Group group, Time sourceTime);
+    void clearKeyframes(const Id& clipId, kf::Group group);
+    // Changes a property at `sourceTime` the way an editor UI does: keyed when the
+    // property is animated (auto-key), else the clip's static transform/volume.
+    void setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values);
     void addClipEffect(const Id& clipId, const std::string& type, const Json& params);
     // One-tap colour look (looks.hpp) on one or many clips, as one undo step. Replaces any look
     // already on those clips; an empty lookId removes it. Clips on locked tracks are refused.

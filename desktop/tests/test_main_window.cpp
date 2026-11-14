@@ -9,6 +9,7 @@
 #include <QDockWidget>
 #include <QListWidget>
 #include <QSlider>
+#include <QToolButton>
 #include <QMenuBar>
 #include <QSet>
 #include <QSignalSpy>
@@ -19,6 +20,7 @@
 #include "EditorController.h"
 #include "LooksPanel.h"
 #include "MainWindow.h"
+#include "PreviewWidget.h"
 #include "TimelineWidget.h"
 
 class MainWindowTest : public QObject {
@@ -205,6 +207,84 @@ private slots:
         ctrl_->setClipLut({clip}, good.fileName());
         QVERIFY(ctrl_->clipLut(clip).endsWith("film.cube"));
         QCOMPARE(effects().size(), std::size_t{3});  // Log conversion, look, LUT
+    }
+
+    // Keyframes on the quick-edit screen: ◇ at the start, drag a box on the picture
+    // later on, and the clip zooms smoothly between the two; audio keys are separate.
+    void keyframesFromPreviewAndBar() {
+        const auto& clip0 = ctrl_->project()->tracks.front().clips.front();
+        const QString clip = QString::fromStdString(clip0.id);
+        const double end = clip0.timelineOut().seconds();
+        auto* pic = win_->findChild<QToolButton*>("kfPicture");
+        auto* aud = win_->findChild<QToolButton*>("kfAudio");
+        auto* vol = win_->findChild<QSlider*>("kfVolume");
+        auto* preview = win_->findChild<PreviewWidget*>();
+        QVERIFY(pic && aud && vol && preview);
+        QVERIFY(!pic->isEnabled());  // nothing selected
+        ctrl_->setSelectedClip(clip);
+        ctrl_->seek(0.2);
+        QCoreApplication::processEvents();
+        QVERIFY(pic->isEnabled() && preview->regionSelectEnabled());
+        pic->click();
+        QVERIFY(ctrl_->keyState().pictureHere);
+        QVERIFY(pic->isChecked());
+        QCOMPARE(pic->text(), QString("◆ Hình"));
+
+        // Later: drag a frame-shaped box over the middle half of the picture.
+        const double t1 = end - 0.2;
+        ctrl_->seek(t1);
+        QCoreApplication::processEvents();
+        QVERIFY(!pic->isChecked());
+        QImage frame(480, 270, QImage::Format_RGBA8888);
+        frame.fill(Qt::darkGray);
+        preview->setFrame(frame);
+        const QRectF f = preview->frameRect();
+        QVERIFY(!f.isEmpty());
+        QSignalSpy region(preview, &PreviewWidget::regionSelected);
+        const QPoint a = (f.topLeft() + QPointF(f.width() * 0.25, f.height() * 0.25)).toPoint();
+        const QPoint b = (f.topLeft() + QPointF(f.width() * 0.75, f.height() * 0.75)).toPoint();
+        QTest::mousePress(preview, Qt::LeftButton, {}, a);
+        QTest::mouseMove(preview, b);
+        QTest::mouseRelease(preview, Qt::LeftButton, {}, b);
+        QCOMPARE(region.count(), 1);
+        auto k = ctrl_->keyState();
+        QVERIFY(k.pictureHere);  // auto-keyed: the picture was already animated
+        QVERIFY2(std::abs(k.scale - 2.0) < 0.1, qPrintable(QString::number(k.scale)));
+        // In between, the zoom is on its way; before the first key it is untouched.
+        ctrl_->seek((0.2 + t1) / 2);
+        QVERIFY(ctrl_->keyState().scale > 1.1 && ctrl_->keyState().scale < 1.9);
+        ctrl_->seek(0.1);
+        QCOMPARE(ctrl_->keyState().scale, 1.0);
+        QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 2);
+        QVERIFY(ctrl_->keyframeTimes(clip, true).isEmpty());
+
+        // Audio: own keys, louder then quieter, picture keys untouched.
+        ctrl_->seek(0.5);
+        QCoreApplication::processEvents();
+        aud->click();
+        ctrl_->seek(t1);
+        QCoreApplication::processEvents();
+        vol->setValue(30);  // not dragging: committed at once
+        QVERIFY(std::abs(ctrl_->keyState().volume - 0.3) < 1e-6);
+        QVERIFY(ctrl_->keyState().audioHere);
+        QCOMPARE(ctrl_->keyframeTimes(clip, true).size(), 2);
+        QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 2);
+
+        // ] / [ jump between keys of the selected clip.
+        ctrl_->seek(0);
+        key(Qt::Key_BracketRight);
+        QVERIFY(std::abs(ctrl_->playhead() - 0.2) < 0.02);
+        key(Qt::Key_BracketRight);
+        QVERIFY(std::abs(ctrl_->playhead() - 0.5) < 0.02);
+        key(Qt::Key_BracketLeft);
+        QVERIFY(std::abs(ctrl_->playhead() - 0.2) < 0.02);
+        // ◆ again removes the key at the playhead.
+        QCoreApplication::processEvents();
+        QVERIFY(pic->isChecked());
+        pic->click();
+        QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 1);
+        ctrl_->undo();
+        QCOMPARE(ctrl_->keyframeTimes(clip, false).size(), 2);
     }
 
     void layoutResets() {

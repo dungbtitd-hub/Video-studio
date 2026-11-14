@@ -114,6 +114,24 @@ public:
     [[nodiscard]] QPair<QString, double> clipColorSpace(const QString& clipId) const;
     // What the clip's file says it is (HLG today); "" when unknown.
     [[nodiscard]] QString suggestedColorSpace(const QString& clipId) const;
+    // ---- keyframes on the selected clip, at the playhead (picture and audio are independent) ----
+    struct KeyState {
+        bool valid = false;         // a clip is selected and the playhead is inside it
+        bool video = false;         // has a picture (picture keys make sense)
+        bool pictureHere = false, audioHere = false;  // a key sits at the playhead
+        bool pictureAnimated = false, audioAnimated = false;
+        double scale = 1, volume = 1;  // values shown at the playhead
+    };
+    [[nodiscard]] KeyState keyState() const;
+    void toggleKeyframe(bool audio);  // adds the group's key at the playhead, or removes it
+    // Region of the preview (0..1 of the frame) to fill the frame with: auto-keyed when animated.
+    void zoomToRegion(const QRectF& normalized);
+    void resetZoom();
+    void setVolumeAtPlayhead(double v);
+    void jumpKeyframe(bool forward);
+    // Key times of a clip on the timeline (seconds), for drawing.
+    [[nodiscard]] QList<double> keyframeTimes(const QString& clipId, bool audio) const;
+
     // 3D LUT (.cube) from a local file; "" removes. Stored relative to the project when possible.
     void setClipLut(const QStringList& clipIds, const QString& file, double strength = 1.0);
     [[nodiscard]] QString clipLut(const QString& clipId) const;

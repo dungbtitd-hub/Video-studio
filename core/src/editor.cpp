@@ -185,6 +185,138 @@ int Editor::splitAt(Time t) {
     return static_cast<int>(cuts.size());
 }
 
+namespace {
+
+Time absTime(Time t) { return Time::fromTicks(t.ticks() < 0 ? -t.ticks() : t.ticks()); }
+
+// Half a frame at the project rate: keys closer than this to `t` are "at" t.
+Time keyTolerance(const Project& p) { return Time::fromTicks(Time::fromFrame(1, p.fps).ticks() / 2); }
+
+Clip& editableClip(Project& p, const Id& clipId) {
+    Track* t = p.trackOfClip(clipId);
+    if (!t) throw EditError("clip not found");
+    if (t->locked) throw EditError("track is locked: " + t->name);
+    return *t->findClip(clipId);
+}
+
+void putKey(Clip& c, const std::string& prop, Keyframe k, Time tol) {
+    if (!c.keyframes.is_object()) c.keyframes = Json::object();
+    Json& arr = c.keyframes[prop];
+    if (!arr.is_array()) arr = Json::array();
+    Json out = Json::array();
+    bool placed = false;
+    for (const auto& j : arr) {
+        const Time t = Time::fromTicks(j.value("t", std::int64_t{0}));
+        if (absTime(t - k.t) <= tol) continue;  // replaced
+        if (!placed && k.t < t) {
+            out.push_back(keyframeJson(k));
+            placed = true;
+        }
+        out.push_back(j);
+    }
+    if (!placed) out.push_back(keyframeJson(k));
+    arr = std::move(out);
+}
+
+}  // namespace
+
+void Editor::setKeyframes(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values, Ease ease) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    const Clip* c = tr->findClip(clipId);
+    if (sourceTime < c->sourceIn || sourceTime > c->sourceOut) throw EditError("keyframe outside the clip");
+    for (const auto& [prop, v] : values)
+        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
+    if (values.empty()) return;
+    const Time tol = keyTolerance(project_);
+    run("Keyframe", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& clip = editableClip(p, clipId);
+        for (const auto& [prop, v] : values) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), ease}, tol);
+    });
+}
+
+void Editor::addKeyframe(const Id& clipId, kf::Group group, Time sourceTime) {
+    const Clip* c = project_.findClip(clipId);
+    if (!c) throw EditError("clip not found");
+    std::map<std::string, double> values;
+    const Transform t = animatedTransform(*c, sourceTime);
+    for (const auto& prop : kf::properties(group)) {
+        if (prop == kf::kScale) values[prop] = t.scale;
+        else if (prop == kf::kX) values[prop] = t.x;
+        else if (prop == kf::kY) values[prop] = t.y;
+        else if (prop == kf::kOpacity) values[prop] = t.opacity;
+        else if (prop == kf::kVolume) values[prop] = keyframeValue(*c, prop, sourceTime).value_or(1.0);
+    }
+    setKeyframes(clipId, sourceTime, values);
+}
+
+bool Editor::removeKeyframe(const Id& clipId, kf::Group group, Time sourceTime) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    const Clip* c = tr->findClip(clipId);
+    const Time tol = keyTolerance(project_);
+    bool found = false;
+    for (const auto& prop : kf::properties(group))
+        if (c->keyframes.is_object() && c->keyframes.contains(prop)) {
+            const KeyframeCurve curve(c->keyframes[prop]);
+            for (const auto& k : curve.keys()) found |= absTime(k.t - sourceTime) <= tol;
+        }
+    if (!found) return false;
+    run("Remove keyframe", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& clip = editableClip(p, clipId);
+        for (const auto& prop : kf::properties(group)) {
+            if (!clip.keyframes.contains(prop)) continue;
+            Json kept = Json::array();
+            for (const auto& j : clip.keyframes[prop])
+                if (absTime(Time::fromTicks(j.value("t", std::int64_t{0})) - sourceTime) > tol) kept.push_back(j);
+            if (kept.empty()) clip.keyframes.erase(prop);
+            else clip.keyframes[prop] = std::move(kept);
+        }
+    });
+    return true;
+}
+
+void Editor::clearKeyframes(const Id& clipId, kf::Group group) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    run("Clear keyframes", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& clip = editableClip(p, clipId);
+        for (const auto& prop : kf::properties(group)) clip.keyframes.erase(prop);
+    });
+}
+
+void Editor::setPropertyAt(const Id& clipId, Time sourceTime, const std::map<std::string, double>& values) {
+    const Clip* c = project_.findClip(clipId);
+    if (!c) throw EditError("clip not found");
+    std::map<std::string, double> keyed;
+    Json tf = c->transform.is_object() ? c->transform : Json::object();
+    double volume = c->volume;
+    bool staticChange = false;
+    for (const auto& [prop, v] : values) {
+        if (!kf::isProperty(prop)) throw EditError("not an animatable property: " + prop);
+        if (keyframeValue(*c, prop, sourceTime)) {
+            // Keyed volume multiplies the clip volume: store the factor that gives `v`.
+            keyed[prop] = prop == kf::kVolume ? v / std::max(c->volume, 1e-6) : v;
+        } else if (prop == kf::kVolume) {
+            volume = kf::clampValue(prop, v);
+            staticChange = true;
+        } else {
+            tf[prop] = kf::clampValue(prop, v);
+            staticChange = true;
+        }
+    }
+    const Track* tr = project_.trackOfClip(clipId);
+    run("Adjust", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& clip = editableClip(p, clipId);
+        if (staticChange) {
+            clip.transform = tf;
+            clip.volume = volume;
+        }
+        const Time tol = keyTolerance(p);
+        for (const auto& [prop, v] : keyed) putKey(clip, prop, Keyframe{sourceTime, kf::clampValue(prop, v), Ease::Smooth}, tol);
+    });
+}
+
 void Editor::setClipVolume(const Id& clipId, double v) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");

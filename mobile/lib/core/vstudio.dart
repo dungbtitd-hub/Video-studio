@@ -69,6 +69,27 @@ class ExportPresetView {
   final double fps;
 }
 
+/// Keyframe groups: picture (zoom, position, opacity) and audio (volume) are independent.
+enum KeyGroup { picture, audio }
+
+class ClipKeyState {
+  ClipKeyState.fromJson(Map<String, dynamic> j)
+      : inside = j['inside'] == true,
+        scale = (j['scale'] as num).toDouble(),
+        x = (j['x'] as num).toDouble(),
+        y = (j['y'] as num).toDouble(),
+        opacity = (j['opacity'] as num).toDouble(),
+        volume = (j['volume'] as num).toDouble(),
+        pictureHere = j['picture_here'] == true,
+        audioHere = j['audio_here'] == true,
+        pictureAnimated = j['picture_animated'] == true,
+        audioAnimated = j['audio_animated'] == true;
+  final bool inside; // the time is inside the clip
+  final double scale, x, y, opacity, volume;
+  final bool pictureHere, audioHere; // a key sits at that time
+  final bool pictureAnimated, audioAnimated;
+}
+
 class VStudio {
   VStudio._(this._b, this._s);
 
@@ -247,6 +268,43 @@ class VStudio {
     final p = using((a) => _b.suggestedLogFormat(_s, assetId.toNativeUtf8(allocator: a)));
     return p == nullptr ? '' : _take(p);
   }
+
+  // ---- keyframes inside one clip; times are timeline seconds, every call is one undo step ----
+
+  /// Adds a key of [group] at [t] holding the clip's current values there.
+  void addKeyframe(String clipId, KeyGroup group, double t) =>
+      using((a) => _check(_b.addKeyframe(_s, clipId.toNativeUtf8(allocator: a), group.index, secondsToTicks(t))));
+
+  /// Removes the [group] key at [t] (within half a frame); false when there was none.
+  bool removeKeyframe(String clipId, KeyGroup group, double t) => using((a) {
+        final rc = _b.removeKeyframe(_s, clipId.toNativeUtf8(allocator: a), group.index, secondsToTicks(t));
+        if (rc < 0) throw VStudioException(_b.lastError(_s).toDartString());
+        return rc == 1;
+      });
+
+  /// ◇ button: removes the key at [t], or adds one. Returns true when a key was added.
+  bool toggleKeyframe(String clipId, KeyGroup group, double t) {
+    if (removeKeyframe(clipId, group, t)) return false;
+    addKeyframe(clipId, group, t);
+    return true;
+  }
+
+  void clearKeyframes(String clipId, KeyGroup group) =>
+      using((a) => _check(_b.clearKeyframes(_s, clipId.toNativeUtf8(allocator: a), group.index)));
+
+  /// Sets values at [t] ("scale", "x", "y", "opacity", "volume"): a key when that property
+  /// is animated, otherwise the clip's own value. x/y: canvas pixels from the centre.
+  void setPropertyAt(String clipId, double t, Map<String, double> values) => using((a) => _check(_b.setPropertyAt(
+      _s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
+
+  /// Zooms so the region (0..1 of the frame) fills the frame at [t].
+  void zoomToRegion(String clipId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.zoomToRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
+
+  /// The clip's animated values at [t] and whether keys sit there.
+  ClipKeyState clipStateAt(String clipId, double t) => ClipKeyState.fromJson(
+      jsonDecode(using((a) => _take(_b.clipStateAt(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t)))))
+          as Map<String, dynamic>);
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
   Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {

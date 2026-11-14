@@ -60,6 +60,7 @@ struct Clip {
     double volume = 1.0;     // linear gain for audio
     Json transform = Json::object();
     Json effects = Json::array();
+    Json keyframes = Json::object();  // animated properties, see keyframes.hpp
     Json extra = Json::object();
 
     [[nodiscard]] Time sourceDuration() const { return sourceOut - sourceIn; }

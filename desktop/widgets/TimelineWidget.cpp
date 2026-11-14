@@ -15,6 +15,7 @@
 
 #include "EditorController.h"
 #include "Theme.h"
+#include "vstudio/keyframes.hpp"
 
 TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWidget(parent), editor_(editor) {
     setMouseTracking(true);
@@ -75,7 +76,25 @@ void TimelineWidget::rebuild() {
             t.clips.push_back({QString::fromStdString(c.id), st, st + c.duration().seconds(),
                                names.value(QString::fromStdString(c.assetId), QStringLiteral("?")),
                                c.effects.is_array() && !c.effects.empty(), QString::fromStdString(c.assetId),
-                               c.sourceIn.seconds(), double(c.speed.num) / c.speed.den});
+                               c.sourceIn.seconds(), double(c.speed.num) / c.speed.den, {}, {}});
+            if (c.keyframes.is_object() && !c.keyframes.empty()) {
+                Clip& out = t.clips.back();
+                for (const auto& prop : vstudio::kf::properties()) {
+                    if (!c.keyframes.contains(prop)) continue;
+                    auto& keys = vstudio::kf::groupOf(prop) == vstudio::kf::Group::Audio ? out.audioKeys : out.pictureKeys;
+                    const vstudio::KeyframeCurve curve(c.keyframes[prop]);
+                    for (const auto& k : curve.keys()) {
+                        const double x = c.toTimeline(k.t).seconds();
+                        if (x >= out.start - 1e-6 && x <= out.end + 1e-6) keys.push_back(x);
+                    }
+                }
+                for (auto* keys : {&out.pictureKeys, &out.audioKeys}) {
+                    std::sort(keys->begin(), keys->end());
+                    keys->erase(std::unique(keys->begin(), keys->end(),
+                                            [](double a, double b) { return std::abs(a - b) < 1e-4; }),
+                                keys->end());
+                }
+            }
         }
         tracks_.push_back(std::move(t));
     }
@@ -174,6 +193,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
                 p.setBrush(Qt::NoBrush);
                 p.drawRoundedRect(r, 4, 4);
             }
+            if (!dragging || drag_ == Drag::None) paintKeyframes(p, *it, r, selected);
             if (r.width() > 30) {
                 p.setPen(Theme::fg());
                 p.drawText(r.adjusted(6, 3, -4, 0), Qt::AlignLeft | Qt::AlignTop,
@@ -276,6 +296,12 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
         return;
     }
     editor_->setSelectedClip(c->id);
+    // A keyframe diamond: jump to it (moving keys is done by re-keying at the playhead).
+    const QRectF cr(timeToX(c->start), kRulerH + ti * kTrackH + 4, (c->end - c->start) * pxPerSec_, kTrackH - 10);
+    if (auto k = keyAt(*c, cr, pos)) {
+        editor_->seek(*k);
+        return;
+    }
     if (tracks_[size_t(ti)].locked) return;  // selectable, not editable
     dragClip_ = c->id;
     dragTrack_ = tracks_[size_t(ti)].id;
@@ -491,4 +517,53 @@ void TimelineWidget::paintWaveform(QPainter& p, const Clip& c, const QRectF& r) 
         }
         p.drawLine(QPointF(x + 0.5, mid - hi / 127.0 * half), QPointF(x + 0.5, mid - lo / 127.0 * half));
     }
+}
+
+namespace {
+// Picture keys sit on the top edge of a clip, audio keys on the bottom edge.
+constexpr double kKeyR = 5;
+double keyY(const QRectF& r, bool audio) { return audio ? r.bottom() - kKeyR - 1 : r.top() + kKeyR + 1; }
+}  // namespace
+
+std::optional<double> TimelineWidget::keyAt(const Clip& c, const QRectF& r, QPointF pos) const {
+    for (const bool audio : {false, true}) {
+        const double y = keyY(r, audio);
+        if (std::abs(pos.y() - y) > kKeyR + 3) continue;
+        for (const double t : audio ? c.audioKeys : c.pictureKeys)
+            if (std::abs(timeToX(t) - pos.x()) <= kKeyR + 2) return t;
+    }
+    return std::nullopt;
+}
+
+void TimelineWidget::paintKeyframes(QPainter& p, const Clip& c, const QRectF& r, bool selected) const {
+    if (c.pictureKeys.empty() && c.audioKeys.empty()) return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    const double ph = editor_->playhead(), half = 0.5 / std::max(1.0, pxPerSec_);
+    const auto row = [&](const std::vector<double>& keys, bool audio) {
+        const QColor col = audio ? QColor(120, 230, 190) : Theme::accent();
+        const double y = keyY(r, audio);
+        // A thin line joins the keys: the stretch where the value is changing.
+        if (keys.size() > 1) {
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), selected ? 150 : 80), 1.5));
+            p.drawLine(QPointF(timeToX(keys.front()), y), QPointF(timeToX(keys.back()), y));
+        }
+        for (const double t : keys) {
+            const double x = timeToX(t);
+            if (x < r.left() - kKeyR || x > r.right() + kKeyR) continue;
+            const bool here = std::abs(t - ph) <= std::max(half, 0.02);
+            QPainterPath d;
+            d.moveTo(x, y - kKeyR);
+            d.lineTo(x + kKeyR, y);
+            d.lineTo(x, y + kKeyR);
+            d.lineTo(x - kKeyR, y);
+            d.closeSubpath();
+            p.setPen(QPen(QColor(10, 12, 16), 1));
+            p.setBrush(here ? Theme::fg() : (selected ? col : col.darker(140)));
+            p.drawPath(d);
+        }
+    };
+    row(c.pictureKeys, false);
+    row(c.audioKeys, true);
+    p.restore();
 }

@@ -119,6 +119,22 @@ class _TimelineViewState extends State<TimelineView> {
 
   int _rowAt(double dy) => ((dy - rulerH) / trackH).floor();
 
+  /// Keyframe of [c] under [p] (picture keys on the clip's top edge, audio keys on the bottom).
+  double? _keyAt(ClipView c, Offset p) {
+    final top = rulerH + _rowAt(p.dy) * trackH + 4;
+    final audio = p.dy > top + (trackH - 10) / 2;
+    double? best;
+    var bestDx = 16.0; // finger-sized
+    for (final k in audio ? c.audioKeys : c.pictureKeys) {
+      final dx = ((k - scroll) * pxPerSec - p.dx).abs();
+      if (dx <= bestDx) {
+        best = k;
+        bestDx = dx;
+      }
+    }
+    return best;
+  }
+
   (TrackView, ClipView)? _hit(Offset p) {
     final row = _rowAt(p.dy);
     if (row < 0 || row >= widget.project.tracks.length) return null;
@@ -197,6 +213,9 @@ class _TimelineViewState extends State<TimelineView> {
         onTapUp: (d) {
           final h = _hit(d.localPosition);
           widget.onSelect(h?.$2.id);
+          // A keyframe diamond: jump to it.
+          final key = h == null ? null : _keyAt(h.$2, d.localPosition);
+          if (key != null) return widget.onSeek(key);
           if (h == null) widget.onSeek(scroll + d.localPosition.dx / pxPerSec);
         },
         onLongPressStart: (d) {
@@ -413,6 +432,7 @@ class _TimelinePainter extends CustomPainter {
           )..layout(maxWidth: w - 10);
           tp.paint(canvas, Offset(x + 6, top + 8));
         }
+        if (!dragging && !trimming) _keyframes(canvas, c, r.outerRect, c.id == selected);
         // Trim handles on the selected clip of an unlocked track.
         if (c.id == selected && !t.locked && w > 12) {
           final hp = Paint()..color = (trimming && snapped) ? const Color(0xFFFFD65A) : VsColors.accent;
@@ -442,6 +462,43 @@ class _TimelinePainter extends CustomPainter {
         Paint()
           ..color = VsColors.accent
           ..strokeWidth = 2);
+  }
+
+  // Keyframe diamonds: picture keys on the top edge (amber), audio keys on the bottom
+  // edge (green), joined by a line where the value is changing; white = at the playhead.
+  void _keyframes(Canvas canvas, ClipView c, Rect r, bool selected) {
+    if (!c.animated) return;
+    const rad = 5.0;
+    void row(List<double> keys, Color col, double y) {
+      if (keys.isEmpty) return;
+      if (keys.length > 1) {
+        canvas.drawLine(
+            Offset((keys.first - scroll) * pxPerSec, y),
+            Offset((keys.last - scroll) * pxPerSec, y),
+            Paint()
+              ..color = col.withValues(alpha: selected ? 0.6 : 0.3)
+              ..strokeWidth = 1.5);
+      }
+      for (final k in keys) {
+        final x = (k - scroll) * pxPerSec;
+        final here = (k - playhead).abs() * pxPerSec < 1.5;
+        final d = Path()
+          ..moveTo(x, y - rad)
+          ..lineTo(x + rad, y)
+          ..lineTo(x, y + rad)
+          ..lineTo(x - rad, y)
+          ..close();
+        canvas.drawPath(d, Paint()..color = here ? VsColors.fg : (selected ? col : col.withValues(alpha: 0.6)));
+        canvas.drawPath(
+            d,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..color = const Color(0xFF0A0C10));
+      }
+    }
+
+    row(c.pictureKeys, VsColors.accent, r.top + rad + 1);
+    row(c.audioKeys, const Color(0xFF78E6BE), r.bottom - rad - 1);
   }
 
   // Thumbnail tiles across the visible part of a video clip (one image, sub-rects).
