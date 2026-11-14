@@ -687,9 +687,12 @@ class OverlaySheet extends StatefulWidget {
       required this.content,
       required this.onPick,
       required this.onPatch,
-      required this.onFullFrame});
+      required this.onFullFrame,
+      this.onSpan});
   final VStudio vs;
   final Map<String, dynamic>? content; // the selected overlay, if any
+  /// "Cả video" (true) or "Từ đây đến hết" (false): how long the selected overlay plays.
+  final ValueChanged<bool>? onSpan;
   final Map<String, dynamic>? Function(String overlayId) onPick; // returns the new overlay's content
   final ValueChanged<Map<String, dynamic>> onPatch;
   final VoidCallback onFullFrame;
@@ -846,6 +849,25 @@ class _OverlaySheetState extends State<OverlaySheet> {
                 ),
             ]),
           ),
+        const Text('Thời lượng', style: TextStyle(fontSize: 12, color: VsColors.fg2)),
+        Wrap(spacing: 8, children: [
+          ActionChip(
+            key: const Key('overlay-span-all'),
+            avatar: const Icon(Icons.straighten, size: 16),
+            label: const Text('Cả video'),
+            onPressed: widget.onSpan == null ? null : () => widget.onSpan!(true),
+          ),
+          ActionChip(
+            key: const Key('overlay-span-rest'),
+            avatar: const Icon(Icons.last_page, size: 16),
+            label: const Text('Từ đây đến hết'),
+            onPressed: widget.onSpan == null ? null : () => widget.onSpan!(false),
+          ),
+        ]),
+        const Text('Kéo hai đầu của lớp phủ trên timeline để co giãn tự do, không giới hạn độ dài.',
+            style: TextStyle(fontSize: 11, color: VsColors.fg3)),
+        const SizedBox(height: 6),
+        const Text('Vùng phủ', style: TextStyle(fontSize: 12, color: VsColors.fg2)),
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
@@ -855,7 +877,7 @@ class _OverlaySheetState extends State<OverlaySheet> {
             label: const Text('Phủ toàn khung'),
           ),
         ),
-        const Text('Kéo khung trên màn xem để chỉ phủ một phần; kéo clip trên timeline để đổi thời gian.',
+        const Text('Kéo khung trên màn xem để chỉ phủ một phần của hình.',
             style: TextStyle(fontSize: 11, color: VsColors.fg3)),
       ]),
     );

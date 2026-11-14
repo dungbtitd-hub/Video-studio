@@ -19,11 +19,15 @@ String _project({bool lockV1 = false}) => '''
 ''';
 
 void main() {
-  // Rows top-down: V2 (0), V1 (1), A1 (2). 40 px/s; lanes start after the header column.
+  // Rows top-down: V2 (0), V1 (1), A1 (2). 40 px/s; the playhead (0 s) sits in the middle of
+  // the 800 px lanes, so time t is at x = 400 + 40 t.
   const px = 40.0;
-  Offset at(WidgetTester tester, double seconds, int row) =>
-      tester.getTopLeft(find.byType(CustomPaint).last) +
-      Offset(seconds * px, TimelineView.rulerH + row * TimelineView.trackH + TimelineView.trackH / 2);
+  final project = ProjectView.fromJson(_project());
+  Offset at(WidgetTester tester, double seconds, int row) {
+    final tops = TimelineView.laneTops(project).$1;
+    return tester.getTopLeft(find.byType(CustomPaint).last) +
+        Offset(400 + seconds * px, tops[row] + TimelineView.laneHeight(project.tracks[row]) / 2);
+  }
 
   Future<List<String>> pump(WidgetTester tester,
       {bool lockV1 = false,
@@ -35,7 +39,7 @@ void main() {
       home: Scaffold(
         body: SizedBox(
           width: 800,
-          height: 220,
+          height: 260,
           child: TimelineView(
             project: ProjectView.fromJson(_project(lockV1: lockV1)),
             playhead: 0,
@@ -68,21 +72,48 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('header toggles and track menu', (tester) async {
+  testWidgets('long-press an empty part of a lane: the menu of that lane', (tester) async {
     final log = await pump(tester);
-    expect(find.text('V2'), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.lock_open).first); // V2
-    await tester.tap(find.byIcon(Icons.visibility).last); // V1
-    await tester.tap(find.byIcon(Icons.volume_off)); // A1 is muted -> unmute
-    await tester.longPress(find.text('A1'));
-    await tester.tap(find.text(' Track'));
-    expect(log, [
-      'flags v2 true true false',
-      'flags v1 false false false',
-      'flags a1 true false false',
-      'menu a1',
-      'menu null'
-    ]);
+    expect(find.text('V2'), findsNothing); // no header column: the lanes take the whole width
+    await tester.longPressAt(at(tester, 8, 2)); // A1, nothing there
+    await tester.longPressAt(at(tester, 2.5, 0)); // V2 before its clip
+    expect(log, ['menu a1', 'menu v2']);
+  });
+
+  testWidgets('swiping slides the clips under the fixed playhead and seeks as the finger moves', (tester) async {
+    final seeks = <double>[];
+    final scrubs = <bool>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 800,
+          height: 260,
+          child: TimelineView(
+            project: project,
+            playhead: 1,
+            selectedClip: null,
+            onSeek: seeks.add,
+            onScrub: scrubs.add,
+            onSelect: (_) {},
+            onMove: (_, __, ___) {},
+          ),
+        ),
+      ),
+    ));
+    final from = at(tester, 0, 1);
+    final g = await tester.startGesture(from);
+    for (var i = 1; i <= 4; i++) {
+      await g.moveTo(from - Offset(20.0 * i, 0)); // left: later in time
+      await tester.pump();
+    }
+    await g.up();
+    await tester.pump();
+    expect(scrubs, [true, false]);
+    expect(seeks.length, greaterThanOrEqualTo(2)); // follows the finger, not only on release
+    expect(seeks, orderedEquals([...seeks]..sort()));
+    expect(seeks.last, greaterThan(2.4)); // ~80 px at 40 px/s past 1 s, less the touch slop
+    expect(seeks.last, lessThanOrEqualTo(3.0 + 1e-9));
+    expect(TimelineView.scrollFor(3, 800, 40), 3 - 10); // the playhead stays in the middle
   });
 
   testWidgets('drag moves onto another video track, not onto audio', (tester) async {
@@ -120,7 +151,7 @@ void main() {
     final log = await pump(tester, selected: 'c2');
     await pan(tester, at(tester, 6, 0), at(tester, 7.5, 0)); // out point +1.5 s
     await pan(tester, at(tester, 4, 0), at(tester, 3, 0)); // in point -1 s
-    await pan(tester, at(tester, 5, 0), at(tester, 2, 0)); // middle: scrolls, no trim
+    await pan(tester, at(tester, 5, 0), at(tester, 2, 0)); // middle: seeks, no trim
     expect(log, ['trim c2 out 7.50', 'trim c2 in 3.00']);
   });
 

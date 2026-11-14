@@ -36,7 +36,8 @@ class MediaCache extends ChangeNotifier {
     for (final a in project.assets) {
       if (_requested.contains(a.id) || missing.contains(a.id)) continue;
       _requested.add(a.id);
-      if (a.type != 'audio') vs.requestThumbnails(a.id);
+      // About one picture per 1.5 s of video (12..120), so long clips do not repeat frames.
+      if (a.type != 'audio') vs.requestThumbnails(a.id, count: a.type == 'image' ? 1 : (a.duration / 1.5).ceil().clamp(12, 120));
       vs.requestWaveform(a.id);
     }
     _requested.removeWhere((id) => !ids.contains(id));
