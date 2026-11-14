@@ -198,6 +198,13 @@ public:
         if (vi_ >= 0 && !(vctx_ = openDecoder(fmt_->streams[vi_], true, error))) return false;
         if (ai_ >= 0 && !(actx_ = openDecoder(fmt_->streams[ai_], false, error))) return false;
         pkt_.reset(av_packet_alloc());
+        path_ = path;
+        if (vi_ >= 0) {
+            const AVStream* st = fmt_->streams[vi_];
+            still_ = isImageCodec(st->codecpar->codec_id) &&
+                     ((st->nb_frames <= 1 && fmt_->duration <= 0) || std::strstr(fmt_->iformat->name, "image2") ||
+                      std::strstr(fmt_->iformat->name, "_pipe"));
+        }
         // Discard everything until we know what this instance is used for.
         for (unsigned i = 0; i < fmt_->nb_streams; ++i) fmt_->streams[i]->discard = AVDISCARD_ALL;
         return vi_ >= 0 || ai_ >= 0;
@@ -206,11 +213,16 @@ public:
     void setMaxOutputSize(int w, int h) override {
         maxW_ = w;
         maxH_ = h;
+        converted_.reset();
     }
-    void setDeepOutput(bool on) override { deep_ = on; }
+    void setDeepOutput(bool on) override {
+        deep_ = on;
+        converted_.reset();
+    }
 
     std::optional<VideoFrame> videoFrameAt(Time t) override {
         if (vi_ < 0) return std::nullopt;
+        if (still_) return stillFrame();
         useStream(vi_);
         AVStream* st = fmt_->streams[vi_];
         const Rational tb = toRational(st->time_base);
@@ -308,6 +320,31 @@ public:
     }
 
 private:
+    // A photo is one frame: decode it once and keep it. Image demuxers (jpeg_pipe, image2)
+    // cannot seek back to their only packet, so this never seeks; if the packet was already
+    // consumed the file is opened again.
+    std::optional<VideoFrame> stillFrame() {
+        if (!cur_) {
+            for (int attempt = 0; attempt < 2 && !cur_; ++attempt) {
+                if (attempt == 1) {
+                    std::string err;
+                    FormatPtr again = openInput(path_, &err);
+                    if (!again) break;
+                    fmt_ = std::move(again);
+                    avcodec_flush_buffers(vctx_.get());
+                    for (unsigned i = 0; i < fmt_->nb_streams; ++i) fmt_->streams[i]->discard = AVDISCARD_ALL;
+                    active_ = -2;
+                }
+                useStream(vi_);
+                veof_ = false;
+                while (!cur_ && !veof_) cur_ = decodeNext(vctx_.get(), vi_, veof_);
+            }
+            if (!cur_) return std::nullopt;
+        }
+        if (!converted_) converted_ = convert(*cur_, Time::zero());
+        return *converted_;
+    }
+
     void useStream(int idx) {
         if (active_ == idx) return;
         active_ = idx;
@@ -426,6 +463,8 @@ private:
     PacketPtr pkt_;
     int vi_ = -1, ai_ = -1, active_ = -2;
     int maxW_ = 0, maxH_ = 0;
+    std::string path_;
+    bool still_ = false;
     // video state
     FramePtr cur_, pending_;
     std::int64_t curPts_ = AV_NOPTS_VALUE, pendingPts_ = AV_NOPTS_VALUE;
