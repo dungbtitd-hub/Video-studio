@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -40,20 +41,12 @@ import 'ui/workspace_layout.dart';
 
 void main() => runApp(const VideoStudioApp());
 
-/// Launch route that opens the editor on a new empty project instead of the start screen.
-const kOpenEditorRoute = '/editor';
-
 class VideoStudioApp extends StatelessWidget {
   const VideoStudioApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-      title: 'Video Studio',
-      theme: buildTheme(),
-      // The launch route only picks what EditorPage opens (see kOpenEditorRoute); navigation starts at home.
-      initialRoute: '/',
-      home: const EditorPage(),
-      debugShowCheckedModeBanner: false);
+      title: 'Video Studio', theme: buildTheme(), home: const EditorPage(), debugShowCheckedModeBanner: false);
 }
 
 class EditorPage extends StatefulWidget {
@@ -126,14 +119,20 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       final version = VStudio.coreVersion; // loads the core library
       await _loadProjects();
       debugPrint('vstudio: core $version ready'); // CI smoke test looks for this line
-      // Started with the "/editor" route (adb: am start --es route /editor): straight into a new,
-      // empty project. The CI smoke test uses this to check the native preview draws.
-      if (ui.PlatformDispatcher.instance.defaultRouteName == kOpenEditorRoute) {
-        await _switchProject(aspect: '9:16', pickMedia: false);
-      }
+      // Launched with --ez vstudio.openEditor true (Android CI smoke test): straight into a new,
+      // empty project, so the native preview is drawn.
+      if (await _launchOpensEditor()) await _switchProject(aspect: '9:16', pickMedia: false);
     } catch (e) {
       setState(() => _error = 'Không nạp được Video Studio Core: $e');
       debugPrint('vstudio: core failed: $e');
+    }
+  }
+
+  static Future<bool> _launchOpensEditor() async {
+    try {
+      return await const MethodChannel('vstudio/launch').invokeMethod<bool>('openEditor') ?? false;
+    } catch (_) {
+      return false; // iOS, tests: no such channel
     }
   }
 
