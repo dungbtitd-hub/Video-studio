@@ -462,6 +462,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   void _addMedia(List<String> paths) {
     final failed = <String>[];
     var added = 0;
+    String? first;
     _edit((vs) {
       for (final path in paths) {
         try {
@@ -475,7 +476,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           } else {
             track = _mediaLane(vs);
           }
-          _selected = vs.appendClip(track, asset);
+          final id = vs.appendClip(track, asset);
+          first ??= id;
           added++;
         } on VStudioException catch (e) {
           failed.add('${path.split('/').last}: ${_why(e.message)}');
@@ -493,8 +495,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         ),
       );
     }
-    if (added > 0 && _selected != null) {
-      final c = _selectedClip;
+    // Nothing stays selected (the tools act on the clip under the playhead, and a selected
+    // clip's trim handle would sit right on the line); the playhead goes to the new media.
+    if (first != null) {
+      final c = _project?.tracks.expand((t) => t.clips).where((c) => c.id == first).firstOrNull;
+      setState(() => _selected = null);
       if (c != null) _seek(c.start);
     }
     _vs?.seek(_playhead);
@@ -906,7 +911,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         rect: Rect.fromLTWH(r.$1, r.$2, r.$3, r.$4),
         onChanged: _commitObject,
         onChanging: _previewObject,
-        onDoubleTap: switch (clip.kind) { 'text' => _text, 'overlay' => _overlays, 'subtitle' => _subtitles, _ => _stickers },
+        onDoubleTap: switch (clip.kind) {
+          'text' => _text,
+          'overlay' => _overlays,
+          'subtitle' => _subtitles,
+          _ => _stickers
+        },
         freeShape: clip.kind == 'overlay',
       ),
     ]);
@@ -1439,7 +1449,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                     key: ValueKey('user-export-${m.name}'),
                     leading: const Icon(Icons.star_outline),
                     title: Text(m.name),
-                    subtitle: Text('${info.width} × ${info.height} · khoảng ${_size(info.estimatedBytes)}\n${m.summary}',
+                    subtitle: Text(
+                        '${info.width} × ${info.height} · khoảng ${_size(info.estimatedBytes)}\n${m.summary}',
                         style: const TextStyle(fontSize: 12)),
                     isThreeLine: true,
                     onTap: () => Navigator.pop(context, (null, m.name)),
@@ -1678,7 +1689,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       return;
     }
     _edit((vs) {
-      vs.splitClip(c.id, _playhead);
+      // The part after the line stays selected: it is the one under the playhead now.
+      _selected = vs.splitClip(c.id, _playhead);
       _status = 'Đã tách tại ${_tc(_playhead)}';
     });
   }
@@ -1767,6 +1779,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   // ---- "Đoạn áp dụng": start and end points set with the playhead ----
 
   void _rangeStart() {
+    // The part is chosen in the clip under the playhead (not one that only touches the line).
+    final under = _clipUnderPlayhead();
+    final sel = _selectedClip;
+    if (sel != null && under != null && !(_playhead >= sel.start - 1e-6 && _playhead < sel.end - 1e-6)) {
+      setState(() => _selected = under.id);
+    }
     if (!_target()) return;
     final c = _selectedClip!;
     setState(() {
@@ -1784,7 +1802,12 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       setState(() => _status = 'Đoạn quá ngắn: vuốt timeline xa hơn rồi bấm "Điểm cuối"');
       return;
     }
-    setState(() => _range = TimeRange(a, b));
+    setState(() {
+      _range = TimeRange(a, b);
+      _status = _playhead > c.end + 1e-6 || _playhead < c.start - 1e-6
+          ? 'Đoạn dừng ở mép clip (${_tc(_playhead > c.end ? c.end : c.start)}): mỗi đoạn nằm trong một clip'
+          : null;
+    });
   }
 
   /// Cuts the selected clip at both ends of the range; returns the middle piece (now selected).
@@ -1816,7 +1839,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           final en = vs.clipStateAt(c.id, b);
           if (!(group == KeyGroup.picture ? en.pictureHere : en.audioHere)) vs.addKeyframe(c.id, group, b);
           if (group == KeyGroup.picture) {
-            vs.setPropertyAt(c.id, b, {'scale': (st.scale * value).clamp(0.05, 20).toDouble(), 'x': st.x * value, 'y': st.y * value});
+            vs.setPropertyAt(c.id, b,
+                {'scale': (st.scale * value).clamp(0.05, 20).toDouble(), 'x': st.x * value, 'y': st.y * value});
             _status = value >= 1
                 ? 'Đã đặt zoom dần ${value.toStringAsFixed(1)}× từ ${_tc(a)} tới ${_tc(b)}. Bấm ▶ để xem.'
                 : 'Đã đặt thu nhỏ dần từ ${_tc(a)} tới ${_tc(b)}. Bấm ▶ để xem.';
@@ -1833,7 +1857,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         if (mid == null) return;
         _edit((vs) {
           vs.setSpeed([mid], value);
-          _status = value < 1 ? 'Đoạn đã chọn chạy chậm $value×' : 'Đoạn đã chọn chạy nhanh ${value.toStringAsFixed(0)}×';
+          _status =
+              value < 1 ? 'Đoạn đã chọn chạy chậm $value×' : 'Đoạn đã chọn chạy nhanh ${value.toStringAsFixed(0)}×';
         });
         setState(() => _range = null);
         _seek(a);
@@ -1855,7 +1880,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   // ---- layout (MOB-04 in the approved prototype) ----
 
   Widget _preview(ProjectView project, ClipKeyState? keys) {
-    final aspect = project.canvasWidth > 0 && project.canvasHeight > 0 ? project.canvasWidth / project.canvasHeight : 9 / 16;
+    final aspect =
+        project.canvasWidth > 0 && project.canvasHeight > 0 ? project.canvasWidth / project.canvasHeight : 9 / 16;
     return Stack(children: [
       Positioned.fill(
         child: Container(
@@ -1895,7 +1921,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           Expanded(
             child: Text('${_tc(_playhead)} / ${_tc(project.duration)}',
                 key: const Key('time-row'),
-                style: const TextStyle(fontFeatures: [ui.FontFeature.tabularFigures()], color: VsColors.fg, fontSize: 13)),
+                style:
+                    const TextStyle(fontFeatures: [ui.FontFeature.tabularFigures()], color: VsColors.fg, fontSize: 13)),
           ),
           IconButton(
             key: const Key('play'),
@@ -1925,7 +1952,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (_coverMode && _selectedVideoClip != null) return _coverPanel(_vs!, _selectedVideoClip!);
     final c = _selectedClip;
     if (c == null || c.generated) return null;
+    // The part bar shows once "Chọn đoạn" is used; until then the preview keeps the room.
     if (!_keyMode) {
+      if (_range == null) return null;
       return RangeBar(
         range: _range,
         video: _selectedVideoClip != null,
@@ -1951,7 +1980,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     final h = TimelineView.heightFor(project);
     final lanes = TimelineView.laneTops(project).$1;
     final main = project.tracks.lastIndexWhere((t) => t.takesMedia);
-    final addTop = main >= 0 ? lanes[main] + (TimelineView.laneHeight(project.tracks[main]) - 40) / 2 : TimelineView.rulerH + 10;
+    final addTop =
+        main >= 0 ? lanes[main] + (TimelineView.laneHeight(project.tracks[main]) - 40) / 2 : TimelineView.rulerH + 10;
     return Container(
       color: VsColors.bg,
       child: SingleChildScrollView(
@@ -1987,7 +2017,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                     _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
                 onTrackMenu: _trackMenu,
                 snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
-                onTrim: (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
+                // While a part is being chosen every swipe moves the playhead (no trimming).
+                onTrim: _range != null || _keyMode
+                    ? null
+                    : (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
                 snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
                 media: _media,
                 cuts: _cuts,
@@ -2025,6 +2058,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         accent: true,
         onTap: () => setState(() {
               _selected = null;
+              _keyMode = false;
               _gradeMode = false;
               _coverMode = false;
               _selectedCut = null;
@@ -2047,7 +2081,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         range,
         _Tool(icon: Icons.music_note_outlined, label: 'Âm thanh', onTap: _audio),
         _Tool(
-            icon: _recording ? Icons.stop_circle : Icons.mic_none, label: _recording ? 'Dừng' : 'Thu âm', onTap: _voiceOver),
+            icon: _recording ? Icons.stop_circle : Icons.mic_none,
+            label: _recording ? 'Dừng' : 'Thu âm',
+            onTap: _voiceOver),
         _Tool(icon: Icons.title, label: 'Chữ', onTap: _text),
         _Tool(icon: Icons.emoji_emotions_outlined, label: 'Sticker', onTap: _stickers),
         _Tool(icon: Icons.ac_unit, label: 'Lớp phủ', onTap: _overlays),
@@ -2064,10 +2100,13 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         back(),
         _Tool(icon: Icons.edit_outlined, label: 'Sửa', onTap: _editObject),
         split,
-        _Tool(icon: Icons.copy_outlined, label: 'Thêm ${c.kind == 'text' ? 'chữ' : 'mới'}', onTap: () {
-          setState(() => _selected = null);
-          _editObject();
-        }),
+        _Tool(
+            icon: Icons.copy_outlined,
+            label: 'Thêm ${c.kind == 'text' ? 'chữ' : 'mới'}',
+            onTap: () {
+              setState(() => _selected = null);
+              _editObject();
+            }),
         del,
       ];
     }
@@ -2077,10 +2116,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         _Tool(icon: Icons.volume_up_outlined, label: 'Âm lượng', onTap: _audio),
         split,
         _Tool(icon: Icons.speed, label: 'Tốc độ', onTap: _speed),
+        range,
         _Tool(
-            icon: _keyMode ? Icons.straighten : Icons.diamond_outlined,
-            label: _keyMode ? 'Đoạn áp dụng' : 'Keyframe',
-            onTap: () => setState(() => _keyMode = !_keyMode)),
+            icon: Icons.diamond_outlined,
+            label: 'Keyframe',
+            accent: _keyMode,
+            onTap: () => setState(() {
+                  _keyMode = !_keyMode;
+                  if (_keyMode) _range = null;
+                })),
         del,
         _Tool(icon: Icons.format_indent_decrease, label: 'Xóa dồn', onTap: () => _deleteSelected(ripple: true)),
       ];
@@ -2095,10 +2139,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       _Tool(icon: Icons.tune, label: 'Điều chỉnh', onTap: _startGrade),
       _Tool(icon: Icons.auto_awesome, label: 'Hiệu ứng', onTap: _videoFx),
       _Tool(icon: Icons.rotate_90_degrees_cw_outlined, label: 'Xoay / lật', onTap: _orient),
+      range,
       _Tool(
-          icon: _keyMode ? Icons.straighten : Icons.diamond_outlined,
-          label: _keyMode ? 'Đoạn áp dụng' : 'Keyframe',
-          onTap: () => setState(() => _keyMode = !_keyMode)),
+          icon: Icons.diamond_outlined,
+          label: 'Keyframe',
+          accent: _keyMode,
+          onTap: () => setState(() {
+                _keyMode = !_keyMode;
+                if (_keyMode) _range = null;
+              })),
       _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _enterCovers),
       _Tool(icon: Icons.vignette_outlined, label: 'Mặt nạ', onTap: _enterMasks),
       _Tool(icon: Icons.handyman_outlined, label: 'Công cụ', onTap: _clipTools),
@@ -2119,7 +2168,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
         height: 52,
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: Row(children: [
-          IconButton(key: const Key('editor-close'), tooltip: 'Về trang chủ', icon: const Icon(Icons.close), onPressed: _goHome),
+          IconButton(
+              key: const Key('editor-close'),
+              tooltip: 'Về trang chủ',
+              icon: const Icon(Icons.close),
+              onPressed: _goHome),
           IconButton(tooltip: 'Hoàn tác', icon: const Icon(Icons.undo), onPressed: () => _edit((vs) => vs.undo())),
           Expanded(
             child: Text(project.name,
@@ -2197,7 +2250,17 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           final tools = Container(
             color: VsColors.panel,
             height: 68,
-            child: ListView(scrollDirection: Axis.horizontal, children: _tools()),
+            // "‹" (back to all tools) stays put; the rest scrolls.
+            child: Builder(builder: (context) {
+              final all = _tools();
+              final pinned = _selectedClip != null && all.isNotEmpty;
+              return Row(children: [
+                if (pinned) all.first,
+                Expanded(
+                  child: ListView(scrollDirection: Axis.horizontal, children: pinned ? all.sublist(1) : all),
+                ),
+              ]);
+            }),
           );
           Widget body;
           if (wide) {
@@ -2207,7 +2270,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
             body = Column(children: [
               _topBar(project),
               Expanded(
-                child: Row(children: [
+                child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   Expanded(child: Column(children: [Expanded(child: _preview(project, keys)), _timeRow(project)])),
                   if (mode.gap > 0) SizedBox(width: mode.gap),
                   Container(
@@ -2238,7 +2301,10 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               _topBar(project),
               Expanded(child: _preview(project, keys)),
               _timeRow(project),
-              if (panel != null) ConstrainedBox(constraints: BoxConstraints(maxHeight: box.maxHeight * 0.3), child: SingleChildScrollView(child: panel)),
+              if (panel != null)
+                ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: box.maxHeight * 0.3),
+                    child: SingleChildScrollView(child: panel)),
               ConstrainedBox(constraints: BoxConstraints(maxHeight: maxTimeline), child: timeline),
               ..._notes(project),
               tools,

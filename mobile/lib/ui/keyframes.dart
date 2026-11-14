@@ -209,9 +209,13 @@ class _KeyframeBarState extends State<KeyframeBar> {
       color: VsColors.panel,
       padding: const EdgeInsets.fromLTRB(8, 6, 4, 0),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 2),
+          child: Text('Keyframe', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+        ),
         Text(keyframeGuide(inside: ok, video: picture, keys: keys, here: here),
             key: const Key('kf-guide'), style: const TextStyle(fontSize: 12, color: VsColors.fg2)),
-        Row(children: [
+        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
           IconButton(
             key: const Key('kf-prev'),
             tooltip: 'Keyframe trước',
@@ -250,7 +254,13 @@ class _KeyframeBarState extends State<KeyframeBar> {
             icon: const Text('◆▶', style: TextStyle(fontSize: 12)),
             onPressed: widget.hasKeys ? () => widget.onJump(true) : null,
           ),
-          const Icon(Icons.volume_up_outlined, size: 18, color: VsColors.fg2),
+        ]),
+        // Volume on its own row: the bar also fits the narrow side panel of a foldable.
+        Row(children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 12),
+            child: Icon(Icons.volume_up_outlined, size: 18, color: VsColors.fg2),
+          ),
           Expanded(
             child: Slider(
               key: const Key('kf-volume'),

@@ -26,7 +26,7 @@ String rangeGuide(TimeRange? r) {
 
 String rangeText(TimeRange r) {
   String t(double s) => '${s ~/ 60}:${(s % 60).toStringAsFixed(1).padLeft(4, '0')}';
-  return r.complete ? '${t(r.start)} → ${t(r.end!)}  (${r.length.toStringAsFixed(1)} s)' : 'Từ ${t(r.start)}';
+  return r.complete ? '${t(r.start)} – ${t(r.end!)}  (${r.length.toStringAsFixed(1)} s)' : 'Từ ${t(r.start)}';
 }
 
 /// What can be done to a range.
@@ -115,23 +115,34 @@ class RangeBar extends StatelessWidget {
         ]),
         const SizedBox(height: 6),
         if (done)
-          Wrap(children: [
-            if (video) ...[
-              _chip(const Key('range-zoom-1.3'), 'Zoom dần 1.3×', () => onAction(RangeAction.zoom, 1.3), icon: Icons.zoom_in),
-              _chip(const Key('range-zoom-1.6'), 'Zoom dần 1.6×', () => onAction(RangeAction.zoom, 1.6)),
-              _chip(const Key('range-zoom-2'), 'Zoom dần 2×', () => onAction(RangeAction.zoom, 2)),
-              _chip(const Key('range-zoom-out'), 'Thu nhỏ dần', () => onAction(RangeAction.zoom, 1 / 1.6), icon: Icons.zoom_out),
-            ],
-            _chip(const Key('range-vol-0'), 'Nhỏ dần tới tắt', () => onAction(RangeAction.volume, 0), icon: Icons.volume_down),
-            _chip(const Key('range-vol-2'), 'To dần ×2', () => onAction(RangeAction.volume, 2), icon: Icons.volume_up),
-            if (video) ...[
-              _chip(const Key('range-effect'), 'Hiệu ứng…', () => onAction(RangeAction.effect, 0), icon: Icons.auto_awesome),
-              _chip(const Key('range-filter'), 'Bộ lọc…', () => onAction(RangeAction.filter, 0), icon: Icons.filter_vintage_outlined),
-              _chip(const Key('range-color'), 'Chỉnh màu…', () => onAction(RangeAction.color, 0), icon: Icons.tune),
-            ],
-            _chip(const Key('range-slow'), 'Chậm 0.5×', () => onAction(RangeAction.speed, 0.5), icon: Icons.slow_motion_video),
-            _chip(const Key('range-fast'), 'Nhanh 2×', () => onAction(RangeAction.speed, 2), icon: Icons.fast_forward),
-          ]),
+          SingleChildScrollView(
+              key: const Key('range-actions'),
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                if (video) ...[
+                  _chip(const Key('range-zoom-1.3'), 'Zoom dần 1.3×', () => onAction(RangeAction.zoom, 1.3),
+                      icon: Icons.zoom_in),
+                  _chip(const Key('range-zoom-1.6'), 'Zoom dần 1.6×', () => onAction(RangeAction.zoom, 1.6)),
+                  _chip(const Key('range-zoom-2'), 'Zoom dần 2×', () => onAction(RangeAction.zoom, 2)),
+                  _chip(const Key('range-zoom-out'), 'Thu nhỏ dần', () => onAction(RangeAction.zoom, 1 / 1.6),
+                      icon: Icons.zoom_out),
+                ],
+                _chip(const Key('range-vol-0'), 'Nhỏ dần tới tắt', () => onAction(RangeAction.volume, 0),
+                    icon: Icons.volume_down),
+                _chip(const Key('range-vol-2'), 'To dần ×2', () => onAction(RangeAction.volume, 2),
+                    icon: Icons.volume_up),
+                if (video) ...[
+                  _chip(const Key('range-effect'), 'Hiệu ứng…', () => onAction(RangeAction.effect, 0),
+                      icon: Icons.auto_awesome),
+                  _chip(const Key('range-filter'), 'Bộ lọc…', () => onAction(RangeAction.filter, 0),
+                      icon: Icons.filter_vintage_outlined),
+                  _chip(const Key('range-color'), 'Chỉnh màu…', () => onAction(RangeAction.color, 0), icon: Icons.tune),
+                ],
+                _chip(const Key('range-slow'), 'Chậm 0.5×', () => onAction(RangeAction.speed, 0.5),
+                    icon: Icons.slow_motion_video),
+                _chip(const Key('range-fast'), 'Nhanh 2×', () => onAction(RangeAction.speed, 2),
+                    icon: Icons.fast_forward),
+              ])),
       ]),
     );
   }

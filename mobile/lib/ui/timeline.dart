@@ -43,6 +43,7 @@ class TimelineView extends StatefulWidget {
   });
 
   final ProjectView project;
+
   /// "Đoạn áp dụng" being chosen: lit on the timeline (end null while only the start is set).
   final (double, double?)? range;
   final MediaCache? media; // thumbnails / waveforms drawn inside clips when ready
@@ -145,7 +146,8 @@ class _TimelineViewState extends State<TimelineView> {
   int _rowAt(double dy) {
     final tracks = widget.project.tracks;
     for (var i = 0; i < tracks.length; i++) {
-      if (dy >= _tops[i] - TimelineView.gap / 2 && dy < _tops[i] + TimelineView.laneHeight(tracks[i]) + TimelineView.gap / 2) {
+      if (dy >= _tops[i] - TimelineView.gap / 2 &&
+          dy < _tops[i] + TimelineView.laneHeight(tracks[i]) + TimelineView.gap / 2) {
         return i;
       }
     }
@@ -163,8 +165,11 @@ class _TimelineViewState extends State<TimelineView> {
     for (final c in track.clips) {
       if (c.id != sel) continue;
       final x0 = (c.start - scroll) * pxPerSec, x1 = (c.end - scroll) * pxPerSec;
-      if ((p.dx - x0).abs() <= handleHit) return (c, true);
-      if ((p.dx - x1).abs() <= handleHit) return (c, false);
+      // Mostly outside the clip, and never on the playhead line: a touch on the clip itself or
+      // on the line (often right on an edge after a split) swipes the timeline instead.
+      if ((p.dx - _width / 2).abs() < 12) return null;
+      if (p.dx >= x0 - handleHit && p.dx <= x0 + 10) return (c, true);
+      if (p.dx >= x1 - 10 && p.dx <= x1 + handleHit) return (c, false);
     }
     return null;
   }
@@ -214,8 +219,7 @@ class _TimelineViewState extends State<TimelineView> {
     return best;
   }
 
-  Rect _laneRect(int row) =>
-      Rect.fromLTWH(0, _tops[row], _width, TimelineView.laneHeight(widget.project.tracks[row]));
+  Rect _laneRect(int row) => Rect.fromLTWH(0, _tops[row], _width, TimelineView.laneHeight(widget.project.tracks[row]));
 
   /// Keyframe of [c] under [p] (picture keys on the clip's top edge, audio keys on the bottom).
   double? _keyAt(int row, ClipView c, Offset p) {
@@ -473,7 +477,8 @@ class _TimelinePainter extends CustomPainter {
     }
     // A faint band where the timeline has content.
     if (dur > 0) {
-      canvas.drawRect(Rect.fromLTWH(x0, TimelineView.rulerH, dur * pxPerSec, size.height - TimelineView.rulerH), Paint()..color = const Color(0x08FFFFFF));
+      canvas.drawRect(Rect.fromLTWH(x0, TimelineView.rulerH, dur * pxPerSec, size.height - TimelineView.rulerH),
+          Paint()..color = const Color(0x08FFFFFF));
     }
     if (dragClip != null && dragRow >= 0) {
       final lane = Rect.fromLTWH(0, tops[dragRow], size.width, TimelineView.laneHeight(project.tracks[dragRow]));
