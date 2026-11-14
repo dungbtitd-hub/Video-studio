@@ -1,4 +1,5 @@
 #include "vstudio/render.hpp"
+#include "vstudio/audio_fx.hpp"
 
 #include "vstudio/grade.hpp"
 
@@ -262,10 +263,17 @@ std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer,
     // Decode size: preview decodes at output size, export at native size.
     const int dw = preview_ ? outW : 0, dh = preview_ ? outH : 0;
     std::string key;
-    if (cache_) {
-        const Rational fps = a.fps.num > 0 ? a.fps : project_.fps;
-        key = FrameCache::key(deep ? a.id + "#deep" : a.id, src.toFrame(fps), dw, dh);
-        if (auto hit = cache_->get(key)) return hit;
+    const Rational fps = a.fps.num > 0 ? a.fps : project_.fps;
+    const std::string cacheId = deep ? a.id + "#deep" : a.id;
+    const bool reversed = layer.clip->reversed && !still;
+    FrameCache* cache = cache_;
+    if (reversed && !cache) {
+        if (!reverseCache_) reverseCache_ = std::make_unique<FrameCache>(384ull * 1024 * 1024);
+        cache = reverseCache_.get();
+    }
+    if (cache) {
+        key = FrameCache::key(cacheId, src.toFrame(fps), dw, dh);
+        if (auto hit = cache->get(key)) return hit;
     }
     std::string err;
     IMediaDecoder* d = pool_.decoder(a, purpose, &err, dw, dh, preview_, deep);
@@ -273,10 +281,31 @@ std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer,
         warn("media offline: " + a.uri + (err.empty() ? "" : " (" + err + ")"));
         return nullptr;
     }
+    if (reversed) {
+        // Playing backwards: decode the block of frames that ends here forwards (one seek,
+        // then sequential reads) and keep them all; the next frames shown are the earlier
+        // ones of the block, which are then already in the cache.
+        const std::int64_t target = src.toFrame(fps);
+        const std::int64_t firstFrame = layer.clip->sourceIn.toFrame(fps);
+        const int w = dw > 0 ? dw : (a.width > 0 ? a.width : 1920), h = dh > 0 ? dh : (a.height > 0 ? a.height : 1080);
+        const std::int64_t frameBytes = static_cast<std::int64_t>(w) * h * (deep ? 8 : 4);
+        const std::int64_t maxFrames = std::clamp<std::int64_t>((128ll * 1024 * 1024) / std::max<std::int64_t>(1, frameBytes), 4,
+                                                                std::max<std::int64_t>(4, fps.num / std::max<std::int64_t>(1, fps.den)));
+        const std::int64_t from = std::max(firstFrame, target - maxFrames + 1);
+        std::shared_ptr<const VideoFrame> wanted;
+        for (std::int64_t i = from; i <= target; ++i) {
+            auto f = d->videoFrameAt(Time::fromFrame(i, fps));
+            if (!f) continue;
+            auto shared = std::make_shared<const VideoFrame>(std::move(*f));
+            cache->put(FrameCache::key(cacheId, i, dw, dh), shared);
+            if (i == target) wanted = shared;
+        }
+        return wanted;
+    }
     auto frame = d->videoFrameAt(src);
     if (!frame) return nullptr;
     auto shared = std::make_shared<const VideoFrame>(std::move(*frame));
-    if (cache_) cache_->put(key, shared);
+    if (cache) cache->put(key, shared);
     return shared;
 }
 
@@ -525,10 +554,14 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
     mix.samples.assign(static_cast<std::size_t>(frames) * ch, 0.0f);
     const std::int64_t endSample = startSample + frames;
     for (const Track& tr : project_.tracks) {
-        if (!tr.enabled || tr.muted) continue;
+        if (!audiofx::trackAudible(project_, tr)) continue;
+        // Track pan (balance): the far side is turned down, the near side kept.
+        const double pan = ch == 2 ? audiofx::trackPan(tr) : 0.0;
+        const float panL = static_cast<float>(std::min(1.0, 1.0 - pan)), panR = static_cast<float>(std::min(1.0, 1.0 + pan));
         for (const Clip& c : tr.clips) {
             const MediaAsset* a = project_.findAsset(c.assetId);
-            if (!a || !a->audio) continue;
+            if (!a || !a->audio || c.volume <= 0.0) continue;
+            if (audiofx::detached(c) || c.extra.value("freeze", false)) continue;  // sound elsewhere / still frame
             const std::int64_t cs = c.timelineIn.toSample(sr, Rounding::Up);
             const std::int64_t ce = c.timelineOut().toSample(sr, Rounding::Up);
             const std::int64_t s0 = std::max(cs, startSample), s1 = std::min(ce, endSample);
@@ -536,12 +569,40 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
             std::string err;
             IMediaDecoder* d = pool_.decoder(*a, purpose, &err);
             if (!d) continue;
-            const Time src = c.toSource(Time::fromSample(s0, sr));
             const std::int64_t n = s1 - s0;
             const bool unity = c.speed == Rational{1, 1};
             // For speed != 1 read the corresponding source span and resample linearly (no pitch correction in P0).
             const std::int64_t need = unity ? n : std::max<std::int64_t>(1, mulDiv(n, c.speed.num, c.speed.den, Rounding::Up));
-            AudioBuffer in = d->readAudio(src, need, sr, ch);
+            // First source sample of the span read forwards (a reversed clip reads the span
+            // that ends where the block starts, then plays it backwards).
+            Time src = c.toSource(Time::fromSample(s0, sr));
+            if (c.reversed) src = src + Time::fromTicks(1) - Time::fromSample(need, sr);
+            AudioBuffer in;
+            const auto fx = audiofx::clipEffects(c);
+            if (fx.empty()) {
+                in = d->readAudio(src, need, sr, ch);
+            } else {
+                // Effects see the block with source context on both sides, starting on a fixed
+                // grid, so the result does not depend on how the timeline is cut into blocks.
+                const std::int64_t margin = audiofx::clipMargin(modules_, fx, sr);
+                const std::int64_t first = src.toSample(sr, Rounding::Nearest);
+                std::int64_t from = first - margin;
+                from = from <= 0 ? 0 : from / audiofx::kAudioFxAlign * audiofx::kAudioFxAlign;
+                const std::int64_t pre = first - from;
+                in = d->readAudio(Time::fromSample(from, sr), pre + need + margin, sr, ch);
+                audiofx::applyClipEffects(modules_, fx, in);
+                const std::int64_t keep = std::max<std::int64_t>(0, std::min(need, in.frames() - pre));
+                std::vector<float> body(in.samples.begin() + std::min<std::int64_t>(pre, in.frames()) * ch,
+                                        in.samples.begin() + (std::min<std::int64_t>(pre, in.frames()) + keep) * ch);
+                in.samples.swap(body);
+            }
+            if (c.reversed) {
+                const std::int64_t m = in.frames();
+                for (std::int64_t i = 0; i < m / 2; ++i)
+                    for (int k = 0; k < ch; ++k)
+                        std::swap(in.samples[static_cast<std::size_t>(i * ch + k)],
+                                  in.samples[static_cast<std::size_t>((m - 1 - i) * ch + k)]);
+            }
             const std::int64_t inFrames = in.frames();
             if (inFrames == 0) continue;
             // Volume keyframes: gain evaluated every 32 samples and ramped in between,
@@ -552,12 +613,14 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
             const std::size_t ci = static_cast<std::size_t>(&c - tr.clips.data());
             const bool fading = c.transitionIn.is_object() || c.transitionOut.is_object() ||
                                 (ci + 1 < tr.clips.size() && tr.clips[ci + 1].transitionIn.is_object());
-            const bool animated = keyed || fading;
+            const bool clipFades = audiofx::hasFades(c);
+            const bool animated = keyed || fading || clipFades;
             auto gainAt = [&](std::int64_t i) {
                 const Time at = Time::fromSample(s0 + i, sr);
                 const double v = keyed ? volumeCurve.at(c.toSource(at)) : 1.0;
                 const double f = fading ? transitionGain(tr, c, at) : 1.0;
-                return static_cast<float>(c.volume * tr.volume * v * f);
+                const double cf = clipFades ? audiofx::fadeGain(c, at) : 1.0;
+                return static_cast<float>(c.volume * tr.volume * v * f * cf);
             };
             constexpr std::int64_t kStep = 32;
             float g0 = gainAt(0), g1 = animated ? gainAt(std::min(kStep, n)) : g0;
@@ -568,21 +631,28 @@ AudioBuffer Renderer::renderAudio(std::int64_t startSample, std::int64_t frames,
                 }
                 const float gain = animated ? g0 + (g1 - g0) * static_cast<float>(i % kStep) / kStep : g0;
                 float* o = &mix.samples[static_cast<std::size_t>(s0 - startSample + i) * ch];
+                float v[8];
+                const int nc = std::min(ch, 8);
                 if (unity) {
                     if (i >= inFrames) break;
                     const float* s = &in.samples[static_cast<std::size_t>(i) * ch];
-                    for (int k = 0; k < ch; ++k) o[k] += s[k] * gain;
+                    for (int k = 0; k < nc; ++k) v[k] = s[k];
                 } else {
                     const double pos = static_cast<double>(i) * c.speed.num / c.speed.den;
                     const std::int64_t j = std::min<std::int64_t>(static_cast<std::int64_t>(pos), inFrames - 1);
                     const std::int64_t j1 = std::min<std::int64_t>(j + 1, inFrames - 1);
                     const float f = static_cast<float>(pos - j);
-                    for (int k = 0; k < ch; ++k) {
+                    for (int k = 0; k < nc; ++k) {
                         const float a0 = in.samples[static_cast<std::size_t>(j) * ch + k];
                         const float a1 = in.samples[static_cast<std::size_t>(j1) * ch + k];
-                        o[k] += (a0 + (a1 - a0) * f) * gain;
+                        v[k] = a0 + (a1 - a0) * f;
                     }
                 }
+                if (ch == 2) {
+                    v[0] *= panL;
+                    v[1] *= panR;
+                }
+                for (int k = 0; k < nc; ++k) o[k] += v[k] * gain;
             }
         }
     }

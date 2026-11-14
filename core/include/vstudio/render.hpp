@@ -103,6 +103,8 @@ private:
     std::shared_ptr<ICompositor> compositor_;
     bool deep_ = false;
     std::shared_ptr<const EffectOverride> override_;
+    // Reversed clips decode short blocks forwards; export has no shared cache, so it keeps its own.
+    std::unique_ptr<FrameCache> reverseCache_;
     std::vector<std::string> warnings_;
     void warn(std::string w);
 };
