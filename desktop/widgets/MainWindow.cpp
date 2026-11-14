@@ -6,6 +6,11 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QSpinBox>
 #include <QHeaderView>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -52,6 +57,62 @@ QToolButton* toolButton(const QString& text, QWidget* parent, bool primary = fal
     b->setText(text);
     if (primary) b->setObjectName("primary");
     return b;
+}
+// "Lưu thành preset của tôi" in the export dialog: a name, the quality and format chosen in the
+// dialog, and optional frame rate / bitrates / sound. Returns the saved name ("" = cancelled).
+QString askExportPreset(QWidget* parent, EditorController* editor, const QString& base, const QString& format) {
+    QDialog dlg(parent);
+    dlg.setWindowTitle("Lưu preset xuất");
+    auto* f = new QFormLayout(&dlg);
+    auto* name = new QLineEdit(&dlg);
+    name->setPlaceholderText("vd. Kênh YouTube của tôi");
+    f->addRow("Tên:", name);
+    auto* fps = new QComboBox(&dlg);
+    fps->setObjectName("userExportFps");
+    fps->addItem("Theo dự án", 0.0);
+    for (double r : {23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0}) fps->addItem(QString::number(r, 'g', 5), r);
+    f->addRow("Khung/giây:", fps);
+    auto* mbps = new QDoubleSpinBox(&dlg);
+    mbps->setRange(0, 400);
+    mbps->setDecimals(1);
+    mbps->setSpecialValueText("Tự động");
+    mbps->setSuffix(" Mbit/s");
+    f->addRow("Bitrate video:", mbps);
+    auto* kbps = new QSpinBox(&dlg);
+    kbps->setRange(0, 512);
+    kbps->setSingleStep(32);
+    kbps->setSpecialValueText("Tự động");
+    kbps->setSuffix(" kbit/s");
+    f->addRow("Bitrate âm thanh:", kbps);
+    auto* audio = new QCheckBox("Có âm thanh", &dlg);
+    audio->setChecked(true);
+    f->addRow(audio);
+    auto* info = new QLabel(&dlg);
+    info->setStyleSheet("color: palette(mid);");
+    f->addRow(info);
+    auto data = [=] {
+        return QVariantMap{{"base", base}, {"format", format}, {"fps", fps->currentData().toDouble()},
+                           {"video_mbps", mbps->value()}, {"audio_kbps", kbps->value()}, {"audio", audio->isChecked()}};
+    };
+    auto update = [=] {
+        const QVariantMap m = editor->exportPresetInfo(data());
+        info->setText(QString("%1\n%2 × %3 · khoảng %4 MB")
+                          .arg(m["summary"].toString())
+                          .arg(m["width"].toInt())
+                          .arg(m["height"].toInt())
+                          .arg(qRound(m["estimatedBytes"].toDouble() / 1e6)));
+    };
+    update();
+    QObject::connect(fps, &QComboBox::currentIndexChanged, &dlg, update);
+    QObject::connect(mbps, &QDoubleSpinBox::valueChanged, &dlg, update);
+    QObject::connect(kbps, &QSpinBox::valueChanged, &dlg, update);
+    QObject::connect(audio, &QCheckBox::toggled, &dlg, update);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
+    QObject::connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(bb, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    f->addRow(bb);
+    if (dlg.exec() != QDialog::Accepted || name->text().trimmed().isEmpty()) return {};
+    return editor->saveExportPreset(name->text(), data()) ? name->text().trimmed() : QString();
 }
 }  // namespace
 
@@ -673,7 +734,9 @@ void MainWindow::exportVideo() {
     const QString preset = choosePreset(&format);
     if (preset.isEmpty()) return;
     const QString f = QFileDialog::getSaveFileName(this, "Xuất MP4", editor_->projectName() + ".mp4", "MP4 (*.mp4)");
-    if (!f.isEmpty()) editor_->exportWithPreset(QUrl::fromLocalFile(f), preset, format);
+    if (f.isEmpty()) return;
+    if (preset.startsWith("user:")) editor_->exportWithUserPreset(QUrl::fromLocalFile(f), preset.mid(5));
+    else editor_->exportWithPreset(QUrl::fromLocalFile(f), preset, format);
 }
 
 QString MainWindow::choosePreset(QString* format) {
@@ -723,11 +786,64 @@ QString MainWindow::choosePreset(QString* format) {
             it->setData(Qt::UserRole, m["id"]);
             if (m["id"].toString() == keep) list->setCurrentItem(it);
         }
+        // The user's own presets (FR-018) carry their own format.
+        for (const QVariant& v : editor_->userPresets("export")) {
+            const QVariantMap m = v.toMap();
+            const QVariantMap info = editor_->exportPresetInfo(m["data"].toMap());
+            auto* it = new QListWidgetItem(QString("★ %1\n%2 × %3 · khoảng %4 MB\n%5")
+                                               .arg(m["name"].toString())
+                                               .arg(info["width"].toInt())
+                                               .arg(info["height"].toInt())
+                                               .arg(qRound(info["estimatedBytes"].toDouble() / 1e6))
+                                               .arg(m["summary"].toString()),
+                                           list);
+            const QString id = "user:" + m["name"].toString();
+            it->setData(Qt::UserRole, id);
+            if (id == keep) list->setCurrentItem(it);
+        }
         if (!list->currentItem() && list->count() > 0) list->setCurrentRow(0);
     };
     fill();
     connect(fmt, &QComboBox::currentIndexChanged, &dlg, fill);
     l->addWidget(list, 1);
+    auto* mine = new QHBoxLayout;
+    auto* saveMine = new QPushButton("Lưu thành preset của tôi…", &dlg);
+    saveMine->setObjectName("saveExportPreset");
+    saveMine->setToolTip("Lưu chất lượng và định dạng đang chọn, kèm khung/giây và bitrate tuỳ chọn");
+    auto* removeMine = new QPushButton("Xoá preset", &dlg);
+    mine->addWidget(saveMine);
+    mine->addWidget(removeMine);
+    mine->addStretch(1);
+    l->addLayout(mine);
+    auto syncMine = [list, removeMine] {
+        removeMine->setEnabled(list->currentItem() && list->currentItem()->data(Qt::UserRole).toString().startsWith("user:"));
+    };
+    connect(list, &QListWidget::currentItemChanged, &dlg, syncMine);
+    syncMine();
+    connect(saveMine, &QPushButton::clicked, &dlg, [this, &dlg, list, fmt, fill] {
+        QString base = list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : "fhd1080";
+        QString format = fmt->currentData().toString();
+        if (base.startsWith("user:")) {  // start from that preset's own quality and format
+            for (const QVariant& v : editor_->userPresets("export"))
+                if ("user:" + v.toMap()["name"].toString() == base) {
+                    base = v.toMap()["data"].toMap()["base"].toString();
+                    format = v.toMap()["data"].toMap()["format"].toString();
+                }
+        }
+        const QString name = askExportPreset(&dlg, editor_, base, format);
+        if (name.isEmpty()) return;
+        fill();
+        for (int i = 0; i < list->count(); ++i)
+            if (list->item(i)->data(Qt::UserRole).toString() == "user:" + name) list->setCurrentRow(i);
+    });
+    connect(removeMine, &QPushButton::clicked, &dlg, [this, &dlg, list, fill] {
+        if (!list->currentItem()) return;
+        const QString id = list->currentItem()->data(Qt::UserRole).toString();
+        if (!id.startsWith("user:")) return;
+        if (QMessageBox::question(&dlg, "Xoá preset", QString("Xoá preset \"%1\"?").arg(id.mid(5))) != QMessageBox::Yes) return;
+        editor_->removeUserPreset("export", id.mid(5));
+        fill();
+    });
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     bb->button(QDialogButtonBox::Ok)->setText("Tiếp tục…");
     connect(bb, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);

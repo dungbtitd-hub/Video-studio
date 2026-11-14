@@ -22,6 +22,7 @@ class LooksSheet extends StatefulWidget {
     this.onInput,
     this.onPickLut,
     this.onClearLut,
+    this.myPresets,
   });
 
   final VStudio vs;
@@ -31,6 +32,9 @@ class LooksSheet extends StatefulWidget {
   final void Function(String input)? onInput; // '' = normal Rec.709
   final Future<String?> Function()? onPickLut; // returns the applied LUT path, or null
   final VoidCallback? onClearLut;
+
+  /// "Của tôi": the user's saved styles (user_presets.dart), under the buttons.
+  final Widget? myPresets;
 
   @override
   State<LooksSheet> createState() => _LooksSheetState();
@@ -243,6 +247,7 @@ class _LooksSheetState extends State<LooksSheet> {
                 ),
               ),
           ]),
+          if (widget.myPresets != null) widget.myPresets!,
         ]),
       ),
     );

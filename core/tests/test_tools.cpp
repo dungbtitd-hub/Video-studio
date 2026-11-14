@@ -7,12 +7,16 @@
 #include "fake_media.hpp"
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/clip_tools.hpp"
+#include "vstudio/color_space.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/pixel.hpp"
 #include "vstudio/project_io.hpp"
 #include "vstudio/render.hpp"
 #include "vstudio/speed_curve.hpp"
+#include "vstudio/export_presets.hpp"
+#include "vstudio/looks.hpp"
+#include "vstudio/user_presets.hpp"
 #include "vtest.hpp"
 
 using namespace vstudio;
@@ -420,4 +424,107 @@ TEST("clip tools: favourites toggle and persist") {
     CHECK(back.contains("look", "teal") && !back.contains("look", "film"));
     CHECK(back.list("transition") == std::vector<std::string>{"fade"});
     std::filesystem::remove_all(dir);
+}
+
+TEST("presets: a saved style moves colour and effects to other clips, keeps covers; one undo step") {
+    Fx f;
+    const Id a = f.ed.appendClip(f.v1, f.asset, sec(0), sec(2));
+    const Id b = f.ed.appendClip(f.v1, f.asset, sec(2), sec(4));
+    f.ed.setClipColorSpace({a}, "slog3", 0.5);
+    f.ed.setClipLook({a}, colorLooks().front().id, 0.8);
+    f.ed.setClipEffect({a}, "builtin.color_grade", {{"exposure", 0.3}});
+    f.ed.addCover(a, {{"style", "blur"}});
+    f.ed.addCover(b, {{"style", "black"}});
+    f.ed.setClipEffect({b}, kColorLookEffect, {{"look", "x"}, {"strength", 1.0}});
+    const Json style = presets::captureStyle(*f.ed.project().findClip(a));
+    CHECK_EQ(style["effects"].size(), std::size_t{3});  // the cover is not part of a style
+    CHECK(presets::describeStyle(style).find("Log") != std::string::npos);
+
+    const auto before = f.ed.project().findClip(b)->effects;
+    f.ed.applyClipStyle({b}, style);
+    const Json& fx = f.ed.project().findClip(b)->effects;
+    CHECK_EQ(fx.size(), std::size_t{4});
+    CHECK_EQ(fx[0]["type"].get<std::string>(), std::string(kColorSpaceEffect));  // input transform first
+    int covers = 0, looks = 0;
+    for (const auto& e : fx) {
+        covers += e["type"] == "builtin.cover";
+        looks += e["type"] == kColorLookEffect;
+        CHECK(!e["effect_id"].get<std::string>().empty());
+    }
+    CHECK_EQ(covers, 1);
+    CHECK_EQ(looks, 1);
+    CHECK(f.ed.undo());
+    CHECK(f.ed.project().findClip(b)->effects == before);
+    CHECK(f.ed.redo());
+    CHECK(f.ed.project().findClip(b)->effects == fx);
+    // An empty style clears the style, not the cover.
+    f.ed.applyClipStyle({b}, {{"effects", Json::array()}});
+    CHECK_EQ(f.ed.project().findClip(b)->effects.size(), std::size_t{1});
+    CHECK_THROWS(f.ed.applyClipStyle({b}, Json::object()));
+    CHECK_THROWS(f.ed.applyClipStyle({"nope"}, style));
+}
+
+TEST("presets: the store keeps named presets per kind, newest first, across reloads") {
+    const auto dir = std::filesystem::temp_directory_path() / "vs_presets_test";
+    std::filesystem::remove_all(dir);
+    const std::string path = (dir / "presets.json").string();
+    {
+        presets::UserPresetStore s(path);
+        CHECK(s.list(presets::kStyle).empty());
+        CHECK(s.put(presets::kStyle, "  Ấm áp  ", {{"effects", Json::array()}}));
+        CHECK(s.put(presets::kStyle, "Lạnh", {{"effects", Json::array()}}));
+        CHECK(s.put(presets::kExport, "Kênh của tôi", presets::toJson(presets::UserExport{"hd720", "hevc", 25, 4, 128, true})));
+        std::string err;
+        CHECK(!s.put("nope", "x", {}, &err));
+        CHECK(!s.put(presets::kStyle, "   ", {}, &err));
+        CHECK(s.put(presets::kStyle, "Ấm áp", {{"effects", Json::array()}, {"v", 2}}));  // replaces, moves to front
+        CHECK(!s.rename(presets::kStyle, "Lạnh", "Ấm áp", &err));
+        CHECK(s.rename(presets::kStyle, "Lạnh", "Lạnh xanh"));
+    }
+    presets::UserPresetStore s(path);
+    const auto& styles = s.list(presets::kStyle);
+    CHECK_EQ(styles.size(), std::size_t{2});
+    CHECK_EQ(styles[0].name, std::string("Ấm áp"));
+    CHECK_EQ(styles[0].data.value("v", 0), 2);
+    CHECK_EQ(styles[1].name, std::string("Lạnh xanh"));
+    CHECK(s.find(presets::kExport, "Kênh của tôi"));
+    CHECK(s.remove(presets::kStyle, "Ấm áp"));
+    CHECK(!s.remove(presets::kStyle, "Ấm áp"));
+    CHECK_EQ(presets::UserPresetStore(path).list(presets::kStyle).size(), std::size_t{1});
+    // A broken file loads empty and is replaced on the next change.
+    vstudio::writeFileAtomic(path, "{not json");
+    presets::UserPresetStore broken(path);
+    CHECK(broken.list(presets::kExport).empty());
+    CHECK(broken.put(presets::kExport, "A", presets::toJson({})));
+    CHECK_EQ(presets::UserPresetStore(path).list(presets::kExport).size(), std::size_t{1});
+    std::filesystem::remove_all(dir);
+}
+
+TEST("presets: user export settings start from a quality class and override what was set") {
+    Editor ed{Editor::newProject("T", 1920, 1080, {30, 1}, "test")};
+    const auto e = presets::userExportFromJson({{"base", "hd720"}, {"format", "hevc"}, {"fps", 29.97}, {"audio_kbps", 128}});
+    CHECK(e.has_value());
+    const ExportSettings s = presets::exportSettingsFor(ed.project(), *e);
+    CHECK_EQ(s.width, 1280);
+    CHECK_EQ(s.height, 720);
+    CHECK_EQ(s.fps.num, std::int64_t{30000});
+    CHECK_EQ(s.fps.den, std::int64_t{1001});
+    CHECK_EQ(s.videoCodec, std::string("hevc"));
+    CHECK_EQ(s.audioBitrate, std::int64_t{128000});
+    CHECK(s.includeAudio);
+    const ExportSettings base = exportSettingsFor(ed.project(), *findExportPreset("hd720"), "hevc");
+    CHECK(std::abs(double(s.videoBitrate) - double(base.videoBitrate)) < base.videoBitrate * 0.01);  // same quality per frame
+    auto fixed = *e;
+    fixed.videoMbps = 12;
+    fixed.audio = false;
+    const ExportSettings m = presets::exportSettingsFor(ed.project(), fixed);
+    CHECK_EQ(m.videoBitrate, std::int64_t{12'000'000});
+    CHECK(!m.includeAudio);
+    CHECK(presets::describeExport(fixed).find("12 Mbit/s") != std::string::npos);
+    CHECK(presets::describeExport(fixed).find("không tiếng") != std::string::npos);
+    CHECK(!presets::userExportFromJson({{"base", "nope"}}).has_value());
+    CHECK(!presets::userExportFromJson({{"format", "vp9"}}).has_value());
+    // Round trip.
+    const auto back = presets::userExportFromJson(presets::toJson(fixed));
+    CHECK(back && back->videoMbps == 12 && !back->audio && back->format == "hevc");
 }

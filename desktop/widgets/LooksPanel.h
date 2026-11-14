@@ -15,6 +15,7 @@ class QListWidget;
 class QListWidgetItem;
 class QSlider;
 class QPushButton;
+class UserPresetBox;
 
 class LooksPanel : public QWidget {
     Q_OBJECT
@@ -23,6 +24,7 @@ public:
     [[nodiscard]] QListWidget* list() const { return list_; }  // for tests
     [[nodiscard]] QSlider* strength() const { return strength_; }
     [[nodiscard]] QComboBox* input() const { return input_; }
+    [[nodiscard]] UserPresetBox* userPresets() const { return userPresets_; }
 
 private:
     void refresh();                 // selection or project changed
@@ -42,5 +44,6 @@ private:
     QLabel* inputHint_;
     QPushButton* lut_;
     QPushButton* lutClear_;
+    UserPresetBox* userPresets_;
     QString baseKey_;  // asset id the icons were rendered from ("" = sample)
 };

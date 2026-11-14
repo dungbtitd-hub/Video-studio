@@ -28,6 +28,7 @@
 #include "ScopesPanel.h"
 #include "GradeWidgets.h"
 #include "LooksPanel.h"
+#include "UserPresetBox.h"
 #include "MainWindow.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -379,6 +380,48 @@ private slots:
         QCOMPARE(ctrl_->clipLook(clip).first, QString("teal_orange"));  // only the bulk step undone
         emit list->itemClicked(list->item(0));  // "Gốc": no look
         QVERIFY(ctrl_->clipLook(clip).first.isEmpty());
+    }
+
+    void userPresets() {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        ctrl_->setUserPresetsFile(tmp.filePath("presets.json"));
+        emit ctrl_->userPresetsChanged();
+        UserPresetBox* box = win_->looks()->userPresets();
+        QVERIFY(box);
+        QCOMPARE(box->list()->count(), 0);
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString a = QString::fromStdString(v1.clips[0].id), b = QString::fromStdString(v1.clips[1].id);
+        ctrl_->setSelectedClip(a);
+        ctrl_->setClipLook({a}, "teal_orange", 0.6);
+        ctrl_->setClipColorSpace({a}, "slog3");
+        QVERIFY(ctrl_->saveStylePreset(a, QString::fromUtf8("Phim của tôi")));
+        QCOMPARE(box->list()->count(), 1);  // the panel follows
+        QVERIFY(box->list()->itemData(0, Qt::ToolTipRole).toString().contains("Log"));
+        // Apply to the other clip from the panel: one undo step.
+        ctrl_->setSelectedClip(b);
+        QCoreApplication::processEvents();
+        QVERIFY(box->applyButton()->isEnabled());
+        box->applyButton()->click();
+        QCOMPARE(ctrl_->clipLook(b), qMakePair(QString("teal_orange"), 0.6));
+        QCOMPARE(ctrl_->clipColorSpace(b).first, QString("slog3"));
+        ctrl_->undo();
+        QVERIFY(ctrl_->clipLook(b).first.isEmpty());
+        QVERIFY(ctrl_->renameUserPreset("style", QString::fromUtf8("Phim của tôi"), "Film"));
+        QCOMPARE(box->list()->itemText(0), QString("Film"));
+        // Export presets: own frame rate and bitrate, listed and sized for this project.
+        QVERIFY(ctrl_->saveExportPreset("Kênh", {{"base", "hd720"}, {"format", "hevc"}, {"fps", 25.0}, {"video_mbps", 6.0}}));
+        QVERIFY(!ctrl_->saveExportPreset("Bad", {{"base", "nope"}}));
+        const QVariantList ex = ctrl_->userPresets("export");
+        QCOMPARE(ex.size(), 1);
+        const QVariantMap info = ctrl_->exportPresetInfo(ex[0].toMap()["data"].toMap());
+        QCOMPARE(info["width"].toInt(), 1280);
+        QCOMPARE(info["fps"].toDouble(), 25.0);
+        QCOMPARE(info["bitrate"].toDouble(), 6e6);
+        QVERIFY(ex[0].toMap()["summary"].toString().contains("H.265"));
+        QVERIFY(ctrl_->removeUserPreset("export", "Kênh"));
+        QVERIFY(ctrl_->userPresets("export").isEmpty());
+        ctrl_->setUserPresetsFile({});
     }
 
     void proGrade() {

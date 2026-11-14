@@ -124,6 +124,33 @@ The sticker "Cỡ" slider shows the size as seen on the canvas (content size × 
 so it matches a corner drag or a pinch; moving it sets the content size for the current scale. Stickers are vectors
 drawn at the output resolution, so they stay sharp at any size.
 
+## Following a moving object (FR-028)
+
+A text or sticker can stick to something that moves in the video below it: a name over a runner, an arrow on a
+ball.
+
+1. Place the text or sticker on the object, at the moment it should start following.
+2. Press **"Bám theo đối tượng"** (desktop: the animation box; mobile: the Hiệu ứng tab of the text or sticker
+   sheet). Tick **"cả kích thước"** to also follow the object getting nearer or further.
+
+How it works (`core/include/vstudio/tracker.hpp`: `followTargetAt`, `followStartBox`, `trackFollow`):
+
+- The target is the topmost video clip under the follower at the playhead. The start box is a square around the
+  follower's centre, mapped into that clip's **source** frame, so zoom, position keys and speed of the video clip are
+  taken into account.
+- The same tracker as covers ([covers.md](covers.md)) runs in a background job from the playhead to the end of the
+  follower: the UI never waits, the button shows progress and can stop it.
+- Each tracked box is mapped back to the canvas, and the follower keeps its offset from the object (and its scale
+  ratio with "cả kích thước"). The samples are reduced with Douglas–Peucker to a few `x`, `y` (and `scale`) keys in
+  the follower's source time, applied by `Editor::setFollowTrack` as **one undo step**. Keys of those properties
+  inside the tracked span are replaced; keys outside it stay.
+- When the object is lost (low confidence for 4 frames), the part followed so far is kept and the user is told.
+
+The result is ordinary keyframes: they can be moved, eased or deleted like any other.
+
+C API: `vs_tool_command` `{"cmd": "start", "job": "follow", "clip", "at", "size"}`, then `job_status` until it is
+done (the keys are applied by the call that first sees the job finished).
+
 ## C API
 
 `vs_fonts_json`, `vs_register_font`, `vs_text_animations_json`, `vs_text_presets_json`, `vs_stickers_json`,

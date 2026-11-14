@@ -401,7 +401,16 @@ VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_
  *     "error"} (0 idle, 1 running, 2 done and applied as one undo step, -1 failed, -2 cancelled); job_cancel
  *   start {job: "follow", clip, at (ticks), size?}  a text/sticker follows the object under it in the video
  *     below, from `at` to the clip's end: x/y (and scale with size) keys, one undo step
- *   stabilize_strength {clip, strength}         re-smooths without measuring again */
+ *   stabilize_strength {clip, strength}         re-smooths without measuring again
+ * User presets (user_presets.hpp), kept in one file shared by all projects:
+ *   presets_init {path}                         the file (until then: in memory only)
+ *   user_presets {kind: "style"|"export"} -> {"presets": [{"name","saved","summary","data"}]} newest first
+ *   save_style_preset {clip, name} -> {"summary"}  the clip's colour and effects, under that name
+ *   apply_style_preset {clips, name}            one undo step; covers, stabilisation and sound stay
+ *   save_export_preset {name, data: {base, format, fps?, video_mbps?, audio_kbps?, audio?}}
+ *   remove_preset {kind, name}; rename_preset {kind, from, to}
+ *   export_preset_info {name | data} -> {"width","height","fps","video_bitrate","audio","estimated_bytes","summary"}
+ *   export_user_preset {name, path}             starts the export (vs_export_status as for presets) */
 VS_API char* vs_tool_command(vs_session* s, const char* command_json);
 
 #ifdef __cplusplus

@@ -40,6 +40,7 @@ add_library(vstudio_core STATIC
   src/audio_fx.cpp
   src/clip_tools.cpp
   src/speed_curve.cpp
+  src/user_presets.cpp
   src/plugins.cpp
   ${CMAKE_CURRENT_BINARY_DIR}/embedded_fonts.cpp
 )

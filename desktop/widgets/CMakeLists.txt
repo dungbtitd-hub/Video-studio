@@ -35,6 +35,7 @@ qt_add_executable(VideoStudio
   MixerPanel.cpp MixerPanel.h
   ClipToolsPanel.cpp ClipToolsPanel.h
   SpeedCurveEditor.cpp SpeedCurveEditor.h
+  UserPresetBox.cpp UserPresetBox.h
   Favorites.cpp Favorites.h
   ${VSTUDIO_APP_ICON_SOURCES}
 )

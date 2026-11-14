@@ -112,6 +112,33 @@ void main() {
     expect(vs.effect(clip, 'builtin.stabilize'), isNull);
   }, skip: skip);
 
+  test('user presets through dart:ffi', () {
+    final dir = Directory.systemTemp.createTempSync('vs-presets');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final vs = VStudio.create('ffi-presets', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    vs.initPresets('${dir.path}/presets.json');
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final asset = vs.importMedia(media!);
+    final a = vs.appendClip(track, asset), b = vs.appendClip(track, asset);
+    vs.setEffect([a], 'builtin.chroma_key', {'color': '#00ff00', 'similarity': 0.4});
+    expect(vs.saveStylePreset(a, 'Xanh'), contains('phông xanh'));
+    vs.applyStylePreset([b], 'Xanh');
+    expect(vs.effect(b, 'builtin.chroma_key')?['similarity'], 0.4);
+    expect(vs.undo(), isTrue);
+    expect(vs.effect(b, 'builtin.chroma_key'), isNull);
+    vs.saveExportPreset('Kênh', {'base': 'hd720', 'format': 'hevc', 'fps': 25, 'video_mbps': 6});
+    expect(() => vs.saveExportPreset('Bad', {'base': 'nope'}), throwsA(isA<VStudioException>()));
+    final info = vs.exportPresetInfo(name: 'Kênh');
+    expect((info.fps, info.videoBitrate), (25.0, 6000000));
+    // Kept in the file, for the next session.
+    final again = VStudio.create('ffi-presets-2', width: 640, height: 360);
+    addTearDown(again.dispose);
+    again.initPresets('${dir.path}/presets.json');
+    expect(again.userPresets('style').map((p) => p.name), ['Xanh']);
+    expect(again.userPresets('export').single.summary, contains('H.265'));
+  }, skip: skip);
+
   test('a sticker follows the video below through dart:ffi', () {
     final vs = VStudio.create('ffi-follow', width: 640, height: 360);
     addTearDown(vs.dispose);

@@ -15,6 +15,7 @@
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/clip_tools.hpp"
 #include "vstudio/speed_curve.hpp"
+#include "vstudio/user_presets.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
@@ -190,6 +191,8 @@ struct vs_session {
     std::mutex toolMu;
     std::string toolError;
     std::function<void(Editor&)> toolApply;
+    // User presets (user_presets.hpp); in memory until "presets_init" names the file.
+    std::unique_ptr<presets::UserPresetStore> userPresets = std::make_unique<presets::UserPresetStore>("");
     // Declared last: destroyed first, so a running job never outlives what it uses.
     std::unique_ptr<JobScheduler> toolJobs;
 };
@@ -1898,6 +1901,65 @@ Json toolCommand(vs_session* s, const Json& in) {
         const Json params = in.value("params", Json());
         ed.setClipEffect(idList(in.at("clips")), in.at("type").get<std::string>(), params, false,
                          params.is_null() ? "Remove effect" : "Effect");
+    } else if (cmd == "presets_init") {
+        s->userPresets = std::make_unique<presets::UserPresetStore>(in.at("path").get<std::string>());
+    } else if (cmd == "user_presets") {
+        const std::string kind = in.at("kind").get<std::string>();
+        Json arr = Json::array();
+        for (const auto& p : s->userPresets->list(kind)) {
+            std::string summary;
+            if (kind == presets::kStyle) summary = presets::describeStyle(p.data);
+            else if (auto e = presets::userExportFromJson(p.data)) summary = presets::describeExport(*e);
+            arr.push_back({{"name", p.name}, {"saved", p.saved}, {"summary", summary}, {"data", p.data}});
+        }
+        out["presets"] = std::move(arr);
+    } else if (cmd == "save_style_preset") {
+        const Json style = presets::captureStyle(clip());
+        std::string err;
+        if (!s->userPresets->put(presets::kStyle, in.at("name").get<std::string>(), style, &err)) throw std::runtime_error(err);
+        out["summary"] = presets::describeStyle(style);
+    } else if (cmd == "apply_style_preset") {
+        const presets::UserPreset* p = s->userPresets->find(presets::kStyle, in.at("name").get<std::string>());
+        if (!p) throw std::runtime_error("preset not found");
+        ed.applyClipStyle(idList(in.at("clips")), p->data, "Preset: " + p->name);
+    } else if (cmd == "save_export_preset") {
+        std::string err;
+        const auto e = presets::userExportFromJson(in.at("data"), &err);
+        if (!e) throw std::runtime_error(err);
+        if (!s->userPresets->put(presets::kExport, in.at("name").get<std::string>(), presets::toJson(*e), &err))
+            throw std::runtime_error(err);
+    } else if (cmd == "remove_preset" || cmd == "rename_preset") {
+        std::string err;
+        const std::string kind = in.at("kind").get<std::string>();
+        const bool ok = cmd == "remove_preset"
+                            ? s->userPresets->remove(kind, in.at("name").get<std::string>(), &err)
+                            : s->userPresets->rename(kind, in.at("from").get<std::string>(), in.at("to").get<std::string>(), &err);
+        if (!ok) throw std::runtime_error(err);
+    } else if (cmd == "export_preset_info") {  // {data} or {name}: what an export with it gives
+        Json data = in.value("data", Json());
+        if (in.contains("name")) {
+            const presets::UserPreset* p = s->userPresets->find(presets::kExport, in["name"].get<std::string>());
+            if (!p) throw std::runtime_error("preset not found");
+            data = p->data;
+        }
+        std::string err;
+        const auto e = presets::userExportFromJson(data, &err);
+        if (!e) throw std::runtime_error(err);
+        const ExportSettings es = presets::exportSettingsFor(ed.project(), *e);
+        out["width"] = es.width;
+        out["height"] = es.height;
+        out["fps"] = static_cast<double>(es.fps.num) / es.fps.den;
+        out["video_bitrate"] = es.videoBitrate;
+        out["audio"] = es.includeAudio;
+        out["estimated_bytes"] = estimateExportBytes(es, ed.project().duration().seconds());
+        out["summary"] = presets::describeExport(*e);
+    } else if (cmd == "export_user_preset") {  // {name, path}: starts the export (vs_export_status as usual)
+        const presets::UserPreset* p = s->userPresets->find(presets::kExport, in.at("name").get<std::string>());
+        if (!p) throw std::runtime_error("preset not found");
+        std::string err;
+        const auto e = presets::userExportFromJson(p->data, &err);
+        if (!e) throw std::runtime_error(err);
+        startExport(s, in.at("path").get<std::string>().c_str(), presets::exportSettingsFor(ed.project(), *e));
     } else if (cmd == "effect") {
         const Json* p = effectOf(clip(), in.at("type").get<std::string>());
         out["params"] = p ? *p : Json();

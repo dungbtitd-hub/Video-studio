@@ -11,6 +11,7 @@
 #include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/project_io.hpp"
+#include "vstudio/user_presets.hpp"
 
 namespace vstudio {
 
@@ -696,6 +697,26 @@ void Editor::setClipEffect(const std::vector<Id>& clipIds, const std::string& ty
             if (!first && !fx.is_null()) kept.push_back(fx);
             clip->effects = std::move(kept);
         }
+    });
+}
+
+void Editor::applyClipStyle(const std::vector<Id>& clipIds, const Json& style, const std::string& label) {
+    if (clipIds.empty()) throw EditError("no clip selected");
+    if (!style.is_object() || !style.contains("effects") || !style["effects"].is_array()) throw EditError("not a style preset");
+    std::vector<Id> tracks;
+    for (const Id& c : clipIds) {
+        const Track* t = project_.trackOfClip(c);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked: " + t->name);
+        if (t->findClip(c)->generated()) throw EditError("presets apply to video and photo clips");
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    // Ids are made here, not inside the command, so redo gives the same project.
+    std::map<Id, Json> next;
+    for (const Id& c : clipIds)
+        next[c] = presets::applyStyle(project_.findClip(c)->effects, style, [] { return newId(); });
+    run(label, EditCommand::Scope::Tracks, tracks, [next](Project& p) {
+        for (const auto& [id, fx] : next) p.trackOfClip(id)->findClip(id)->effects = fx;
     });
 }
 

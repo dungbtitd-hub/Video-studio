@@ -142,6 +142,22 @@ int main(void) {
         r = vs_tool_command(s, "{\"cmd\":\"job_status\"}");
         EXPECT(r && strstr(r, "\"status\":0"));
         vs_free(r);
+        /* User presets: in memory until presets_init; bad data is refused. */
+        r = vs_tool_command(s, "{\"cmd\":\"save_export_preset\",\"name\":\"Mine\",\"data\":{\"base\":\"hd720\",\"format\":\"hevc\",\"fps\":25}}");
+        EXPECT(r && strstr(r, "\"ok\":true"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"user_presets\",\"kind\":\"export\"}");
+        EXPECT(r && strstr(r, "\"Mine\"") && strstr(r, "25 khung"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"export_preset_info\",\"name\":\"Mine\"}");
+        EXPECT(r && strstr(r, "\"fps\":25"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"save_export_preset\",\"name\":\"Bad\",\"data\":{\"base\":\"nope\"}}");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
+        r = vs_tool_command(s, "{\"cmd\":\"apply_style_preset\",\"clips\":[],\"name\":\"nope\"}");
+        EXPECT(r && strstr(r, "\"ok\":false"));
+        vs_free(r);
         r = vs_tool_command(s, "{\"cmd\":\"start\",\"job\":\"follow\",\"clip\":\"nope\"}");
         EXPECT(r && strstr(r, "\"ok\":false"));
         vs_free(r);

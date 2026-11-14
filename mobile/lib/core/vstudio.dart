@@ -76,6 +76,30 @@ class ExportPresetView {
   final double fps;
 }
 
+/// A preset the user saved (FR-018, FR-022): kind "style" (colour and effects) or "export".
+class UserPresetView {
+  UserPresetView.fromJson(Map<String, dynamic> j)
+      : name = j['name'] as String,
+        summary = (j['summary'] ?? '') as String,
+        data = (j['data'] as Map<String, dynamic>?) ?? const {};
+  final String name, summary;
+  final Map<String, dynamic> data;
+}
+
+/// What exporting with an export preset gives this project.
+class ExportInfo {
+  ExportInfo.fromJson(Map<String, dynamic> j)
+      : width = j['width'] as int,
+        height = j['height'] as int,
+        fps = (j['fps'] as num).toDouble(),
+        videoBitrate = j['video_bitrate'] as int,
+        estimatedBytes = j['estimated_bytes'] as int,
+        summary = j['summary'] as String;
+  final int width, height, videoBitrate, estimatedBytes;
+  final double fps;
+  final String summary;
+}
+
 class ExportFormatView {
   ExportFormatView.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -1112,6 +1136,33 @@ class VStudio {
   /// [atSeconds] to its end (x/y keys, and scale with [size]); applied by [toolJobStatus], one undo step.
   void startFollow(String clipId, double atSeconds, {bool size = false}) =>
       tool({'cmd': 'start', 'job': 'follow', 'clip': clipId, 'at': secondsToTicks(atSeconds), 'size': size});
+
+  // ---- user presets (core user_presets.hpp), one file shared by every project ----
+
+  /// Where the presets live; until then they are kept in memory only.
+  void initPresets(String path) => tool({'cmd': 'presets_init', 'path': path});
+
+  List<UserPresetView> userPresets(String kind) => [
+        for (final p in (tool({'cmd': 'user_presets', 'kind': kind})['presets'] as List).cast<Map<String, dynamic>>())
+          UserPresetView.fromJson(p)
+      ];
+
+  /// Saves [clipId]'s colour and effects as [name]; returns the summary.
+  String saveStylePreset(String clipId, String name) =>
+      tool({'cmd': 'save_style_preset', 'clip': clipId, 'name': name})['summary'] as String;
+  void applyStylePreset(List<String> clipIds, String name) =>
+      tool({'cmd': 'apply_style_preset', 'clips': clipIds, 'name': name});
+
+  /// [data]: base (quality id), format, fps?, video_mbps?, audio_kbps?, audio?
+  void saveExportPreset(String name, Map<String, dynamic> data) =>
+      tool({'cmd': 'save_export_preset', 'name': name, 'data': data});
+  void removePreset(String kind, String name) => tool({'cmd': 'remove_preset', 'kind': kind, 'name': name});
+  void renamePreset(String kind, String from, String to) =>
+      tool({'cmd': 'rename_preset', 'kind': kind, 'from': from, 'to': to});
+  ExportInfo exportPresetInfo({String? name, Map<String, dynamic>? data}) =>
+      ExportInfo.fromJson(tool({'cmd': 'export_preset_info', if (name != null) 'name': name, if (data != null) 'data': data}));
+  void startExportUserPreset(String outPath, String name) =>
+      tool({'cmd': 'export_user_preset', 'name': name, 'path': outPath});
 
   /// (status, progress, error): 1 running, 2 done (applied, one undo step), -1 failed, -2 cancelled.
   (int, double, String) toolJobStatus() {

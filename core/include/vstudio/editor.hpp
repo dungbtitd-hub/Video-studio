@@ -145,6 +145,10 @@ public:
     void setClipEffect(const std::vector<Id>& clipIds, const std::string& type, const Json& params, bool first = false,
                        const std::string& label = "Set effect");
     void setClipLook(const std::vector<Id>& clipIds, const std::string& lookId, double strength = 1.0);
+    // A saved style (user_presets.hpp captureStyle) on one or many media clips, as one undo step:
+    // replaces their colour space, grade, look, LUT, key and video/plugin effects; covers,
+    // stabilisation and sound stay. Text, stickers and clips on locked tracks are refused.
+    void applyClipStyle(const std::vector<Id>& clipIds, const Json& style, const std::string& label = "Apply preset");
     // Log/HDR footage -> Rec.709 (color_space.hpp), always the first effect; "" removes.
     void setClipColorSpace(const std::vector<Id>& clipIds, const std::string& input, double exposure = 0.0);
     // 3D LUT (.cube); `path` absolute or relative to the project's media folder; "" removes.

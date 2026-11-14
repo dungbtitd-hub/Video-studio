@@ -28,6 +28,7 @@
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
 #include "vstudio/scheduler.hpp"
+#include "vstudio/user_presets.hpp"
 
 class AudioOutput;
 class TranslationClient;
@@ -329,6 +330,20 @@ public:
     [[nodiscard]] QStringList favorites(const QString& category) const;
     void setFavoritesFile(const QString& file);  // tests
 
+    // ---- user presets (vstudio/user_presets.hpp): named styles and export settings ----
+    // kind "style" or "export": name, summary, saved (unix s), data; newest first.
+    [[nodiscard]] QVariantList userPresets(const QString& kind) const;
+    bool saveStylePreset(const QString& clipId, const QString& name);  // the clip's colour and effects
+    void applyStylePreset(const QStringList& clipIds, const QString& name);  // one undo step
+    // data: base (quality id), format, fps, video_mbps, audio_kbps, audio (0 = automatic).
+    bool saveExportPreset(const QString& name, const QVariantMap& data);
+    bool removeUserPreset(const QString& kind, const QString& name);
+    bool renameUserPreset(const QString& kind, const QString& from, const QString& to);
+    // What exporting with `data` gives this project: width, height, fps, bitrate, estimatedBytes, summary.
+    [[nodiscard]] QVariantMap exportPresetInfo(const QVariantMap& data) const;
+    void exportWithUserPreset(const QUrl& file, const QString& name);
+    void setUserPresetsFile(const QString& file);  // tests
+
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }
@@ -371,6 +386,7 @@ signals:
     void translationFinished(bool ok, const QString& message);
     void toolsChanged();      // noise analysis, stabilisation or voice-over state changed
     void favoritesChanged();
+    void userPresetsChanged();
 
 private:
     template <class F>
@@ -449,4 +465,7 @@ private:
     std::vector<vstudio::plugins::PluginEffect> pluginEffects_;
     QStringList pluginErrors_;
     vstudio::cliptools::Favorites& favoriteStore() const;
+    mutable std::unique_ptr<vstudio::presets::UserPresetStore> userPresets_;
+    QString userPresetsFile_;
+    vstudio::presets::UserPresetStore& presetStore() const;
 };
