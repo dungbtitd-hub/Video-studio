@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Video Studio
+GenericName=Video Editor
+Comment=Offline video editor
+Comment[vi]=Trình dựng video offline
+Exec=VideoStudio %F
+Icon=videostudio
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=video/mp4;video/quicktime;video/x-matroska;video/webm;

@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/app">
+    <file alias="videostudio.png">../../packaging/icons/videostudio.png</file>
+  </qresource>
+</RCC>

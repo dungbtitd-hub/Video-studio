@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QElapsedTimer>
 #include <QRegularExpression>
 #include <QTimer>
@@ -58,6 +59,8 @@ void runTimelineBench(EditorController& editor, MainWindow& win, int clips) {
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Video Studio");
+    QApplication::setApplicationVersion(QStringLiteral(VSTUDIO_VERSION));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/app/videostudio.png")));
     app.setStyleSheet(Theme::styleSheet());
 
     EditorController editor;

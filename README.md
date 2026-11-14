@@ -15,6 +15,7 @@ Hai nguyên tắc của mã nguồn:
 | [docs/p0-status.md](docs/p0-status.md) | tiến độ P0 và cách build/chạy |
 | [docs/benchmarks/](docs/benchmarks/) | số đo hiệu năng |
 | [mobile/README.md](mobile/README.md) | ứng dụng Flutter |
+| [packaging/README.md](packaging/README.md) | đóng gói bản cài cho Windows, macOS, Linux, Android, iOS |
 
 ## Build nhanh
 

@@ -3,7 +3,9 @@ cmake_minimum_required(VERSION 3.21)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 endif()
-project(VideoStudio VERSION 0.1.0 LANGUAGES C CXX)
+# Release builds pass -DVSTUDIO_RELEASE_VERSION=x.y.z (from the git tag).
+set(VSTUDIO_RELEASE_VERSION "0.9.0" CACHE STRING "Version of the app")
+project(VideoStudio VERSION ${VSTUDIO_RELEASE_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,4 +88,23 @@ endif()
 
 if(VSTUDIO_BUILD_DESKTOP)
   add_subdirectory(desktop)
+endif()
+
+# ---- release packages (cpack): .deb + .tar.gz on Linux; Windows and macOS are
+# packaged by .github/workflows/release.yml (NSIS installer, .dmg). See packaging/README.md.
+if(VSTUDIO_BUILD_DESKTOP)
+  set(CPACK_PACKAGE_NAME "videostudio")
+  set(CPACK_PACKAGE_VENDOR "ITD Viet Nam")
+  set(CPACK_PACKAGE_CONTACT "vanthu.itdvn@gmail.com")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Video Studio - offline video editor")
+  set(CPACK_PACKAGE_HOMEPAGE_URL "https://itdvietnam.com.vn")
+  set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+  set(CPACK_STRIP_FILES ON)
+  if(UNIX AND NOT APPLE)
+    set(CPACK_GENERATOR "DEB;TGZ")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)  # depends on the distribution's Qt and FFmpeg packages
+    set(CPACK_DEBIAN_PACKAGE_SECTION "video")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+  endif()
+  include(CPack)
 endif()
