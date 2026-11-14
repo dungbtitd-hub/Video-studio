@@ -278,6 +278,25 @@ int main(void) {
     vs_free(refused);
     remove("capi_test.vstudiopkg");
 
+    /* Recent projects: a save writes the card, the start screen lists it, the recent list orders it. */
+    EXPECT(vs_save(s, "capi_test_recent/Recent.vstudio") == 0);
+    char* cards = vs_recent_projects_json(NULL, "capi_test_recent", 1, 10, NULL);
+    EXPECT(cards && strstr(cards, "Recent.vstudio") && strstr(cards, "\"exported\":false"));
+    vs_free(cards);
+    cards = vs_recent_projects_json(NULL, "capi_test_recent", 1, 10, "capi_test_recent/Recent.vstudio");
+    EXPECT(cards && strcmp(cards, "[]") == 0); /* the open project is left out */
+    vs_free(cards);
+    EXPECT(vs_recent_touch("capi_test_recent/recent.json", "capi_test_recent/Recent.vstudio") == 0);
+    cards = vs_recent_projects_json("capi_test_recent/recent.json", NULL, 0, 10, NULL);
+    EXPECT(cards && strstr(cards, "Recent.vstudio"));
+    vs_free(cards);
+    EXPECT(vs_recent_remove("capi_test_recent/recent.json", "capi_test_recent/Recent.vstudio") == 0);
+    cards = vs_recent_projects_json("capi_test_recent/recent.json", NULL, 0, 10, NULL);
+    EXPECT(cards && strcmp(cards, "[]") == 0);
+    vs_free(cards);
+    int pw = 0, ph = 0;
+    EXPECT(vs_project_poster("capi_test_recent/nothing.vstudio", NULL, 0, &pw, &ph) == 0);
+
     vs_free(v);
     vs_session_destroy(s);
     puts("capi: all checks passed");

@@ -19,6 +19,7 @@ qt_add_executable(main_window_tests
   ../widgets/TextPanel.cpp ../widgets/TextPanel.h
   ../widgets/StickerPanel.cpp ../widgets/StickerPanel.h
   ../widgets/OverlayPanel.cpp ../widgets/OverlayPanel.h
+  ../widgets/RecentStrip.cpp ../widgets/RecentStrip.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )

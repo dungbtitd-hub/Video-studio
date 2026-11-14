@@ -1894,3 +1894,78 @@ TEST("generated clips: added on an overlay track, rendered, undone, saved") {
     CHECK_EQ(f.ed.project().tracks.size(), tracks - 1);
     CHECK(!f.ed.project().findClip(s1));
 }
+
+// ------------------------------------------------------------------ recent projects
+
+#include "vstudio/recents.hpp"
+
+TEST("recents: cards, posters, unfinished until exported, recent list order") {
+    const auto root = fs::temp_directory_path() / ("vstudio_recent_" + newId());
+    fs::create_directories(root);
+    const std::string a = (root / "Phim A.vstudio").string(), b = (root / "Phim B.vstudio").string();
+    Fixture f;
+    f.ed.insertClip(f.v1, f.asset, sec(0), sec(0), sec(4));
+    saveProject(f.ed.project(), a);
+    VideoFrame frame;
+    frame.allocate(1280, 720);
+    for (std::size_t i = 0; i < frame.rgba.size(); i += 4) {
+        frame.rgba[i] = 200;
+        frame.rgba[i + 3] = 255;
+    }
+    recents::writeCard(a, f.ed.project(), &frame);
+    auto ca = recents::readCard(a);
+    CHECK(ca.has_value());
+    CHECK_EQ(ca->name, std::string("Test"));
+    CHECK_EQ(ca->clips, 1);
+    CHECK_NEAR(ca->duration, 4.0, 1e-6);
+    CHECK_EQ(ca->width, 1280);
+    CHECK(!ca->exported);
+    CHECK(ca->hasPoster);
+    VideoFrame poster;
+    CHECK(recents::readPoster(a, poster));
+    CHECK_EQ(poster.width, 256);  // long side 256, aspect kept
+    CHECK_EQ(poster.height, 144);
+    CHECK_EQ(int(poster.rgba[0]), 200);
+    // Exported: no longer unfinished, until the content changes again.
+    recents::markExported(a, f.ed.project());
+    CHECK(recents::readCard(a)->exported);
+    saveProject(f.ed.project(), a);  // saving the same content (new timestamps) keeps it exported
+    recents::writeCard(a, f.ed.project());
+    CHECK(recents::readCard(a)->exported);
+    CHECK(recents::readCard(a)->hasPoster);  // no frame given: the old poster stays
+    f.ed.insertClip(f.v1, f.asset, sec(4), sec(0), sec(2));
+    saveProject(f.ed.project(), a);
+    recents::writeCard(a, f.ed.project());
+    CHECK(!recents::readCard(a)->exported);
+    CHECK_NEAR(recents::readCard(a)->duration, 6.0, 1e-6);
+    // A package saved before cards existed is still listed (read from project.json), without a poster.
+    saveProject(Editor::newProject("Cũ", 1080, 1920, {30, 1}, "test"), b);
+    auto cb = recents::readCard(b);
+    CHECK(cb.has_value());
+    CHECK_EQ(cb->name, std::string("Cũ"));
+    CHECK(!cb->hasPoster && !cb->exported);
+    CHECK(!recents::readPoster(b, poster));
+    CHECK(!recents::readCard((root / "nothing.vstudio").string()).has_value());
+    // Scanning a folder finds both; the open project and exported ones can be left out.
+    CHECK_EQ(recents::scanFolder(root.string()).size(), std::size_t(2));
+    CHECK_EQ(recents::startCards("", root.string(), true, 10, b).size(), std::size_t(1));
+    recents::markExported(a, f.ed.project());
+    CHECK_EQ(recents::startCards("", root.string(), true, 10).size(), std::size_t(1));
+    CHECK_EQ(recents::startCards("", root.string(), false, 10).size(), std::size_t(2));
+    // The recent list: newest first, no duplicates, missing packages drop out.
+    const std::string list = (root / "recent.json").string();
+    recents::RecentList rl(list);
+    rl.touch(a);
+    rl.touch(b);
+    rl.touch(a);
+    CHECK_EQ(rl.paths().size(), std::size_t(2));
+    CHECK_EQ(rl.paths()[0], a);
+    CHECK_EQ(recents::startCards(list, root.string(), false, 10).size(), std::size_t(2));  // de-duplicated
+    fs::remove_all(b);
+    CHECK_EQ(rl.paths().size(), std::size_t(1));
+    rl.remove(a);
+    CHECK(rl.paths().empty());
+    for (int i = 0; i < 40; ++i) rl.touch(a);
+    CHECK(rl.paths().size() <= recents::RecentList::kMax);
+    fs::remove_all(root);
+}

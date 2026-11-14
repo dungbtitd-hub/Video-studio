@@ -32,6 +32,7 @@
 #include "TextPanel.h"
 #include "StickerPanel.h"
 #include "OverlayPanel.h"
+#include "RecentStrip.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -301,9 +302,28 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("state").toByteArray());
 
+    // Unfinished projects slide up at the bottom on start; they slide away once work begins.
+    recent_ = new RecentStrip(this);
+    connect(recent_, &RecentStrip::openRequested, this, [this](const QString& path) {
+        if (!confirmDiscard()) return;
+        recent_->slideOut();
+        editor_->openProject(QUrl::fromLocalFile(path));
+    });
+    connect(recent_, &RecentStrip::forgetRequested, this, [this](const QString& path) {
+        editor_->forgetRecent(path);
+        showRecentProjects();
+    });
+    connect(recent_, &RecentStrip::browseRequested, this, [this] {
+        if (!confirmDiscard()) return;
+        const QString d = QFileDialog::getExistingDirectory(this, "Mở project (.vstudio)");
+        if (d.isEmpty()) return;
+        recent_->slideOut();
+        editor_->openProject(QUrl::fromLocalFile(d));
+    });
     connect(editor_, &EditorController::projectChanged, this, [this] {
         refreshAssets();
         refreshState();
+        if (recent_->shown() && editor_->dirty()) recent_->slideOut();  // editing started
     });
     connect(editor_, &EditorController::playheadChanged, this, &MainWindow::refreshState);
     connect(editor_, &EditorController::playingChanged, this, &MainWindow::refreshState);
@@ -647,6 +667,17 @@ void MainWindow::saveLayout() const {
 void MainWindow::resetLayout() {
     restoreState(defaultState_);
     for (QDockWidget* d : findChildren<QDockWidget*>()) d->show();
+}
+
+void MainWindow::showRecentProjects() {
+    recent_->setCards(editor_->recentProjects(true, 12), &EditorController::projectPoster);
+    if (recent_->cardCount() > 0) recent_->slideIn();
+    else recent_->slideOut();
+}
+
+void MainWindow::resizeEvent(QResizeEvent* e) {
+    QMainWindow::resizeEvent(e);
+    if (recent_) recent_->place();
 }
 
 void MainWindow::closeEvent(QCloseEvent* e) {

@@ -189,6 +189,10 @@ class VStudioBindings {
         stickerIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_sticker_icon'),
         overlaysJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_overlays_json'),
+        recentProjectsJson = lib.lookupFunction<CStr Function(CStr, CStr, Int32, Int32, CStr),
+            CStr Function(CStr, CStr, int, int, CStr)>('vs_recent_projects_json'),
+        projectPoster = lib.lookupFunction<Int32 Function(CStr, Pointer<Uint8>, Int64, Pointer<Int32>, Pointer<Int32>),
+            int Function(CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>)>('vs_project_poster'),
         defaultOverlayJson = lib.lookupFunction<CStr Function(CStr), CStr Function(CStr)>('vs_default_overlay_json'),
         overlayIcon = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_overlay_icon'),
@@ -309,6 +313,8 @@ class VStudioBindings {
   final int Function(CStr, double, Pointer<Uint8>, int, int) stickerIcon;
   final int Function(CStr, double, double, Pointer<Uint8>, int, int) contentPreview;
   final CStr Function() overlaysJson;
+  final CStr Function(CStr, CStr, int, int, CStr) recentProjectsJson;
+  final int Function(CStr, Pointer<Uint8>, int, Pointer<Int32>, Pointer<Int32>) projectPoster;
   final CStr Function(CStr) defaultOverlayJson;
   final int Function(CStr, double, Pointer<Uint8>, int, int) overlayIcon;
   final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) setOverlayRegion;

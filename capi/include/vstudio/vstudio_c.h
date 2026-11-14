@@ -268,6 +268,22 @@ VS_API char* vs_transfer_pack(vs_session* s, const char* out_file, vs_transfer_p
 VS_API char* vs_transfer_unpack(const char* package_file, const char* dest_root, vs_transfer_progress progress,
                                 void* user);
 
+/* ---- recent projects (the start screen's "continue" strip) ----
+ * vs_save also writes a small card (name, length, clips) and a poster of the current preview frame into
+ * the package, and a successful export marks the exported content, so these calls are instant: they read
+ * small files only, never media. Session-free.
+ * vs_recent_projects_json: [{"path","name","savedAt" (unix s),"duration" (s),"clips","width","height",
+ * "exported","hasPoster"}] from the recent-list file and/or every package in scan_dir (either may be NULL),
+ * newest first. unfinished_only keeps projects changed since their last export; exclude (the open project,
+ * may be NULL) is left out.
+ * vs_recent_touch / vs_recent_remove: put a package first in / take it out of the recent-list file.
+ * vs_project_poster: the poster as RGBA8. 1 = copied (dst NULL: only sizes), 0 = none, -1 = dst too small. */
+VS_API char* vs_recent_projects_json(const char* recent_file, const char* scan_dir, int unfinished_only, int max,
+                                     const char* exclude);
+VS_API int vs_recent_touch(const char* recent_file, const char* package_dir);
+VS_API int vs_recent_remove(const char* recent_file, const char* package_dir);
+VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacity, int* width, int* height);
+
 #ifdef __cplusplus
 }
 #endif

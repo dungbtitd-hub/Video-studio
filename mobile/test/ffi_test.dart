@@ -10,6 +10,7 @@ import 'package:video_studio/core/transfer.dart';
 import 'package:video_studio/core/vstudio.dart';
 import 'package:video_studio/ui/cover_panel.dart';
 import 'package:video_studio/ui/looks_sheet.dart';
+import 'package:video_studio/ui/recent_strip.dart';
 import 'package:video_studio/ui/transition_sheet.dart';
 import 'package:video_studio/core/project_model.dart';
 
@@ -504,4 +505,45 @@ void main() {
     expect(tester.takeException(), isNull); // no overflow at phone width
     await tester.pumpWidget(const SizedBox()); // stops the preview timer
   }, skip: (skip ?? (media == null ? 'VSTUDIO_TEST_MEDIA not set' : null)) != null);
+
+  testWidgets('recent projects: saved ones slide up at the bottom, a tap opens one', (tester) async {
+    final tmp = Directory.systemTemp.createTempSync('vs_recent');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    for (final name in ['Du lịch', 'Sinh nhật']) {
+      final vs = VStudio.create(name, width: 640, height: 360);
+      vs.save('${tmp.path}/$name.vstudio');
+      vs.dispose();
+    }
+    var cards = VStudio.recentProjects(tmp.path);
+    expect(cards.map((c) => c.name).toSet(), {'Du lịch', 'Sinh nhật'});
+    expect(cards.every((c) => !c.exported && c.width == 640), isTrue);
+    cards = VStudio.recentProjects(tmp.path, exclude: '${tmp.path}/Du lịch.vstudio');
+    expect(cards.single.name, 'Sinh nhật');
+    expect(VStudio.projectPoster('${tmp.path}/nothing.vstudio'), isNull);
+
+    ProjectCard? opened;
+    var shown = true;
+    Widget strip() => MaterialApp(
+        home: Scaffold(
+            body: Align(
+                alignment: Alignment.bottomCenter,
+                child: RecentStrip(
+                    cards: VStudio.recentProjects(tmp.path),
+                    shown: shown,
+                    onOpen: (c) => opened = c,
+                    onClose: () => shown = false,
+                    onAll: () {}))));
+    await tester.pumpWidget(strip());
+    await tester.pumpAndSettle();
+    expect(find.text('Tiếp tục dự án chưa xong (2)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('recent-Sinh nhật')));
+    expect(opened?.name, 'Sinh nhật');
+    await tester.tap(find.byKey(const Key('recent-close')));
+    await tester.pumpWidget(strip());
+    await tester.pumpAndSettle();
+    final fade = tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity));
+    expect(fade.opacity, 0); // slid away
+    expect(agoText(DateTime(2026, 1, 1, 10), now: DateTime(2026, 1, 1, 12)), '2 giờ trước');
+    expect(lengthText(83), '1:23');
+  }, skip: skip != null);
 }

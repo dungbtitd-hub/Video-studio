@@ -150,6 +150,34 @@ class OverlayInfo {
   final bool tintable;
 }
 
+/// A saved project as the start screen lists it (read from small files in its package, never media).
+class ProjectCard {
+  ProjectCard(this.path, this.name, this.savedAt, this.duration, this.clips, this.width, this.height,
+      {this.exported = false, this.hasPoster = false});
+  factory ProjectCard.fromJson(Map<String, dynamic> e) => ProjectCard(
+      e['path'] as String,
+      e['name'] as String,
+      DateTime.fromMillisecondsSinceEpoch(((e['savedAt'] ?? 0) as num).toInt() * 1000),
+      ((e['duration'] ?? 0) as num).toDouble(),
+      ((e['clips'] ?? 0) as num).toInt(),
+      ((e['width'] ?? 0) as num).toInt(),
+      ((e['height'] ?? 0) as num).toInt(),
+      exported: e['exported'] == true,
+      hasPoster: e['hasPoster'] == true);
+  final String path, name;
+  final DateTime savedAt;
+  final double duration;
+  final int clips, width, height;
+  final bool exported, hasPoster;
+}
+
+/// A project's poster: RGBA8 pixels.
+class PosterImage {
+  PosterImage(this.width, this.height, this.rgba);
+  final int width, height;
+  final Uint8List rgba;
+}
+
 /// Catalogs for the text and sticker tools (fixed for the app's lifetime).
 class TextCatalog {
   TextCatalog(this.fonts, this.animations, this.loops, this.presets, this.stickers);
@@ -209,6 +237,29 @@ class VStudio {
   }
 
   String get version => _b.version().toDartString();
+
+  /// Projects in [folder], newest first; [unfinishedOnly] keeps those changed since their last export,
+  /// [exclude] (the open project) is left out. Instant: reads each package's small card file.
+  static List<ProjectCard> recentProjects(String folder, {bool unfinishedOnly = true, int max = 12, String? exclude}) =>
+      using((a) {
+        final p = _bindings.recentProjectsJson(nullptr, folder.toNativeUtf8(allocator: a), unfinishedOnly ? 1 : 0, max,
+            exclude == null ? nullptr : exclude.toNativeUtf8(allocator: a));
+        if (p == nullptr) return <ProjectCard>[];
+        final json = p.toDartString();
+        _bindings.free(p.cast());
+        return [for (final e in (jsonDecode(json) as List).cast<Map<String, dynamic>>()) ProjectCard.fromJson(e)];
+      });
+
+  /// The small picture saved with a project, or null.
+  static PosterImage? projectPoster(String packageDir) => using((a) {
+        final dir = packageDir.toNativeUtf8(allocator: a);
+        final w = a<Int32>(), h = a<Int32>();
+        if (_bindings.projectPoster(dir, nullptr, 0, w, h) != 1) return null;
+        final n = w.value * h.value * 4;
+        final buf = a<Uint8>(n);
+        if (_bindings.projectPoster(dir, buf, n, w, h) != 1) return null;
+        return PosterImage(w.value, h.value, Uint8List.fromList(buf.asTypedList(n)));
+      });
 
   String _take(Pointer<Utf8> p) {
     if (p == nullptr) throw VStudioException(_b.lastError(_s).toDartString());

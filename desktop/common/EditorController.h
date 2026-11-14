@@ -62,6 +62,15 @@ public:
     Q_INVOKABLE void newProject(const QString& name, int width, int height, int fps);
     Q_INVOKABLE void openProject(const QUrl& folder);
     Q_INVOKABLE void saveProject(const QUrl& folder);
+    // Recent projects for the start strip (recents.hpp): newest first, the open project left out.
+    // Each: {path, name, savedAt (unix s), duration (s), clips, width, height, exported, hasPoster}.
+    QVariantList recentProjects(bool unfinishedOnly, int max = 12) const;
+    static QImage projectPoster(const QString& packageDir);
+    void forgetRecent(const QString& packageDir);
+    // The recent-list file (app data folder by default; tests point it elsewhere).
+    void setRecentFile(const QString& file) { recentFile_ = file; }
+    [[nodiscard]] QString recentFile() const;
+    [[nodiscard]] QString packageDir() const { return packageDir_; }
     Q_INVOKABLE void importMedia(const QList<QUrl>& files, bool appendToTimeline = false);
     Q_INVOKABLE void addToTimeline(const QString& assetId);
     Q_INVOKABLE void splitAtPlayhead();
@@ -267,6 +276,8 @@ private:
     std::unique_ptr<AudioOutput> audio_;
     int previewW_ = 960, previewH_ = 540;
     QString packageDir_;
+    QString recentFile_;
+    std::shared_ptr<const vstudio::VideoFrame> lastFrame_;  // poster for the project's card at save
     std::shared_ptr<const vstudio::Project> snapshot_;
     mutable QVariantList assets_, tracks_;
     mutable bool assetsDirty_ = true, tracksDirty_ = true;

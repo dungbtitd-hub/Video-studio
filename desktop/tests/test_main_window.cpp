@@ -31,6 +31,7 @@
 #include "StickerPanel.h"
 #include "OverlayPanel.h"
 #include "TextPanel.h"
+#include "RecentStrip.h"
 #include <QPlainTextEdit>
 #include <QMimeData>
 
@@ -491,6 +492,45 @@ private slots:
         // Everything undoes back to before.
         while (int(ctrl_->project()->tracks.size()) > tracksBefore) ctrl_->undo();
         QVERIFY(!ctrl_->project()->findClip(text.toStdString()));
+    }
+
+    void recentProjectsStrip() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        ctrl_->setRecentFile(dir.filePath("recent.json"));
+        // Nothing saved yet: no strip.
+        win_->showRecentProjects();
+        QVERIFY(!win_->recentStrip()->shown());
+        // Two saved projects, then a new one open: both are listed, newest first, with a poster.
+        ctrl_->saveProject(QUrl::fromLocalFile(dir.filePath("A.vstudio")));
+        ctrl_->saveProject(QUrl::fromLocalFile(dir.filePath("B.vstudio")));
+        ctrl_->newProject("Mới", 1920, 1080, 30);
+        auto cards = ctrl_->recentProjects(true);
+        QCOMPARE(cards.size(), 2);
+        QVERIFY(cards[0].toMap().value("path").toString().endsWith("B.vstudio"));
+        QCOMPARE(cards[0].toMap().value("clips").toInt(), 6);
+        win_->showRecentProjects();
+        RecentStrip* strip = win_->recentStrip();
+        QVERIFY(strip->shown());
+        QCOMPARE(strip->cardCount(), 2);
+        QTest::qWait(400);  // slid in, at the bottom of the window
+        QVERIFY(strip->isVisible());
+        QVERIFY(strip->geometry().bottom() <= win_->height());
+        QVERIFY(strip->geometry().bottom() > win_->height() - 60);
+        // Clicking a card opens it; the strip slides away; the open project is not listed.
+        emit strip->openRequested(dir.filePath("A.vstudio"));
+        QVERIFY(!strip->shown());
+        QCOMPARE(ctrl_->packageDir(), dir.filePath("A.vstudio"));
+        QTest::qWait(350);
+        QVERIFY(!strip->isVisible());
+        cards = ctrl_->recentProjects(true);
+        QCOMPARE(cards.size(), 1);
+        // Forgetting a project takes it off the list.
+        ctrl_->forgetRecent(dir.filePath("B.vstudio"));
+        QCOMPARE(ctrl_->recentProjects(false).size(), 0);
+        QCOMPARE(RecentStrip::ago(1000, 1030), QString("Vừa xong"));
+        QCOMPARE(RecentStrip::ago(1000, 1000 + 7200), QString("2 giờ trước"));
+        QCOMPARE(RecentStrip::length(83), QString("1:23"));
     }
 
     void layoutResets() {
