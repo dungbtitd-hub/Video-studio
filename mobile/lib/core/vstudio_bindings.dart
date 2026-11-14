@@ -313,7 +313,9 @@ class VStudioBindings {
         missingAssetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
             'vs_missing_assets_json'),
         relinkAsset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
-            int Function(Pointer<VsSession>, CStr, CStr)>('vs_relink_asset');
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_relink_asset'),
+        toolCommand = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+            'vs_tool_command');
 
   final CStr Function() version;
   final int Function() ticksPerSecond;
@@ -457,4 +459,5 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, Pointer<Int8>, int, Pointer<Int32>) waveform;
   final CStr Function(Pointer<VsSession>) missingAssetsJson;
   final int Function(Pointer<VsSession>, CStr, CStr) relinkAsset;
+  final CStr Function(Pointer<VsSession>, CStr) toolCommand;
 }

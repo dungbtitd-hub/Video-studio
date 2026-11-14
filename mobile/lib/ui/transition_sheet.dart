@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../core/project_model.dart';
 import '../core/vstudio.dart';
+import '../core/favorites.dart';
 import 'theme.dart';
 
 class TransitionSheet extends StatefulWidget {
@@ -162,10 +163,13 @@ class _TransitionSheetState extends State<TransitionSheet> {
                   maxCrossAxisExtent: tw + 16.0, mainAxisExtent: th + 26.0, crossAxisSpacing: 4, mainAxisSpacing: 4),
               itemCount: _all.length,
               itemBuilder: (context, i) {
-                final t = _all[i];
+                final t = FavoritesStore.instance.ordered('transition', _all, (TransitionInfo x) => x.id)[i];
                 final on = t.id == _type;
+                final fav = FavoritesStore.instance.contains('transition', t.id);
                 return GestureDetector(
                   key: Key('transition-${t.id}'),
+                  // Long press: add to / remove from favourites (listed first).
+                  onLongPress: () => setState(() => FavoritesStore.instance.toggle('transition', t.id)),
                   onTap: () {
                     setState(() => _type = t.id);
                     widget.onApply(t.id, _seconds);
@@ -181,7 +185,7 @@ class _TransitionSheetState extends State<TransitionSheet> {
                       ),
                       child: _thumbs[t.id] == null ? null : RawImage(image: _thumbs[t.id], fit: BoxFit.cover),
                     ),
-                    Text(t.name,
+                    Text(fav ? '★ ${t.name}' : t.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 10, color: on ? VsColors.fg : VsColors.fg2)),

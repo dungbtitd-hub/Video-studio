@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../core/project_model.dart';
 import '../core/vstudio.dart';
+import '../core/favorites.dart';
 import 'theme.dart';
 
 class LooksSheet extends StatefulWidget {
@@ -110,8 +111,11 @@ class _LooksSheetState extends State<LooksSheet> {
   Widget _tile(String id, String name) {
     final selected = id == _current;
     final img = _previews[id];
+    final fav = id.isNotEmpty && FavoritesStore.instance.contains('look', id);
     return GestureDetector(
       onTap: () => _tap(id),
+      // Long press: add to / remove from favourites (listed first).
+      onLongPress: id.isEmpty ? null : () => setState(() => FavoritesStore.instance.toggle('look', id)),
       child: Container(
         width: tileW + 8.0,
         margin: const EdgeInsets.symmetric(horizontal: 3),
@@ -127,7 +131,7 @@ class _LooksSheetState extends State<LooksSheet> {
             child: img == null ? const ColoredBox(color: VsColors.panel2) : RawImage(image: img, fit: BoxFit.cover),
           ),
           const SizedBox(height: 4),
-          Text(name,
+          Text(fav ? '★ $name' : name,
               maxLines: 2,
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: selected ? VsColors.accent : VsColors.fg2)),
@@ -209,7 +213,7 @@ class _LooksSheetState extends State<LooksSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 8),
               children: [
                 _tile('', 'Gốc'),
-                for (final l in _looks) _tile(l.id, l.name),
+                for (final l in FavoritesStore.instance.ordered('look', _looks, (LookInfo x) => x.id)) _tile(l.id, l.name),
               ],
             ),
           ),

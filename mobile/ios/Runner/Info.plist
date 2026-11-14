@@ -66,6 +66,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Video Studio records voice-over for your video when you tap Thu âm.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Video Studio saves the videos you export to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
