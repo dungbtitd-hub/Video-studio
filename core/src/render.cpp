@@ -404,6 +404,9 @@ std::optional<CompositeLayer> Renderer::clipLayer(const VideoLayer& layer, const
 
 std::optional<CompositeLayer> Renderer::generatedLayer(const Clip& c, Time src, const VideoFrame& out) {
     const std::string kind = c.content.value("kind", std::string{});
+    // Subtitle lines take their look and place from the track.
+    const Json resolved = kind == "subtitle" ? drawnContent(project_, c) : Json();
+    const Json& content = kind == "subtitle" ? resolved : c.content;
     const auto gen = generatorFor(modules_, kind);
     if (!gen) {
         warn("no generator for clip kind: " + kind);
@@ -416,8 +419,8 @@ std::optional<CompositeLayer> Renderer::generatedLayer(const Clip& c, Time src, 
     const vec::Affine place = vec::Affine::translate(out.width / 2.0 + tr.x * k, out.height / 2.0 + tr.y * k) *
                               vec::Affine::scale(tr.scale * k);
     std::string key;
-    if (cache_ && gen->still(c.content, local, length)) {
-        key = "gen|" + c.id + "|" + std::to_string(std::hash<std::string>{}(c.content.dump())) + "|" +
+    if (cache_ && gen->still(content, local, length)) {
+        key = "gen|" + c.id + "|" + std::to_string(std::hash<std::string>{}(content.dump())) + "|" +
               std::to_string(tr.x) + "," + std::to_string(tr.y) + "," + std::to_string(tr.scale) + "|" +
               std::to_string(out.width) + "x" + std::to_string(out.height) + (out.deep() ? "d" : "");
         if (auto hit = cache_->get(key)) {
@@ -429,7 +432,7 @@ std::optional<CompositeLayer> Renderer::generatedLayer(const Clip& c, Time src, 
     auto frame = std::make_shared<VideoFrame>();
     frame->allocate(out.width, out.height, out.format);  // transparent
     frame->pts = out.pts;
-    gen->draw(c.content, local, length, place, *frame);
+    gen->draw(content, local, length, place, *frame);
     std::shared_ptr<const VideoFrame> shared = std::move(frame);
     if (!key.empty()) cache_->put(key, shared);
     Transform t;

@@ -25,6 +25,7 @@
 #include "vstudio/motion.hpp"
 #include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
+#include "vstudio/subtitles.hpp"
 #include "vstudio/text.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
@@ -1112,6 +1113,150 @@ int vs_generated_rect(vs_session* s, const char* clip_id, int64_t t, double* xyw
         }
     });
 }
+
+// ---- subtitles
+
+struct vs_translation {
+    std::unique_ptr<subtitles::TranslationJob> job;
+    std::string error;
+    std::mutex mu;
+};
+
+char* vs_subtitle_styles_json(void) {
+    Json out = Json::array();
+    for (const auto& st : subtitles::subtitleStyles()) out.push_back({{"id", st.id}, {"name", st.name}, {"style", st.style}});
+    return dup(out.dump());
+}
+
+char* vs_subtitle_positions_json(void) {
+    Json out = Json::array();
+    for (const auto& p : subtitles::subtitlePositions()) out.push_back({{"id", p.id}, {"name", p.name}, {"position", p.position}});
+    return dup(out.dump());
+}
+
+char* vs_subtitle_languages_json(void) { return dup(subtitles::languages().dump()); }
+char* vs_translation_providers_json(void) { return dup(subtitles::providerPresets().dump()); }
+
+char* vs_add_subtitle_track(vs_session* s, const char* name, const char* settings_json) {
+    return guardStr(s, [&] {
+        const Json patch = settings_json && *settings_json ? Json::parse(settings_json) : Json::object();
+        const Id id = s->editor->addSubtitleTrack(str(name), patch);
+        s->edited();
+        return id;
+    });
+}
+
+char* vs_add_subtitle(vs_session* s, const char* track_id, int64_t at, const char* text, int64_t duration) {
+    return guardStr(s, [&] {
+        const Time d = duration > 0 ? Time::fromTicks(duration) : Time::fromSeconds(2.0);
+        const Id id = s->editor->addSubtitle(str(track_id), Time::fromTicks(at), str(text), d);
+        s->edited();
+        return id;
+    });
+}
+
+char* vs_import_subtitles(vs_session* s, const char* file_text, const char* name, const char* lang, int64_t offset) {
+    return guardStr(s, [&] {
+        const Id id = s->editor->importSubtitles(subtitles::parseAny(str(file_text)), str(name), str(lang),
+                                                 Time::fromTicks(offset));
+        s->edited();
+        return id;
+    });
+}
+
+char* vs_export_subtitles(vs_session* s, const char* track_id, const char* format) {
+    return guardStr(s, [&] {
+        const Track* t = s->editor->project().findTrack(str(track_id));
+        if (!t || !subtitles::isSubtitleTrack(*t)) throw std::runtime_error("not a subtitle track");
+        const auto cues = subtitles::cuesOf(*t);
+        return str(format) == "vtt" ? subtitles::toVtt(cues) : subtitles::toSrt(cues);
+    });
+}
+
+int vs_set_subtitle_settings(vs_session* s, const char* track_id, const char* patch_json) {
+    return guard(s, [&] {
+        s->editor->setSubtitleSettings(str(track_id), Json::parse(str(patch_json)));
+        s->edited();
+    });
+}
+
+int vs_shift_subtitles(vs_session* s, const char* track_id, int64_t delta) {
+    return guard(s, [&] {
+        s->editor->shiftSubtitles(str(track_id), Time::fromTicks(delta));
+        s->edited();
+    });
+}
+
+vs_translation* vs_translation_begin(vs_session* s, const char* track_id, const char* config_json, const char* from,
+                                     const char* to, const char* notes, int batch_size) {
+    if (!s) return nullptr;
+    try {
+        const Track* t = s->editor->project().findTrack(str(track_id));
+        if (!t || !subtitles::isSubtitleTrack(*t)) throw std::runtime_error("not a subtitle track");
+        if (str(to).empty()) throw std::runtime_error("Chưa chọn ngôn ngữ đích");
+        auto h = std::make_unique<vs_translation>();
+        h->job = std::make_unique<subtitles::TranslationJob>(*t, Json::parse(str(config_json)), str(from), str(to),
+                                                            str(notes), batch_size > 0 ? batch_size : 40);
+        s->error.clear();
+        return h.release();
+    } catch (const std::exception& e) {
+        s->error = e.what();
+        return nullptr;
+    }
+}
+
+int vs_translation_count(vs_translation* t) { return t ? static_cast<int>(t->job->batchCount()) : 0; }
+
+int vs_translation_done(vs_translation* t) {
+    if (!t) return 0;
+    std::lock_guard lock(t->mu);
+    return static_cast<int>(t->job->doneCount());
+}
+
+char* vs_translation_request_json(vs_translation* t, int index) {
+    if (!t || index < 0 || static_cast<std::size_t>(index) >= t->job->batchCount()) return nullptr;
+    std::lock_guard lock(t->mu);
+    try {
+        const auto r = t->job->request(static_cast<std::size_t>(index));
+        Json headers = Json::array();
+        for (const auto& [k, v] : r.headers) headers.push_back({k, v});
+        return dup(Json{{"method", r.method}, {"url", r.url}, {"headers", headers}, {"body", r.body}}.dump());
+    } catch (const std::exception& e) {
+        t->error = e.what();
+        return nullptr;
+    }
+}
+
+int vs_translation_accept(vs_translation* t, int index, const char* reply_body) {
+    if (!t || index < 0) return -1;
+    std::lock_guard lock(t->mu);
+    std::string err;
+    try {
+        if (t->job->accept(static_cast<std::size_t>(index), str(reply_body), &err)) return 0;
+    } catch (const std::exception& e) {
+        err = std::string("Câu trả lời không đọc được: ") + e.what();
+    }
+    t->error = err;
+    return -1;
+}
+
+const char* vs_translation_error(vs_translation* t) { return t ? t->error.c_str() : ""; }
+
+char* vs_translation_apply(vs_session* s, vs_translation* t, int mode) {
+    return guardStr(s, [&] {
+        if (!t) throw std::runtime_error("no translation");
+        std::lock_guard lock(t->mu);
+        const auto m = mode == 0   ? Editor::TranslationMode::Replace
+                       : mode == 2 ? Editor::TranslationMode::Bilingual
+                                   : Editor::TranslationMode::NewTrack;
+        const Id id = s->editor->applySubtitleTranslation(t->job->sourceTrack(), t->job->results(),
+                                                          t->job->targetLanguage(), m);
+        s->edited();
+        return id;
+    });
+}
+
+void vs_translation_free(vs_translation* t) { delete t; }
 
 int vs_sticker_icon(const char* id, double seconds, uint8_t* out, int width, int height) {
     if (!out || width <= 0 || height <= 0 || !stickers::findSticker(str(id))) return -1;

@@ -246,6 +246,51 @@ int main(void) {
         EXPECT(vs_overlay_icon("snow", 1.0, icon, 48, 27) == 0 && icon[3] == 255);
         EXPECT(vs_overlay_icon("nope", 1.0, icon, 48, 27) != 0);
     }
+    {   /* subtitles: import, add, style, export, translate through the open protocol */
+        char* styles = vs_subtitle_styles_json();
+        EXPECT(styles && strstr(styles, "\"classic\""));
+        vs_free(styles);
+        char* providers = vs_translation_providers_json();
+        EXPECT(providers && strstr(providers, "\"anthropic\"") && strstr(providers, "\"custom\""));
+        vs_free(providers);
+        char* track = vs_import_subtitles(s, "1\n00:00:01,000 --> 00:00:02,000\nXin ch\xc3\xa0o\n\n"
+                                             "2\n00:00:03,000 --> 00:00:04,000\nT\xe1\xba\xa1m bi\xe1\xbb\x87t\n",
+                                          "G\xe1\xbb\x91\x63", "vi", 0);
+        EXPECT(track != NULL);
+        if (track) {
+            char* line = vs_add_subtitle(s, track, 5 * 705600000LL, "Th\xc3\xaam", 0);
+            EXPECT(line != NULL);
+            vs_free(line);
+            EXPECT(vs_set_subtitle_settings(s, track, "{\"position\":{\"anchor\":\"top\"}}") == 0);
+            EXPECT(vs_shift_subtitles(s, track, 705600000LL) == 0);
+            char* srt = vs_export_subtitles(s, track, "srt");
+            EXPECT(srt && strstr(srt, "00:00:02,000 --> 00:00:03,000"));
+            vs_free(srt);
+            vs_translation* t = vs_translation_begin(s, track, "{\"provider\":\"custom\",\"url\":\"http://localhost/t\"}",
+                                                     "vi", "en", "", 2);
+            EXPECT(t != NULL && vs_translation_count(t) == 2);
+            if (t) {
+                char* req = vs_translation_request_json(t, 0);
+                EXPECT(req && strstr(req, "\"url\":\"http://localhost/t\""));
+                vs_free(req);
+                EXPECT(vs_translation_accept(t, 0, "{\"items\":[{\"id\":\"1\",\"text\":\"Hello\"},{\"id\":\"2\",\"text\":\"Bye\"}]}") == 0);
+                EXPECT(vs_translation_accept(t, 1, "not json") != 0 && vs_translation_error(t)[0] != 0);
+                EXPECT(vs_translation_accept(t, 1, "{\"items\":[{\"id\":\"1\",\"text\":\"Added\"}]}") == 0);
+                EXPECT(vs_translation_done(t) == 2);
+                char* en = vs_translation_apply(s, t, 2);
+                EXPECT(en != NULL);
+                if (en) {
+                    char* out = vs_export_subtitles(s, en, "vtt");
+                    EXPECT(out && strstr(out, "WEBVTT") && strstr(out, "Hello") && strstr(out, "Added"));
+                    vs_free(out);
+                    vs_free(en);
+                }
+                vs_translation_free(t);
+            }
+            vs_free(track);
+        }
+        EXPECT(vs_import_subtitles(s, "", "x", "", 0) == NULL);
+    }
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

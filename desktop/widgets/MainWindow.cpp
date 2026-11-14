@@ -38,6 +38,7 @@
 #include "OverlayPanel.h"
 #include "RecentStrip.h"
 #include "VideoFxPanel.h"
+#include "SubtitlePanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -286,13 +287,22 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     overlayDock->setWidget(overlays_);
     addDockWidget(Qt::RightDockWidgetArea, overlayDock);
     tabifyDockWidget(stickerDock, overlayDock);
+    auto* subtitleDock = new QDockWidget("Phụ đề", this);
+    subtitleDock->setObjectName("subtitles");
+    subtitles_ = new SubtitlePanel(editor_, subtitleDock);
+    subtitleDock->setWidget(subtitles_);
+    addDockWidget(Qt::RightDockWidgetArea, subtitleDock);
+    tabifyDockWidget(overlayDock, subtitleDock);
     looksDock->raise();
-    // Selecting a text, sticker or overlay on the timeline brings its panel forward.
-    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock] {
+    // Selecting a text, sticker, overlay or subtitle line on the timeline brings its panel forward.
+    connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock, subtitleDock] {
         const auto c = editor_->selectedContent();
         if (!c) return;
         const std::string kind = c->value("kind", std::string{});
-        QDockWidget* d = kind == "text" ? textDock : kind == "overlay" ? overlayDock : stickerDock;
+        QDockWidget* d = kind == "text"      ? textDock
+                         : kind == "overlay"  ? overlayDock
+                         : kind == "subtitle" ? subtitleDock
+                                              : stickerDock;
         d->show();
         d->raise();
     });

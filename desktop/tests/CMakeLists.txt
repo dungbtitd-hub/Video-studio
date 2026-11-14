@@ -24,6 +24,7 @@ qt_add_executable(main_window_tests
   ../widgets/OverlayPanel.cpp ../widgets/OverlayPanel.h
   ../widgets/RecentStrip.cpp ../widgets/RecentStrip.h
   ../widgets/VideoFxPanel.cpp ../widgets/VideoFxPanel.h
+  ../widgets/SubtitlePanel.cpp ../widgets/SubtitlePanel.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )

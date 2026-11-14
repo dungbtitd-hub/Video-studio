@@ -10,6 +10,8 @@ import 'package:ffi/ffi.dart';
 
 final class VsSession extends Opaque {}
 
+final class VsTranslation extends Opaque {}
+
 /// UTF-8 C string as passed across the C API.
 typedef CStr = Pointer<Utf8>;
 
@@ -217,6 +219,45 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, double, double, double, double)>('vs_set_overlay_region'),
         contentPreview = lib.lookupFunction<Int32 Function(CStr, Double, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, double, Pointer<Uint8>, int, int)>('vs_content_preview'),
+        subtitleStylesJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_subtitle_styles_json'),
+        subtitlePositionsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_subtitle_positions_json'),
+        subtitleLanguagesJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_subtitle_languages_json'),
+        translationProvidersJson =
+            lib.lookupFunction<CStr Function(), CStr Function()>('vs_translation_providers_json'),
+        addSubtitleTrack = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr),
+            CStr Function(Pointer<VsSession>, CStr, CStr)>('vs_add_subtitle_track'),
+        addSubtitle = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, Int64, CStr, Int64),
+            CStr Function(Pointer<VsSession>, CStr, int, CStr, int)>('vs_add_subtitle'),
+        importSubtitles = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr, CStr, Int64),
+            CStr Function(Pointer<VsSession>, CStr, CStr, CStr, int)>('vs_import_subtitles'),
+        exportSubtitles = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, CStr),
+            CStr Function(Pointer<VsSession>, CStr, CStr)>('vs_export_subtitles'),
+        setSubtitleSettings = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
+            int Function(Pointer<VsSession>, CStr, CStr)>('vs_set_subtitle_settings'),
+        shiftSubtitles = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_shift_subtitles'),
+        translationBegin = lib.lookupFunction<
+            Pointer<VsTranslation> Function(Pointer<VsSession>, CStr, CStr, CStr, CStr, CStr, Int32),
+            Pointer<VsTranslation> Function(
+                Pointer<VsSession>, CStr, CStr, CStr, CStr, CStr, int)>('vs_translation_begin'),
+        translationCount =
+            lib.lookupFunction<Int32 Function(Pointer<VsTranslation>), int Function(Pointer<VsTranslation>)>(
+                'vs_translation_count'),
+        translationDone =
+            lib.lookupFunction<Int32 Function(Pointer<VsTranslation>), int Function(Pointer<VsTranslation>)>(
+                'vs_translation_done'),
+        translationRequestJson = lib.lookupFunction<CStr Function(Pointer<VsTranslation>, Int32),
+            CStr Function(Pointer<VsTranslation>, int)>('vs_translation_request_json'),
+        translationAccept = lib.lookupFunction<Int32 Function(Pointer<VsTranslation>, Int32, CStr),
+            int Function(Pointer<VsTranslation>, int, CStr)>('vs_translation_accept'),
+        translationError =
+            lib.lookupFunction<CStr Function(Pointer<VsTranslation>), CStr Function(Pointer<VsTranslation>)>(
+                'vs_translation_error'),
+        translationApply = lib.lookupFunction<CStr Function(Pointer<VsSession>, Pointer<VsTranslation>, Int32),
+            CStr Function(Pointer<VsSession>, Pointer<VsTranslation>, int)>('vs_translation_apply'),
+        translationFree =
+            lib.lookupFunction<Void Function(Pointer<VsTranslation>), void Function(Pointer<VsTranslation>)>(
+                'vs_translation_free'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         setClipGrade = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
@@ -378,6 +419,24 @@ class VStudioBindings {
   final CStr Function(CStr) defaultOverlayJson;
   final int Function(CStr, double, Pointer<Uint8>, int, int) overlayIcon;
   final int Function(Pointer<VsSession>, CStr, int, double, double, double, double) setOverlayRegion;
+  final CStr Function() subtitleStylesJson;
+  final CStr Function() subtitlePositionsJson;
+  final CStr Function() subtitleLanguagesJson;
+  final CStr Function() translationProvidersJson;
+  final CStr Function(Pointer<VsSession>, CStr, CStr) addSubtitleTrack;
+  final CStr Function(Pointer<VsSession>, CStr, int, CStr, int) addSubtitle;
+  final CStr Function(Pointer<VsSession>, CStr, CStr, CStr, int) importSubtitles;
+  final CStr Function(Pointer<VsSession>, CStr, CStr) exportSubtitles;
+  final int Function(Pointer<VsSession>, CStr, CStr) setSubtitleSettings;
+  final int Function(Pointer<VsSession>, CStr, int) shiftSubtitles;
+  final Pointer<VsTranslation> Function(Pointer<VsSession>, CStr, CStr, CStr, CStr, CStr, int) translationBegin;
+  final int Function(Pointer<VsTranslation>) translationCount;
+  final int Function(Pointer<VsTranslation>) translationDone;
+  final CStr Function(Pointer<VsTranslation>, int) translationRequestJson;
+  final int Function(Pointer<VsTranslation>, int, CStr) translationAccept;
+  final CStr Function(Pointer<VsTranslation>) translationError;
+  final CStr Function(Pointer<VsSession>, Pointer<VsTranslation>, int) translationApply;
+  final void Function(Pointer<VsTranslation>) translationFree;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;

@@ -1,5 +1,7 @@
 #include "vstudio/preview.hpp"
 
+#include <cmath>
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -207,6 +209,14 @@ void PreviewEngine::videoLoop() {
             }
         }
         if (!snap) continue;
+        // Render at the canvas shape inside the requested box: a frame the shape of the view would put
+        // text, stickers and subtitles (placed in canvas units) off their spot, and costs more pixels.
+        if (snap->canvas.width > 0 && snap->canvas.height > 0) {
+            const double cw = snap->canvas.width, ch = snap->canvas.height;
+            const double k = std::min(w / cw, h / ch);
+            w = std::max(16, static_cast<int>(std::lround(cw * k)) & ~1);
+            h = std::max(16, static_cast<int>(std::lround(ch * k)) & ~1);
+        }
         const Rational fps = snap->fps;
         if (!target && playing_) {
             const std::int64_t f = playhead().toFrame(fps);
