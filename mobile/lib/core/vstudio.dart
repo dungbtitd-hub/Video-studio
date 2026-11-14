@@ -428,6 +428,18 @@ class VStudio {
   void setPropertyAt(String clipId, double t, Map<String, double> values) => using((a) => _check(_b.setPropertyAt(
       _s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
 
+  // ---- live preview during a gesture (pinch, corner drag, slider) ----
+  // The preview shows the edit at once; the project and the undo history stay as they are until the
+  // gesture ends with the real edit (one undo step), or liveEnd() drops it.
+
+  void livePropertyAt(String clipId, double t, Map<String, double> values) => using((a) => _check(_b.livePropertyAt(
+      _s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), jsonEncode(values).toNativeUtf8(allocator: a))));
+  void liveOverlayRegion(String clipId, double t, double x, double y, double w, double h) =>
+      using((a) => _check(_b.liveOverlayRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));
+  void liveClipContent(String clipId, Map<String, dynamic> patch) => using((a) =>
+      _check(_b.liveClipContent(_s, clipId.toNativeUtf8(allocator: a), jsonEncode(patch).toNativeUtf8(allocator: a))));
+  void liveEnd() => _b.liveEnd(_s);
+
   /// Zooms so the region (0..1 of the frame) fills the frame at [t].
   void zoomToRegion(String clipId, double t, double x, double y, double w, double h) =>
       using((a) => _check(_b.zoomToRegion(_s, clipId.toNativeUtf8(allocator: a), secondsToTicks(t), x, y, w, h)));

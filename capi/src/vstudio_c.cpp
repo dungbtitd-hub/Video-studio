@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -487,18 +488,24 @@ int vs_clear_keyframes(vs_session* s, const char* clip_id, int group) {
     });
 }
 
+namespace {
+std::map<std::string, double> propertyValues(const char* values_json) {
+    const Json j = Json::parse(str(values_json));
+    if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
+    std::map<std::string, double> values;
+    for (auto it = j.begin(); it != j.end(); ++it) {
+        if (!kf::isProperty(it.key()) || !it.value().is_number())
+            throw std::runtime_error("not an animatable number: " + it.key());
+        values[it.key()] = it.value().get<double>();
+    }
+    return values;
+}
+}  // namespace
+
 int vs_set_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json) {
     return guard(s, [&] {
         const Clip& c = clipOrThrow(s, clip_id);
-        const Json j = Json::parse(str(values_json));
-        if (!j.is_object()) throw std::runtime_error("values must be a JSON object");
-        std::map<std::string, double> values;
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            if (!kf::isProperty(it.key()) || !it.value().is_number())
-                throw std::runtime_error("not an animatable number: " + it.key());
-            values[it.key()] = it.value().get<double>();
-        }
-        s->editor->setPropertyAt(c.id, c.toSource(Time::fromTicks(t)), values);
+        s->editor->setPropertyAt(c.id, c.toSource(Time::fromTicks(t)), propertyValues(values_json));
         s->edited();
     });
 }
@@ -1402,4 +1409,52 @@ int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_capacit
     if (dst_capacity < static_cast<int64_t>(f.rgba.size())) return -1;
     std::memcpy(dst, f.rgba.data(), f.rgba.size());
     return 1;
+}
+
+// ---- live preview during a gesture ----
+
+namespace {
+// Shows `edit` (run on a scratch copy) on the preview; the project and history stay as they are.
+void showLive(vs_session* s, const std::function<void(Editor&)>& edit) {
+    auto p = s->editor->preview(edit);
+    if (!p) throw std::runtime_error("edit refused");
+    s->previewEngine().setProject(std::move(p));
+}
+}  // namespace
+
+int vs_live_property_at(vs_session* s, const char* clip_id, int64_t t, const char* values_json) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const auto values = propertyValues(values_json);
+        const Id id = c.id;
+        const Time src = c.toSource(Time::fromTicks(t));
+        showLive(s, [&](Editor& e) { e.setPropertyAt(id, src, values); });
+    });
+}
+
+int vs_live_overlay_region(vs_session* s, const char* clip_id, int64_t t, double x, double y, double w, double h) {
+    return guard(s, [&] {
+        const Clip& c = clipOrThrow(s, clip_id);
+        const Project& p = s->editor->project();
+        const double W = p.canvas.width, H = p.canvas.height;
+        const Id id = c.id;
+        const Time src = c.toSource(Time::fromTicks(t));
+        showLive(s, [&](Editor& e) { e.setOverlayRegion(id, src, x * W, y * H, w * W, h * H); });
+    });
+}
+
+int vs_live_clip_content(vs_session* s, const char* clip_id, const char* patch_json) {
+    return guard(s, [&] {
+        const Id id = clipOrThrow(s, clip_id).id;
+        const Json patch = Json::parse(str(patch_json));
+        showLive(s, [&](Editor& e) { e.updateClipContent(id, patch); });
+    });
+}
+
+void vs_live_end(vs_session* s) {
+    if (!s) return;
+    try {
+        s->edited();  // back to the project as it is
+    } catch (...) {
+    }
 }

@@ -1,5 +1,7 @@
 #include "TextPanel.h"
 
+#include <functional>
+
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -145,19 +147,23 @@ TextPanel::TextPanel(EditorController* editor, QWidget* parent) : QWidget(parent
     connect(typing_, &QTimer::timeout, this, &TextPanel::commitText);
     connect(font_, &QComboBox::activated, this,
             [this] { editor_->updateContent({{"font", font_->currentData().toString().toStdString()}}); });
-    connect(size_, &QSlider::sliderReleased, this, [this] { editor_->updateContent({{"size", double(size_->value())}}); });
+    // Sliders: the picture follows while dragging (live preview), one undo step on release.
+    auto live = [this](QSlider* sl, std::function<Json(int)> patch) {
+        connect(sl, &QSlider::valueChanged, this, [this, sl, patch](int v) {
+            if (sl->isSliderDown()) editor_->previewContent(patch(v));
+        });
+        connect(sl, &QSlider::sliderReleased, this, [this, sl, patch] { editor_->updateContent(patch(sl->value())); });
+    };
+    live(size_, [](int v) { return Json{{"size", double(v)}}; });
+    live(outline_, [](int v) { return Json{{"stroke", {{"width", v / 100.0}}}}; });
+    live(shadow_, [](int v) { return Json{{"shadow", {{"opacity", v / 100.0}}}}; });
+    live(box_, [](int v) { return Json{{"box", {{"opacity", v / 100.0}}}}; });
     connect(color_, &QPushButton::clicked, this, [this] { setColor("color"); });
     connect(group, &QButtonGroup::idClicked, this, [this](int i) {
         const char* a[] = {"left", "center", "right"};
         editor_->updateContent({{"align", a[i]}});
     });
     connect(italic_, &QCheckBox::toggled, this, [this](bool on) { editor_->updateContent({{"italic", on}}); });
-    connect(outline_, &QSlider::sliderReleased, this,
-            [this] { editor_->updateContent({{"stroke", {{"width", outline_->value() / 100.0}}}}); });
-    connect(shadow_, &QSlider::sliderReleased, this,
-            [this] { editor_->updateContent({{"shadow", {{"opacity", shadow_->value() / 100.0}}}}); });
-    connect(box_, &QSlider::sliderReleased, this,
-            [this] { editor_->updateContent({{"box", {{"opacity", box_->value() / 100.0}}}}); });
     connect(styles_, &QListWidget::itemClicked, this, [this](QListWidgetItem* it) {
         for (const auto& p : vstudio::text::textPresets())
             if (QString::fromStdString(p.id) == it->data(Qt::UserRole).toString()) {

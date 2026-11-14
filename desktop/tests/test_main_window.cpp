@@ -1,6 +1,7 @@
 // Workspace: every shortcut is unique and documented, keys drive navigation and
 // edits through the window's actions, timeline tools, and layout reset.
 #include <QAction>
+#include <cmath>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -464,6 +465,34 @@ private slots:
         QVERIFY(c && c->value("kind", std::string{}) == "sticker");
         QVERIFY(win_->findChild<QDockWidget*>("stickers")->isVisible());
         QVERIFY(sp->animations()->isEnabled());
+        // Resizing follows the mouse live: nothing is edited until release, then one undo step.
+        {
+            const QRectF from = ctrl_->objectCanvasRect();
+            QVERIFY(from.width() > 0);
+            const QRectF to(from.x(), from.y(), from.width() * 2, from.height() * 2);
+            const QString undoBefore = ctrl_->undoLabel();
+            const double sizeBefore = ctrl_->stickerDisplaySize();
+            emit win_->preview()->objectRectChanging(from, to);
+            QCOMPARE(ctrl_->undoLabel(), undoBefore);
+            QCOMPARE(ctrl_->stickerDisplaySize(), sizeBefore);
+            emit win_->preview()->objectRectChanged(from, to);
+            QVERIFY(std::abs(ctrl_->stickerDisplaySize() - sizeBefore * 2) < 1);
+            // The size slider shows the size as seen (content size x scale).
+            auto* slider = sp->findChild<QSlider*>("stickerSize");
+            QVERIFY(slider);
+            QVERIFY(std::abs(slider->value() - sizeBefore * 2) <= 1);
+            // Slider dragging is live too; release commits.
+            const QString undoScaled = ctrl_->undoLabel();
+            const auto contentBefore = *ctrl_->selectedContent();
+            ctrl_->setStickerDisplaySize(300, true);
+            QVERIFY(*ctrl_->selectedContent() == contentBefore);
+            ctrl_->setStickerDisplaySize(300, false);
+            QVERIFY(std::abs(ctrl_->stickerDisplaySize() - 300) < 2);
+            ctrl_->undo();
+            ctrl_->undo();
+            QCOMPARE(ctrl_->stickerDisplaySize(), sizeBefore);
+            (void)undoScaled;
+        }
         // Overlays: snow over the whole frame from the playhead, then only the top-left quarter.
         OverlayPanel* op = win_->overlayPanel();
         QVERIFY(op->list()->count() >= 20);

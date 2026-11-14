@@ -10,6 +10,7 @@
 #include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <cmath>
 #include <cstring>
 
 #include "AnimationBox.h"
@@ -52,9 +53,20 @@ StickerPanel::StickerPanel(EditorController* editor, QWidget* parent) : QWidget(
     auto* el = new QVBoxLayout(editorBox_);
     el->setContentsMargins(0, 0, 0, 0);
     auto* form = new QFormLayout();
+    // Size as seen on the canvas (content size x scale): matches a corner drag or a pinch.
     size_ = new QSlider(Qt::Horizontal, editorBox_);
-    size_->setRange(40, 1000);
-    form->addRow(tr("Cỡ"), size_);
+    size_->setObjectName("stickerSize");
+    size_->setRange(20, 2000);
+    size_->setSingleStep(10);
+    size_->setPageStep(100);
+    sizeLabel_ = new QLabel(editorBox_);
+    sizeLabel_->setMinimumWidth(56);
+    auto* sizeRow = new QWidget(editorBox_);
+    auto* sr = new QHBoxLayout(sizeRow);
+    sr->setContentsMargins(0, 0, 0, 0);
+    sr->addWidget(size_, 1);
+    sr->addWidget(sizeLabel_);
+    form->addRow(tr("Cỡ"), sizeRow);
     flip_ = new QCheckBox(tr("Lật ngang"), editorBox_);
     alive_ = new QCheckBox(tr("Chuyển động riêng"), editorBox_);
     alive_->setToolTip(tr("Tim đập, hoa đung đưa, mặt cười chớp mắt…"));
@@ -79,7 +91,13 @@ StickerPanel::StickerPanel(EditorController* editor, QWidget* parent) : QWidget(
     connect(category_, &QComboBox::currentIndexChanged, this, &StickerPanel::fill);
     connect(list_, &QListWidget::itemClicked, this,
             [this](QListWidgetItem* it) { editor_->addSticker(it->data(Qt::UserRole).toString()); });
-    connect(size_, &QSlider::sliderReleased, this, [this] { editor_->updateContent({{"size", double(size_->value())}}); });
+    // The sticker grows and shrinks while the slider moves (live preview); one undo step on release.
+    connect(size_, &QSlider::valueChanged, this, [this](int v) {
+        sizeLabel_->setText(QString("%1 px").arg(v));
+        editor_->setStickerDisplaySize(v, size_->isSliderDown());
+    });
+    connect(size_, &QSlider::sliderReleased, this, [this] { editor_->setStickerDisplaySize(size_->value(), false); });
+    connect(editor_, &EditorController::playheadChanged, this, &StickerPanel::refresh);  // the scale may be keyed
     connect(flip_, &QCheckBox::toggled, this, [this](bool on) { editor_->updateContent({{"flip", on}}); });
     connect(alive_, &QCheckBox::toggled, this, [this](bool on) { editor_->updateContent({{"alive", on}}); });
     connect(editor_, &EditorController::selectionChanged, this, &StickerPanel::refresh);
@@ -126,8 +144,10 @@ void StickerPanel::refresh() {
         return;
     }
     if (!size_->isSliderDown()) {
+        const int px = int(std::lround(editor_->stickerDisplaySize()));
         QSignalBlocker b(size_);
-        size_->setValue(int(c->value("size", 320.0)));
+        size_->setValue(px);
+        sizeLabel_->setText(QString("%1 px").arg(px));
     }
     {
         QSignalBlocker b1(flip_), b2(alive_);

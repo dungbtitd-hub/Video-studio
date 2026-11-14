@@ -144,6 +144,7 @@ void PreviewWidget::mouseMoveEvent(QMouseEvent* e) {
             r = QRectF(a, p).normalized();
         }
         if (r.width() >= 4 && r.height() >= 4) cover_ = toNormalized(r);
+        if (object_) emit objectRectChanging(toNormalized(coverStart_), cover_);
         update();
         return;
     }
@@ -158,6 +159,7 @@ void PreviewWidget::mouseReleaseEvent(QMouseEvent* e) {
         coverDrag_ = CoverDrag::None;
         if (moved && object_) emit objectRectChanged(toNormalized(coverStart_), cover_);
         else if (moved) emit coverRectChanged(cover_);
+        else if (object_) emit objectRectCancelled();
         update();
         return;
     }
@@ -175,6 +177,7 @@ void PreviewWidget::keyPressEvent(QKeyEvent* e) {
     if (coverDrag_ != CoverDrag::None && e->key() == Qt::Key_Escape) {
         coverDrag_ = CoverDrag::None;
         cover_ = toNormalized(coverStart_);
+        if (object_) emit objectRectCancelled();
         update();
         return;
     }

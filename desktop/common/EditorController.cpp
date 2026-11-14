@@ -308,6 +308,7 @@ bool EditorController::edit(F&& f) {
 }
 
 void EditorController::published() {
+    live_ = false;  // a real edit replaces any live preview
     snapshot_ = editor_->snapshot();
     preview_->setProject(snapshot_);
     assetsDirty_ = tracksDirty_ = true;
@@ -913,7 +914,7 @@ std::optional<vstudio::Json> EditorController::selectedContent() const {
 void EditorController::updateContent(const vstudio::Json& patch) {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     if (!c || !c->generated()) return;
-    edit([&] { editor_->updateClipContent(c->id, patch); });
+    if (!edit([&] { editor_->updateClipContent(c->id, patch); })) endLive();
 }
 
 QRectF EditorController::objectCanvasRect() const {
@@ -926,22 +927,70 @@ QRectF EditorController::objectCanvasRect() const {
     return {r[0] / W, r[1] / H, r[2] / W, r[3] / H};
 }
 
-void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
+std::function<void(Editor&)> EditorController::objectRectEdit(const QRectF& from, const QRectF& to) const {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
-    if (!c || !c->generated() || from.width() <= 0) return;
+    if (!c || !c->generated() || from.width() <= 0) return {};
+    const Id id = c->id;
     const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
     const Transform tf = animatedTransform(*c, src);
     const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
     if (c->content.value("kind", std::string{}) == "overlay") {
-        if (to.width() <= 0 || to.height() <= 0) return;
-        edit([&] { editor_->setOverlayRegion(c->id, src, to.x() * W, to.y() * H, to.width() * W, to.height() * H); });
-        return;
+        if (to.width() <= 0 || to.height() <= 0) return {};
+        return [=](Editor& e) { e.setOverlayRegion(id, src, to.x() * W, to.y() * H, to.width() * W, to.height() * H); };
     }
     const double k = to.width() / from.width();
     // The box centre sits at canvas centre + offset + (box centre in content units) * scale.
     const double x = to.center().x() * W - W / 2 - (from.center().x() * W - W / 2 - tf.x) * k;
     const double y = to.center().y() * H - H / 2 - (from.center().y() * H - H / 2 - tf.y) * k;
-    edit([&] { editor_->setPropertyAt(c->id, src, {{kf::kScale, std::clamp(tf.scale * k, 0.05, 20.0)}, {kf::kX, x}, {kf::kY, y}}); });
+    const double scale = std::clamp(tf.scale * k, 0.05, 20.0);
+    return [=](Editor& e) { e.setPropertyAt(id, src, {{kf::kScale, scale}, {kf::kX, x}, {kf::kY, y}}); };
+}
+
+void EditorController::setObjectCanvasRect(const QRectF& from, const QRectF& to) {
+    auto fn = objectRectEdit(from, to);
+    if (!fn || !edit([&] { fn(*editor_); })) endLive();
+}
+
+void EditorController::previewObjectCanvasRect(const QRectF& from, const QRectF& to) {
+    if (auto fn = objectRectEdit(from, to)) showLive(fn);
+}
+
+void EditorController::previewContent(const vstudio::Json& patch) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return;
+    const Id id = c->id;
+    showLive([&](Editor& e) { e.updateClipContent(id, patch); });
+}
+
+double EditorController::stickerDisplaySize() const {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated()) return 0;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    return c->content.value("size", 320.0) * animatedTransform(*c, src).scale;
+}
+
+void EditorController::setStickerDisplaySize(double px, bool live) {
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
+    if (!c || !c->generated() || px <= 0) return;
+    const Time src = c->toSource(std::clamp(fromSecs(playhead_), c->timelineIn, c->timelineOut()));
+    const double scale = std::max(0.05, animatedTransform(*c, src).scale);
+    const vstudio::Json patch = {{"size", std::max(1.0, std::round(px / scale))}};
+    if (live) previewContent(patch);
+    else updateContent(patch);
+}
+
+void EditorController::showLive(const std::function<void(Editor&)>& fn) {
+    if (!preview_) return;
+    if (auto p = editor_->preview(fn)) {
+        live_ = true;
+        preview_->setProject(std::move(p));
+    }
+}
+
+void EditorController::endLive() {
+    if (!live_ || !preview_) return;
+    live_ = false;
+    preview_->setProject(snapshot_);
 }
 
 void EditorController::setSelectedClip(const QString& id) {

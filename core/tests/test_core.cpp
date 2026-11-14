@@ -1969,3 +1969,27 @@ TEST("recents: cards, posters, unfinished until exported, recent list order") {
     CHECK(rl.paths().size() <= recents::RecentList::kMax);
     fs::remove_all(root);
 }
+
+TEST("editor: live preview of a gesture leaves the project and the undo history alone") {
+    Fixture f;
+    const Id clip = f.ed.addGeneratedClip(stickers::defaultStickerContent("heart_red"), sec(0), sec(3));
+    const auto rev = f.ed.revision();
+    const bool couldUndo = f.ed.canUndo();
+    auto live = f.ed.preview([&](Editor& e) {
+        e.updateClipContent(clip, {{"size", 640.0}});
+        e.setPropertyAt(clip, sec(0), {{kf::kScale, 2.0}});
+    });
+    CHECK(live != nullptr);
+    CHECK_NEAR(live->findClip(clip)->content.value("size", 0.0), 640.0, 1e-9);
+    CHECK_NEAR(animatedTransform(*live->findClip(clip), sec(0)).scale, 2.0, 1e-9);
+    // The project, its revision and its history did not move.
+    CHECK_NEAR(f.ed.project().findClip(clip)->content.value("size", 0.0), 320.0, 1e-9);
+    CHECK_EQ(f.ed.revision(), rev);
+    CHECK_EQ(f.ed.canUndo(), couldUndo);
+    // A refused edit gives no preview.
+    CHECK(f.ed.preview([&](Editor& e) { e.updateClipContent("missing", {{"size", 1.0}}); }) == nullptr);
+    // The gesture's end: one undo step.
+    f.ed.updateClipContent(clip, {{"size", 640.0}});
+    CHECK(f.ed.undo());
+    CHECK_NEAR(f.ed.project().findClip(clip)->content.value("size", 0.0), 320.0, 1e-9);
+}

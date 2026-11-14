@@ -167,6 +167,16 @@ int main(void) {
             EXPECT(vs_content_preview(content, 1.0, 2.0, px, 64, 32) == 0);
             for (int i = 3; i < 64 * 32 * 4; i += 4) lit += px[i] > 128;
             EXPECT(lit > 30);
+            /* Live preview of a pinch / slider: shown, nothing edited, no undo step. */
+            char* before = vs_project_json(s);
+            EXPECT(vs_live_property_at(s, tc, 0, "{\"scale\":2}") == 0);
+            EXPECT(vs_live_clip_content(s, tc, "{\"size\":200}") == 0);
+            EXPECT(vs_live_property_at(s, tc, 0, "{\"nope\":2}") != 0);
+            char* after = vs_project_json(s);
+            EXPECT(before && after && strcmp(before, after) == 0);
+            vs_live_end(s);
+            vs_free(before);
+            vs_free(after);
             EXPECT(vs_undo(s) == 1 && vs_undo(s) == 1);
             vs_free(tc);
         }
@@ -277,6 +287,17 @@ int main(void) {
     EXPECT(refused && strstr(refused, "\"ok\":false"));
     vs_free(refused);
     remove("capi_test.vstudiopkg");
+
+    /* Live preview during a gesture: no edit, no undo step; vs_live_end drops it. */
+    {
+        char* undo_before = vs_project_json(s);
+        EXPECT(vs_live_property_at(s, "missing", 0, "{\"scale\":2}") != 0);
+        vs_live_end(s);
+        char* undo_after = vs_project_json(s);
+        EXPECT(undo_before && undo_after && strcmp(undo_before, undo_after) == 0);
+        vs_free(undo_before);
+        vs_free(undo_after);
+    }
 
     /* Recent projects: a save writes the card, the start screen lists it, the recent list orders it. */
     EXPECT(vs_save(s, "capi_test_recent/Recent.vstudio") == 0);
