@@ -29,6 +29,7 @@ qt_add_executable(VideoStudio
   StickerPanel.cpp StickerPanel.h
   OverlayPanel.cpp OverlayPanel.h
   RecentStrip.cpp RecentStrip.h
+  HomePage.cpp HomePage.h
   VideoFxPanel.cpp VideoFxPanel.h
   SubtitlePanel.cpp SubtitlePanel.h
   AudioPanel.cpp AudioPanel.h
