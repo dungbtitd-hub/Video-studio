@@ -2,6 +2,8 @@
 
 #include <QHash>
 #include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QMimeData>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QMenu>
@@ -16,12 +18,14 @@
 #include "EditorController.h"
 #include "Theme.h"
 #include "vstudio/keyframes.hpp"
+#include "vstudio/transitions.hpp"
 
 TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWidget(parent), editor_(editor) {
     setMouseTracking(true);
     setFocusPolicy(Qt::ClickFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setMinimumHeight(kRulerH + kTrackH * 2 + 20);
+    setAcceptDrops(true);  // transitions dragged from the panel
     hbar_ = new QScrollBar(Qt::Horizontal, this);
     connect(hbar_, &QScrollBar::valueChanged, this, [this](int v) {
         scroll_ = v / 100.0;
@@ -37,6 +41,7 @@ TimelineWidget::TimelineWidget(EditorController* editor, QWidget* parent) : QWid
         update();
     });
     connect(editor_, &EditorController::selectionChanged, this, qOverload<>(&QWidget::update));
+    connect(editor_, &EditorController::cutChanged, this, qOverload<>(&QWidget::update));
     connect(editor_, &EditorController::mediaLibraryChanged, this, qOverload<>(&QWidget::update));
     rebuild();
 }
@@ -96,8 +101,23 @@ void TimelineWidget::rebuild() {
                 }
             }
         }
+        if (!t.audio)
+            for (const auto& cp : vstudio::cutPoints(*src)) {
+                Cut cut;
+                cut.at = cp.at.seconds();
+                cut.clipId = QString::fromStdString(cp.owner()->id);
+                cut.edge = cp.edge() == vstudio::TransitionEdge::In ? 0 : 1;
+                cut.joined = cp.from && cp.to;
+                if (cp.transition.is_object()) {
+                    cut.type = QString::fromStdString(cp.transition.value("type", std::string{}));
+                    cut.duration = cp.duration.seconds();
+                }
+                t.cuts.push_back(std::move(cut));
+            }
         tracks_.push_back(std::move(t));
     }
+    hoverCut_.reset();
+    dropCut_.reset();
     duration_ = editor_->duration();
     setMinimumHeight(kRulerH + kTrackH * int(std::max<size_t>(2, tracks_.size())) + hbar_->sizeHint().height());
     updateScrollBar();
@@ -200,6 +220,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
                            (it->fx ? "fx · " : "") + p.fontMetrics().elidedText(it->name, Qt::ElideRight, int(r.width()) - 12));
             }
         }
+        if (drag_ == Drag::None) paintCuts(p, int(i));
         p.setOpacity(1.0);
         if (t.locked) {  // locked: hatched, clips still visible
             p.setPen(Qt::NoPen);
@@ -287,6 +308,13 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
         editor_->seek(t);
         return;
     }
+    if (const auto hit = cutAt(pos)) {
+        // A transition badge (or the "+" of a hovered cut): select that place for the panel.
+        const Cut& cut = tracks_[size_t(hit->first)].cuts[hit->second];
+        editor_->setSelectedCut(cut.clipId, cut.edge);
+        emit transitionsRequested();
+        return;
+    }
     const int ti = trackAt(int(pos.y()));
     const Clip* c = clipAt(ti, t);
     if (!c) {
@@ -357,9 +385,120 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent* e) {
         update();  // visual only
         return;
     }
+    // Hovering near a cut shows its "+" badge (transitions); over a badge, a pointing hand.
+    const auto near = cutAt(pos, 14);
+    if (near != hoverCut_) {
+        hoverCut_ = near;
+        update();
+    }
+    if (cutAt(pos)) {
+        setCursor(Qt::PointingHandCursor);
+        return;
+    }
     const Clip* c = clipAt(trackAt(int(pos.y())), t);
     const double edge = 6 / pxPerSec_;
     setCursor(c && (t - c->start < edge || c->end - t < edge) ? Qt::SizeHorCursor : Qt::ArrowCursor);
+}
+
+void TimelineWidget::leaveEvent(QEvent*) {
+    if (hoverCut_) {
+        hoverCut_.reset();
+        update();
+    }
+}
+
+QRectF TimelineWidget::cutBadge(int track, const Cut& c) const {
+    constexpr double w = 18, h = 16;
+    // On the cut itself between two clips; just inside the clip at a free edge.
+    const double x = timeToX(c.at) + (c.joined ? 0 : (c.edge == 0 ? w / 2 + 3 : -w / 2 - 3));
+    const double y = kRulerH + track * kTrackH + kTrackH - 6 - h - 3;
+    return {x - w / 2, y, w, h};
+}
+
+std::optional<std::pair<int, std::size_t>> TimelineWidget::cutAt(QPointF pos, double near) const {
+    const int ti = trackAt(int(pos.y()));
+    if (ti < 0 || tracks_[size_t(ti)].audio || tracks_[size_t(ti)].locked || pos.x() < kHeaderW) return std::nullopt;
+    const auto& cuts = tracks_[size_t(ti)].cuts;
+    std::optional<std::pair<int, std::size_t>> best;
+    double bestD = 1e9;
+    for (std::size_t i = 0; i < cuts.size(); ++i) {
+        const QRectF b = cutBadge(ti, cuts[i]);
+        const bool shown = !cuts[i].type.isEmpty() || (hoverCut_ && hoverCut_->first == ti && hoverCut_->second == i);
+        double d = 1e9;
+        if (near > 0) d = std::abs(b.center().x() - pos.x()) <= near && pos.y() >= b.top() - 22 ? std::abs(b.center().x() - pos.x()) : 1e9;
+        else if (shown && b.adjusted(-2, -2, 2, 2).contains(pos)) d = 0;
+        if (d < bestD) bestD = d, best = std::pair{ti, i};
+    }
+    return best;
+}
+
+void TimelineWidget::paintCuts(QPainter& p, int track) const {
+    const Track& t = tracks_[size_t(track)];
+    if (t.audio) return;
+    const auto sel = editor_->selectedCut();
+    const double t0 = scroll_ - 5, t1 = xToTime(width()) + 5;
+    const int top = kRulerH + track * kTrackH;
+    for (std::size_t i = 0; i < t.cuts.size(); ++i) {
+        const Cut& c = t.cuts[i];
+        if (c.at < t0 || c.at > t1) continue;
+        const bool hovered = hoverCut_ && hoverCut_->first == track && hoverCut_->second == i;
+        const bool dropping = dropCut_ && dropCut_->first == track && dropCut_->second == i;
+        const bool selected = sel.clipId == c.clipId && sel.edge == c.edge;
+        if (c.type.isEmpty() && !hovered && !dropping) continue;
+        // Where it plays: a band along the bottom of the clips.
+        if (!c.type.isEmpty() && c.duration > 0) {
+            const double s = c.joined ? c.at - c.duration / 2 : (c.edge == 0 ? c.at : c.at - c.duration);
+            const QRectF band(timeToX(s), top + kTrackH - 13, c.duration * pxPerSec_, 5);
+            p.fillRect(band, selected ? Theme::accent() : QColor(255, 255, 255, 120));
+        }
+        const QRectF b = cutBadge(track, c);
+        p.setPen(QPen(selected || dropping ? Theme::accent() : QColor(255, 255, 255, 200), 1));
+        p.setBrush(selected || dropping ? Theme::accent() : QColor(30, 30, 36, 230));
+        p.drawRoundedRect(b, 4, 4);
+        p.setPen(QPen(Theme::fg(), 1.4));
+        if (c.type.isEmpty()) {  // "+": add one here
+            p.drawLine(QPointF(b.center().x() - 4, b.center().y()), QPointF(b.center().x() + 4, b.center().y()));
+            p.drawLine(QPointF(b.center().x(), b.center().y() - 4), QPointF(b.center().x(), b.center().y() + 4));
+        } else {  // two overlapping squares: one picture into another
+            const QPointF m = b.center();
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(QRectF(m.x() - 5.5, m.y() - 4.5, 7, 7));
+            p.drawRect(QRectF(m.x() - 1.5, m.y() - 2.5, 7, 7));
+        }
+    }
+}
+
+void TimelineWidget::dragEnterEvent(QDragEnterEvent* e) {
+    if (e->mimeData()->hasFormat(kTransitionMime)) e->acceptProposedAction();
+}
+
+void TimelineWidget::dragMoveEvent(QDragMoveEvent* e) {
+    if (!e->mimeData()->hasFormat(kTransitionMime)) return;
+    const auto hit = cutAt(e->position(), 40);
+    if (hit != dropCut_) {
+        dropCut_ = hit;
+        update();
+    }
+    if (hit) e->acceptProposedAction();
+    else e->ignore();
+}
+
+void TimelineWidget::dragLeaveEvent(QDragLeaveEvent*) {
+    dropCut_.reset();
+    update();
+}
+
+void TimelineWidget::dropEvent(QDropEvent* e) {
+    const auto hit = cutAt(e->position(), 40);
+    dropCut_.reset();
+    if (!hit || !e->mimeData()->hasFormat(kTransitionMime)) return;
+    const Cut cut = tracks_[size_t(hit->first)].cuts[hit->second];  // copy: the edit rebuilds tracks_
+    const QString type = QString::fromUtf8(e->mimeData()->data(kTransitionMime));
+    const double keep = cut.type.isEmpty() ? vstudio::defaultTransitionDuration().seconds() : cut.duration;
+    editor_->setTransition({cut.clipId, cut.edge}, type, keep);
+    editor_->setSelectedCut(cut.clipId, cut.edge);
+    e->acceptProposedAction();
+    emit transitionsRequested();
 }
 
 void TimelineWidget::mouseReleaseEvent(QMouseEvent*) {

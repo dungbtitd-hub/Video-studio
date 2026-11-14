@@ -27,6 +27,9 @@ class TimelineView extends StatefulWidget {
     this.onTrim,
     this.snapTime,
     this.media,
+    this.cuts,
+    this.selectedCut,
+    this.onCut,
   });
 
   final ProjectView project;
@@ -47,6 +50,11 @@ class TimelineView extends StatefulWidget {
 
   /// Snapped edge time for trimming, or null.
   final double? Function(double t, double tolerance, String excludeClip)? snapTime;
+
+  /// Places for transitions per video track id (badges under the cuts); tapping one calls [onCut].
+  final Map<String, List<CutPoint>>? cuts;
+  final CutPoint? selectedCut;
+  final ValueChanged<CutPoint>? onCut;
 
   static const trackH = 56.0;
   static const rulerH = 22.0;
@@ -118,6 +126,29 @@ class _TimelineViewState extends State<TimelineView> {
   }
 
   int _rowAt(double dy) => ((dy - rulerH) / trackH).floor();
+
+  /// The transition badge under [p]: the cut between two clips, or a free edge.
+  CutPoint? _cutAt(Offset p) {
+    final cuts = widget.cuts;
+    if (cuts == null || widget.onCut == null) return null;
+    final row = _rowAt(p.dy);
+    if (row < 0 || row >= widget.project.tracks.length) return null;
+    final track = widget.project.tracks[row];
+    if (track.audio || track.locked) return null;
+    CutPoint? best;
+    var bestD = double.infinity;
+    for (final c in cuts[track.id] ?? const <CutPoint>[]) {
+      if (!cutVisible(c, widget.selectedClip)) continue;
+      final r = cutBadge(row, c, scroll, pxPerSec).inflate(8);
+      if (!r.contains(p)) continue;
+      final d = (r.center - p).distance;
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return best;
+  }
 
   /// Keyframe of [c] under [p] (picture keys on the clip's top edge, audio keys on the bottom).
   double? _keyAt(ClipView c, Offset p) {
@@ -211,6 +242,8 @@ class _TimelineViewState extends State<TimelineView> {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (d) {
+          final cut = _cutAt(d.localPosition);
+          if (cut != null) return widget.onCut!(cut);
           final h = _hit(d.localPosition);
           widget.onSelect(h?.$2.id);
           // A keyframe diamond: jump to it.
@@ -297,6 +330,8 @@ class _TimelineViewState extends State<TimelineView> {
             trimStart: _trimStart,
             trimDelta: _trimDelta,
             media: widget.media,
+            cuts: widget.onCut == null ? null : widget.cuts,
+            selectedCut: widget.selectedCut,
           ),
         ),
       );
@@ -345,6 +380,8 @@ class _TimelinePainter extends CustomPainter {
     this.trimStart = true,
     this.trimDelta = 0,
     this.media,
+    this.cuts,
+    this.selectedCut,
   }) : super(repaint: media);
 
   final ProjectView project;
@@ -360,6 +397,8 @@ class _TimelinePainter extends CustomPainter {
   final bool trimStart;
   final double trimDelta;
   final MediaCache? media;
+  final Map<String, List<CutPoint>>? cuts;
+  final CutPoint? selectedCut;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -442,6 +481,7 @@ class _TimelinePainter extends CustomPainter {
           }
         }
       }
+      if (!audio && dragClip == null && trimClip == null) _cuts(canvas, i, t, size);
       if (dim) canvas.restore();
       if (t.locked) {
         final hatch = Paint()
@@ -462,6 +502,43 @@ class _TimelinePainter extends CustomPainter {
         Paint()
           ..color = VsColors.accent
           ..strokeWidth = 2);
+  }
+
+  // Transitions: a band where one plays and a badge under each cut ("+" where none is set yet).
+  void _cuts(Canvas canvas, int row, TrackView t, Size size) {
+    final list = cuts?[t.id];
+    if (list == null || t.locked) return;
+    final top = TimelineView.rulerH + row * TimelineView.trackH;
+    for (final c in list) {
+      if (!cutVisible(c, selected)) continue;
+      final b = cutBadge(row, c, scroll, pxPerSec);
+      if (b.right < -20 || b.left > size.width + 20) continue;
+      final isSel = selectedCut != null && selectedCut!.clipId == c.clipId && selectedCut!.edge == c.edge;
+      if (c.type != null && c.duration > 0) {
+        final (s, e) = c.window;
+        canvas.drawRect(Rect.fromLTWH((s - scroll) * pxPerSec, top + TimelineView.trackH - 13, (e - s) * pxPerSec, 5),
+            Paint()..color = isSel ? VsColors.accent : const Color(0x99FFFFFF));
+      }
+      canvas.drawRRect(RRect.fromRectAndRadius(b, const Radius.circular(4)),
+          Paint()..color = isSel ? VsColors.accent : const Color(0xE61E1E24));
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(b, const Radius.circular(4)),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..color = const Color(0xCCFFFFFF));
+      final pen = Paint()
+        ..color = VsColors.fg
+        ..strokeWidth = 1.4
+        ..style = PaintingStyle.stroke;
+      final m = b.center;
+      if (c.type == null) {
+        canvas.drawLine(m - const Offset(4, 0), m + const Offset(4, 0), pen);
+        canvas.drawLine(m - const Offset(0, 4), m + const Offset(0, 4), pen);
+      } else {
+        canvas.drawRect(Rect.fromLTWH(m.dx - 5.5, m.dy - 4.5, 7, 7), pen);
+        canvas.drawRect(Rect.fromLTWH(m.dx - 1.5, m.dy - 2.5, 7, 7), pen);
+      }
+    }
   }
 
   // Keyframe diamonds: picture keys on the top edge (amber), audio keys on the bottom
@@ -549,6 +626,8 @@ class _TimelinePainter extends CustomPainter {
   @override
   bool shouldRepaint(_TimelinePainter old) =>
       old.project != project ||
+      old.cuts != cuts ||
+      old.selectedCut != selectedCut ||
       old.playhead != playhead ||
       old.selected != selected ||
       old.pxPerSec != pxPerSec ||
@@ -560,4 +639,16 @@ class _TimelinePainter extends CustomPainter {
       old.trimClip != trimClip ||
       old.trimDelta != trimDelta ||
       old.media != media;
+}
+
+/// Cuts between two clips always show a badge; a clip's free start/end only when a
+/// transition is set there or the clip is selected (to fade it in or out).
+bool cutVisible(CutPoint c, String? selectedClip) => c.joined || c.type != null || c.clipId == selectedClip;
+
+/// Where a cut's badge sits in the lanes: on the cut, or just inside a free edge.
+Rect cutBadge(int row, CutPoint c, double scroll, double pxPerSec) {
+  const w = 22.0, h = 18.0;
+  final x = (c.at - scroll) * pxPerSec + (c.joined ? 0 : (c.edge == 0 ? w / 2 + 3 : -w / 2 - 3));
+  final top = TimelineView.rulerH + row * TimelineView.trackH + TimelineView.trackH - 6 - h - 2;
+  return Rect.fromLTWH(x - w / 2, top, w, h);
 }

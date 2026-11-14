@@ -117,6 +117,26 @@ int main(void) {
     EXPECT(vs_add_cover(s, "nope", "{}") == NULL);
     EXPECT(vs_track_cover_start(s, "nope", "x", 0, 0) != 0);
     EXPECT(vs_track_status(s, NULL) == 0);
+    /* Transitions: catalog, thumbnails, refusals, cut points of an empty track. */
+    char* trs = vs_transitions_json();
+    EXPECT(trs && strstr(trs, "\"dip_black\"") && strstr(trs, "\"push_left\""));
+    vs_free(trs);
+    {
+        uint8_t a[8 * 8 * 4], b[8 * 8 * 4], o[8 * 8 * 4];
+        for (int i = 0; i < 8 * 8 * 4; ++i) {
+            a[i] = (uint8_t)(i % 4 == 3 ? 255 : 0);
+            b[i] = 255;
+        }
+        EXPECT(vs_transition_preview("fade", a, b, o, 8, 8, 1.0) == 0 && o[0] == 255);
+        EXPECT(vs_transition_preview("fade", a, b, o, 8, 8, 0.0) == 0 && o[0] == 0);
+        EXPECT(vs_transition_preview("nope", a, b, o, 8, 8, 0.5) != 0);
+    }
+    EXPECT(vs_set_transition(s, "nope", 0, "fade", 0) != 0);
+    EXPECT(vs_set_transition_everywhere(s, "nope", 0) == -1);
+    EXPECT(vs_set_transition_everywhere(s, "fade", 0) == 0);
+    char* cuts = vs_cut_points_json(s);
+    EXPECT(cuts && cuts[0] == '{');
+    vs_free(cuts);
 
     /* Tracks: flags, rename, reorder, remove, all undoable. */
     char* v2 = vs_add_track(s, VS_TRACK_VIDEO, "V2");

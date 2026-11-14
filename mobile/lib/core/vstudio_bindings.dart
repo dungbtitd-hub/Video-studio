@@ -161,6 +161,17 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, Pointer<Double>)>('vs_track_status'),
         trackCancel =
             lib.lookupFunction<Void Function(Pointer<VsSession>), void Function(Pointer<VsSession>)>('vs_track_cancel'),
+        transitionsJson = lib.lookupFunction<CStr Function(), CStr Function()>('vs_transitions_json'),
+        setTransition = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, CStr, Int64),
+            int Function(Pointer<VsSession>, CStr, int, CStr, int)>('vs_set_transition'),
+        setTransitionEverywhere = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int64),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_set_transition_everywhere'),
+        cutPointsJson = lib
+            .lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>('vs_cut_points_json'),
+        transitionPreview = lib.lookupFunction<
+            Int32 Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, Int32, Int32, Double),
+            int Function(
+                CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double)>('vs_transition_preview'),
         lookPreview = lib.lookupFunction<Int32 Function(CStr, Double, Pointer<Uint8>, Int32, Int32),
             int Function(CStr, double, Pointer<Uint8>, int, int)>('vs_look_preview'),
         exportPresetsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
@@ -255,6 +266,11 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, int, int) trackCoverStart;
   final int Function(Pointer<VsSession>, Pointer<Double>) trackStatus;
   final void Function(Pointer<VsSession>) trackCancel;
+  final CStr Function() transitionsJson;
+  final int Function(Pointer<VsSession>, CStr, int, CStr, int) setTransition;
+  final int Function(Pointer<VsSession>, CStr, int) setTransitionEverywhere;
+  final CStr Function(Pointer<VsSession>) cutPointsJson;
+  final int Function(CStr, Pointer<Uint8>, Pointer<Uint8>, Pointer<Uint8>, int, int, double) transitionPreview;
   final int Function(Pointer<VsSession>, CStr, int, int) addKeyframe;
   final int Function(Pointer<VsSession>, CStr, int, int) removeKeyframe;
   final int Function(Pointer<VsSession>, CStr, int) clearKeyframes;

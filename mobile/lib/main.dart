@@ -19,6 +19,7 @@ import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/theme.dart';
 import 'ui/timeline.dart';
+import 'ui/transition_sheet.dart';
 
 void main() => runApp(const VideoStudioApp());
 
@@ -61,6 +62,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   String? _activeCover;
   bool _tracking = false;
   double _trackProgress = 0;
+  // Transitions: every place one can go (per video track), and the one being edited.
+  Map<String, List<CutPoint>> _cuts = const {};
+  CutPoint? _selectedCut;
 
   @override
   void initState() {
@@ -203,6 +207,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (vs.revision != _revision) {
       _revision = vs.revision;
       _project = vs.project();
+      _cuts = vs.cutPoints();
       _media.sync(vs, _project!);
     }
   }
@@ -509,6 +514,54 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     if (clip == null) return;
     _edit((vs) => vs.setPropertyAt(clip.id, _playhead, {'scale': 1, 'x': 0, 'y': 0}));
     _vs?.seek(_playhead);
+  }
+
+  // ---- transitions: between touching clips, or a clip's free start / end ----
+
+  CutPoint? _cutFor(String clipId, int edge) {
+    for (final list in _cuts.values) {
+      for (final c in list) {
+        if (edge == 0 ? c.to == clipId : c.from == clipId) return c;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _transitions([CutPoint? at]) async {
+    final vs = _vs;
+    final cut = at ?? (_selectedVideoClip == null ? null : _cutFor(_selectedVideoClip!.id, 0));
+    if (vs == null || cut == null) return;
+    setState(() {
+      _selectedCut = cut;
+      _selected = cut.clipId;
+    });
+    // The sheet edits through these; each change is one undo step.
+    void set(String? type, double seconds) {
+      _edit((vs) => vs.setTransition(cut.clipId, cut.edge, type, seconds: seconds));
+      _vs?.seek(cut.joined ? cut.at - 0.3 : _playhead);
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26,
+      builder: (context) => TransitionSheet(
+        vs: vs,
+        cut: cut,
+        onApply: (type, seconds) {
+          set(type, seconds);
+          _status = 'Đã đặt chuyển cảnh. Chạm ▶ để xem.';
+        },
+        onDuration: (seconds) => set(_cutFor(cut.clipId, cut.edge)?.type ?? cut.type, seconds),
+        onRemove: () => set(null, 0.5),
+        onApplyAll: (type, seconds) => _edit((vs) {
+          final n = vs.setTransitionEverywhere(type, seconds: seconds);
+          _status = 'Đã đặt chuyển cảnh cho $n chỗ nối';
+        }),
+      ),
+    );
+    if (mounted) setState(() => _selectedCut = null);
   }
 
   // ---- covers: on the selected video clip, edited at the playhead ----
@@ -985,6 +1038,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               onTrim: (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
               snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
               media: _media,
+              cuts: _cuts,
+              selectedCut: _selectedCut,
+              onCut: _transitions,
             ),
           ),
           for (final a in project.assets.where((a) => _media.missing.contains(a.id)))
@@ -1008,30 +1064,35 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       ),
       bottomNavigationBar: BottomAppBar(
         color: VsColors.panel,
-        child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-          _Tool(icon: Icons.add_photo_alternate_outlined, label: 'Nhập', onTap: _import),
-          _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
-          _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedVideoClip == null ? null : _looks),
-          _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedVideoClip == null ? null : _enterCovers),
-          _Tool(
-              icon: Icons.delete_outline,
-              label: 'Xóa',
-              onTap: _selected == null
-                  ? null
-                  : () => _edit((vs) {
-                        vs.removeClip(_selected!);
-                        _selected = null;
-                      })),
-          _Tool(
-              icon: Icons.format_indent_decrease,
-              label: 'Xóa dồn',
-              onTap: _selected == null
-                  ? null
-                  : () => _edit((vs) {
-                        vs.rippleDelete(_selected!);
-                        _selected = null;
-                      })),
-        ]),
+        // Scrolls sideways when the tools do not fit a narrow phone.
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            _Tool(icon: Icons.add_photo_alternate_outlined, label: 'Nhập', onTap: _import),
+            _Tool(icon: Icons.content_cut, label: 'Tách', onTap: () => _edit((vs) => vs.splitAt(_playhead))),
+            _Tool(icon: Icons.auto_awesome, label: 'Lọc màu', onTap: _selectedVideoClip == null ? null : _looks),
+            _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedVideoClip == null ? null : _enterCovers),
+            _Tool(icon: Icons.animation, label: 'Chuyển cảnh', onTap: _selectedVideoClip == null ? null : _transitions),
+            _Tool(
+                icon: Icons.delete_outline,
+                label: 'Xóa',
+                onTap: _selected == null
+                    ? null
+                    : () => _edit((vs) {
+                          vs.removeClip(_selected!);
+                          _selected = null;
+                        })),
+            _Tool(
+                icon: Icons.format_indent_decrease,
+                label: 'Xóa dồn',
+                onTap: _selected == null
+                    ? null
+                    : () => _edit((vs) {
+                          vs.rippleDelete(_selected!);
+                          _selected = null;
+                        })),
+          ]),
+        ),
       ),
     );
   }

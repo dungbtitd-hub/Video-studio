@@ -790,6 +790,10 @@ QString EditorController::timecode() const { return q(fromSecs(playhead_).timeco
 void EditorController::setSelectedClip(const QString& id) {
     if (id == selected_) return;
     selected_ = id;
+    if (cut_.valid() && cut_.clipId != id) {  // a cut belongs to the clip that stores it
+        cut_ = {};
+        emit cutChanged();
+    }
     if (!activeCover_.isEmpty()) {  // the active cover belongs to the previous clip
         activeCover_.clear();
         emit coversChanged();
@@ -1015,4 +1019,84 @@ void EditorController::openPackage(const QUrl& file, const QUrl& destRoot) {
         openProject(QUrl::fromLocalFile(q(r.packageDir)));
         emit transferFinished(true, q(r.packageDir), status_);
     });
+}
+
+// ---------------------------------------------------------------- transitions
+
+namespace {
+const vstudio::CutPoint* findCut(const vstudio::Project& p, const std::string& clipId, int edge,
+                                 std::vector<vstudio::CutPoint>& storage) {
+    const vstudio::Track* tr = p.trackOfClip(clipId);
+    if (!tr) return nullptr;
+    storage = vstudio::cutPoints(*tr);
+    for (const auto& cp : storage) {
+        if (edge == 0 && cp.to && cp.to->id == clipId) return &cp;
+        if (edge == 1 && cp.from && cp.from->id == clipId) return &cp;
+    }
+    return nullptr;
+}
+}  // namespace
+
+EditorController::Cut EditorController::normalizedCut(const QString& clipId, int edge) const {
+    std::vector<vstudio::CutPoint> cuts;
+    if (!snapshot_ || clipId.isEmpty()) return {};
+    const auto* cp = findCut(*snapshot_, s(clipId), edge, cuts);
+    if (!cp) return {};
+    return {q(cp->owner()->id), cp->edge() == vstudio::TransitionEdge::In ? 0 : 1};
+}
+
+void EditorController::setSelectedCut(const QString& clipId, int edge) {
+    const Cut c = normalizedCut(clipId, edge);
+    const bool same = c.clipId == cut_.clipId && c.edge == cut_.edge;
+    cut_ = c;
+    if (c.valid() && c.clipId != selected_) {  // the clip that stores it becomes the selected clip
+        selected_ = c.clipId;
+        if (!activeCover_.isEmpty()) {
+            activeCover_.clear();
+            emit coversChanged();
+        }
+        emit selectionChanged();
+    } else if (same) {
+        return;
+    }
+    emit cutChanged();
+}
+
+QPair<QString, double> EditorController::transitionAt(const Cut& cut) const {
+    std::vector<vstudio::CutPoint> cuts;
+    if (!snapshot_ || !cut.valid()) return {{}, 0.0};
+    const auto* cp = findCut(*snapshot_, s(cut.clipId), cut.edge, cuts);
+    if (!cp || !cp->transition.is_object()) return {{}, 0.0};
+    return {q(cp->transition.value("type", std::string{})), cp->duration.seconds()};
+}
+
+QString EditorController::cutLabel(const Cut& cut) const {
+    std::vector<vstudio::CutPoint> cuts;
+    if (!snapshot_ || !cut.valid()) return {};
+    const auto* cp = findCut(*snapshot_, s(cut.clipId), cut.edge, cuts);
+    if (!cp) return {};
+    auto name = [&](const vstudio::Clip* c) {
+        const auto* a = snapshot_->findAsset(c->assetId);
+        const QString uri = a ? q(a->uri) : QString("?");
+        return uri.mid(uri.lastIndexOf('/') + 1);
+    };
+    if (cp->from && cp->to) return tr("Chỗ nối: %1 → %2").arg(name(cp->from), name(cp->to));
+    if (cp->to) return tr("Đầu clip %1: hiện dần lên").arg(name(cp->to));
+    return tr("Cuối clip %1: mờ dần đi").arg(name(cp->from));
+}
+
+void EditorController::setTransition(const Cut& cut, const QString& type, double seconds) {
+    if (!cut.valid()) return;
+    edit([&] {
+        editor_->setTransition(s(cut.clipId), cut.edge == 1 ? vstudio::TransitionEdge::Out : vstudio::TransitionEdge::In,
+                               s(type), vstudio::Time::fromSeconds(seconds));
+    });
+    emit cutChanged();  // what plays at the selected cut may have changed
+}
+
+int EditorController::setTransitionEverywhere(const QString& type, double seconds) {
+    int n = 0;
+    edit([&] { n = editor_->setTransitionEverywhere(s(type), vstudio::Time::fromSeconds(seconds)); });
+    emit cutChanged();
+    return n;
 }

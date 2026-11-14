@@ -21,6 +21,7 @@ add_library(vstudio_core STATIC
     src/keyframes.cpp
     src/cover.cpp
     src/tracker.cpp
+  src/transitions.cpp
 )
 add_library(vstudio::core ALIAS vstudio_core)
 target_include_directories(vstudio_core PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

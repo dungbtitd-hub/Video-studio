@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,8 @@
 #include "vstudio/modules.hpp"
 
 namespace vstudio {
+
+struct ActiveTransition;  // transitions.hpp
 
 struct VideoLayer {
     const Clip* clip = nullptr;
@@ -76,6 +79,9 @@ private:
     std::shared_ptr<const VideoFrame> sourceFrame(const VideoLayer& layer, int outW, int outH, const std::string& purpose,
                                                   bool deep);
     ICompositor& compositor();
+    std::optional<CompositeLayer> clipLayer(const VideoLayer& layer, const VideoFrame& out, const std::string& purpose);
+    std::optional<CompositeLayer> transitionLayer(const ActiveTransition& tr, std::size_t trackIndex, Time t,
+                                                  const VideoFrame& out, const std::string& purpose);
 
     const Project& project_;
     MediaPool& pool_;

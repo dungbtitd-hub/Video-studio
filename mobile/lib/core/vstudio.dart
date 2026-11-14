@@ -94,6 +94,11 @@ class CoverState {
 
 enum TrackState { idle, running, done, lost, cancelled, failed }
 
+class TransitionInfo {
+  const TransitionInfo(this.id, this.name, this.category);
+  final String id, name, category;
+}
+
 /// Keyframe groups: picture (zoom, position, opacity) and audio (volume) are independent.
 enum KeyGroup { picture, audio }
 
@@ -415,6 +420,46 @@ class VStudio {
         );
       });
   void cancelTrack() => _b.trackCancel(_s);
+
+  // ---- transitions between clips (fade, dip to black, slides, wipes...) ----
+
+  List<TransitionInfo> transitions() => [
+        for (final e in (jsonDecode(_take(_b.transitionsJson())) as List).cast<Map<String, dynamic>>())
+          TransitionInfo(e['id'] as String, e['name'] as String, e['category'] as String)
+      ];
+
+  /// Sets (or with [type] null/empty removes) the transition at a clip's start (edge 0) or end (edge 1).
+  void setTransition(String clipId, int edge, String? type, {double seconds = 0.5}) =>
+      using((a) => _check(_b.setTransition(_s, clipId.toNativeUtf8(allocator: a), edge,
+          (type ?? '').toNativeUtf8(allocator: a), secondsToTicks(seconds))));
+
+  /// The same transition on every cut between touching clips; returns how many.
+  int setTransitionEverywhere(String? type, {double seconds = 0.5}) => using((a) {
+        final n = _b.setTransitionEverywhere(_s, (type ?? '').toNativeUtf8(allocator: a), secondsToTicks(seconds));
+        if (n < 0) throw VStudioException(lastError);
+        return n;
+      });
+
+  /// Every place a transition can go, per video track id.
+  Map<String, List<CutPoint>> cutPoints() {
+    final j = jsonDecode(_take(_b.cutPointsJson(_s))) as Map<String, dynamic>;
+    return {
+      for (final e in j.entries)
+        e.key: [for (final c in (e.value as List).cast<Map<String, dynamic>>()) CutPoint.fromJson(e.key, c)]
+    };
+  }
+
+  /// [a] blended into [b] (both width x height RGBA) at [progress] 0..1, for thumbnails.
+  Uint8List? transitionPreview(String type, Uint8List a, Uint8List b, int width, int height, double progress) =>
+      using((al) {
+        final pa = al<Uint8>(a.length), pb = al<Uint8>(b.length), po = al<Uint8>(a.length);
+        pa.asTypedList(a.length).setAll(0, a);
+        pb.asTypedList(b.length).setAll(0, b);
+        if (_b.transitionPreview(type.toNativeUtf8(allocator: al), pa, pb, po, width, height, progress) != 0) {
+          return null;
+        }
+        return Uint8List.fromList(po.asTypedList(a.length));
+      });
 
   /// A copy of [rgba] (width x height) with the look applied, for look thumbnails.
   Uint8List? lookPreview(String lookId, Uint8List rgba, int width, int height, {double strength = 1}) => using((a) {

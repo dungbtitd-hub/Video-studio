@@ -28,6 +28,7 @@
 
 #include "EditorController.h"
 #include "CoverPanel.h"
+#include "TransitionsPanel.h"
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
@@ -230,6 +231,12 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     coverDock->setWidget(covers_);
     addDockWidget(Qt::RightDockWidgetArea, coverDock);
     tabifyDockWidget(looksDock, coverDock);
+    auto* transitionsDock = new QDockWidget("Chuyển cảnh", this);
+    transitionsDock->setObjectName("transitions");
+    transitions_ = new TransitionsPanel(editor_, transitionsDock);
+    transitionsDock->setWidget(transitions_);
+    addDockWidget(Qt::RightDockWidgetArea, transitionsDock);
+    tabifyDockWidget(coverDock, transitionsDock);
     looksDock->raise();
     // Region on the preview follows the active cover; dragging it there edits the cover.
     connect(editor_, &EditorController::coversChanged, this, &MainWindow::refreshCoverOverlay);
@@ -245,6 +252,10 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     tlBar_->setIconSize(QSize(14, 14));
     tll->addWidget(tlBar_);
     timeline_ = new TimelineWidget(editor_, tlBox);
+    connect(timeline_, &TimelineWidget::transitionsRequested, transitionsDock, [transitionsDock] {
+        transitionsDock->show();
+        transitionsDock->raise();
+    });
     tll->addWidget(timeline_, 1);
     timelineDock->setWidget(tlBox);
     addDockWidget(Qt::BottomDockWidgetArea, timelineDock);

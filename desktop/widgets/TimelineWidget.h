@@ -31,6 +31,7 @@ signals:
     void painted();  // for benchmarks
     void snappingChanged(bool on);
     void zoomChanged(double pxPerSec);
+    void transitionsRequested();  // a transition badge was clicked: show the transitions panel
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -41,6 +42,15 @@ protected:
     void keyPressEvent(QKeyEvent*) override;
     void wheelEvent(QWheelEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    void dragEnterEvent(QDragEnterEvent*) override;
+    void dragMoveEvent(QDragMoveEvent*) override;
+    void dragLeaveEvent(QDragLeaveEvent*) override;
+    void dropEvent(QDropEvent*) override;
+    void leaveEvent(QEvent*) override;
+
+public:
+    // Mime type of a transition dragged from the panel (payload: the transition id, UTF-8).
+    static constexpr const char* kTransitionMime = "application/x-vstudio-transition";
 
 private:
     struct Clip {
@@ -53,10 +63,20 @@ private:
         double speed;  // source seconds per timeline second
         std::vector<double> pictureKeys, audioKeys;  // keyframes, timeline seconds (inside the clip)
     };
+    // A place a transition can go (video tracks): a cut between touching clips, or a free clip edge.
+    struct Cut {
+        double at = 0;
+        QString clipId;  // the clip storing it
+        int edge = 0;    // 0 = start of clipId, 1 = end
+        bool joined = false;
+        QString type;    // "" = none
+        double duration = 0;
+    };
     struct Track {
         QString id, name;
         bool audio;
         std::vector<Clip> clips;  // sorted by start
+        std::vector<Cut> cuts;    // sorted by time
         bool enabled = true, locked = false, muted = false;
         int indexInType = 0;  // 0 = bottom video layer / first audio track
     };
@@ -78,6 +98,11 @@ private:
     // Keyframe diamond under `pos` on clip `c` (timeline seconds), if any.
     [[nodiscard]] std::optional<double> keyAt(const Clip& c, const QRectF& r, QPointF pos) const;
     void paintKeyframes(QPainter& p, const Clip& c, const QRectF& r, bool selected) const;
+    // Transition badge of a cut on track `track` (widget coordinates).
+    [[nodiscard]] QRectF cutBadge(int track, const Cut& c) const;
+    // The cut whose badge (or, with `near`, whose position within that many px) is under `pos`.
+    [[nodiscard]] std::optional<std::pair<int, std::size_t>> cutAt(QPointF pos, double near = 0) const;
+    void paintCuts(QPainter& p, int track) const;
 
     static constexpr int kHeaderW = 120, kRulerH = 24, kTrackH = 54;
     EditorController* editor_;
@@ -90,4 +115,5 @@ private:
     int dragTargetTrack_ = -1;      // track under the pointer while moving (same type, unlocked)
     bool snapping_ = true;          // N toggles; hold Shift to drag freely
     double snapAt_ = -1;            // snapped edge to highlight while dragging (seconds), -1 = none
+    std::optional<std::pair<int, std::size_t>> hoverCut_, dropCut_;  // (track, cut) under the pointer / a drop
 };

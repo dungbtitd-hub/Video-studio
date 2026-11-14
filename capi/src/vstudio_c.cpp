@@ -16,6 +16,7 @@
 #include "vstudio/keyframes.hpp"
 #include "vstudio/looks.hpp"
 #include "vstudio/transfer.hpp"
+#include "vstudio/transitions.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
 #include "vstudio/preview.hpp"
@@ -726,6 +727,68 @@ int vs_track_status(vs_session* s, double* progress) {
 
 void vs_track_cancel(vs_session* s) {
     if (s) s->trackCancel.cancel();
+}
+
+char* vs_transitions_json(void) {
+    Json out = Json::array();
+    for (const auto& t : transitionCatalog()) out.push_back({{"id", t.id}, {"name", t.name}, {"category", t.category}});
+    return dup(out.dump());
+}
+
+int vs_set_transition(vs_session* s, const char* clip_id, int edge, const char* type, int64_t duration) {
+    return guard(s, [&] {
+        const Time d = duration > 0 ? Time::fromTicks(duration) : defaultTransitionDuration();
+        s->editor->setTransition(clipOrThrow(s, clip_id).id, edge == 1 ? TransitionEdge::Out : TransitionEdge::In,
+                                 str(type), d);
+        s->edited();
+    });
+}
+
+int vs_set_transition_everywhere(vs_session* s, const char* type, int64_t duration) {
+    int n = 0;
+    const int rc = guard(s, [&] {
+        n = s->editor->setTransitionEverywhere(str(type),
+                                               duration > 0 ? Time::fromTicks(duration) : defaultTransitionDuration());
+        if (n > 0) s->edited();
+    });
+    return rc == 0 ? n : -1;
+}
+
+char* vs_cut_points_json(vs_session* s) {
+    return guardStr(s, [&] {
+        Json out = Json::object();
+        for (const Track& tr : s->editor->project().tracks) {
+            if (tr.type != TrackType::Video) continue;
+            Json cuts = Json::array();
+            for (const auto& cp : cutPoints(tr))
+                cuts.push_back({{"at", cp.at.ticks()},
+                                {"from", cp.from ? Json(cp.from->id) : Json()},
+                                {"to", cp.to ? Json(cp.to->id) : Json()},
+                                {"type", cp.transition.is_object() ? cp.transition["type"] : Json()},
+                                {"duration", cp.duration.ticks()}});
+            out[tr.id] = std::move(cuts);
+        }
+        return out.dump();
+    });
+}
+
+int vs_transition_preview(const char* type, const uint8_t* a, const uint8_t* b, uint8_t* out, int width, int height,
+                          double progress) {
+    if (!a || !b || !out || width <= 0 || height <= 0 || !findTransition(str(type))) return -1;
+    try {
+        const std::size_t n = static_cast<std::size_t>(width) * height * 4;
+        VideoFrame fa, fb, fo;
+        fa.width = fb.width = width;
+        fa.height = fb.height = height;
+        fa.rgba.assign(a, a + n);
+        fb.rgba.assign(b, b + n);
+        fo.allocate(width, height);
+        applyTransition(str(type), fa, fb, progress, fo, Time::fromSeconds(progress));
+        std::memcpy(out, fo.rgba.data(), n);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 char* vs_suggested_log_format(vs_session* s, const char* asset_id) {

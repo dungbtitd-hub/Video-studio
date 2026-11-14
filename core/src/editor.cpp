@@ -458,6 +458,55 @@ void Editor::setCoverTrack(const Id& clipId, const Id& effectId,
     });
 }
 
+namespace {
+Json transitionJson(const std::string& type, Time duration) {
+    if (type.empty()) return nullptr;
+    if (!findTransition(type)) throw EditError("unknown transition: " + type);
+    const Time d = std::clamp(duration, minTransitionDuration(), maxTransitionDuration());
+    return Json{{"type", type}, {"duration", d.ticks()}};
+}
+}  // namespace
+
+void Editor::setTransition(const Id& clipId, TransitionEdge edge, const std::string& type, Time duration) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    const Json value = transitionJson(type, duration);
+    Id owner = clipId;
+    if (edge == TransitionEdge::Out) {
+        // A clip's end that touches the next clip is the cut: it belongs to the next clip's start.
+        for (const auto& cp : cutPoints(*tr))
+            if (cp.from && cp.from->id == clipId && cp.to) {
+                owner = cp.to->id;
+                edge = TransitionEdge::In;
+            }
+    }
+    run(type.empty() ? "Remove transition" : "Transition", EditCommand::Scope::Tracks, {tr->id}, [=](Project& p) {
+        Clip& c = editableClip(p, owner);
+        (edge == TransitionEdge::In ? c.transitionIn : c.transitionOut) = value;
+    });
+}
+
+int Editor::setTransitionEverywhere(const std::string& type, Time duration) {
+    const Json value = transitionJson(type, duration);
+    std::vector<Id> tracks, clips;
+    for (const Track& tr : project_.tracks) {
+        if (tr.type != TrackType::Video || tr.locked) continue;
+        bool any = false;
+        for (const auto& cp : cutPoints(tr))
+            if (cp.from && cp.to) {
+                clips.push_back(cp.to->id);
+                any = true;
+            }
+        if (any) tracks.push_back(tr.id);
+    }
+    if (clips.empty()) return 0;
+    run(type.empty() ? "Remove transitions" : "Transitions everywhere", EditCommand::Scope::Tracks, tracks,
+        [=](Project& p) {
+            for (const Id& id : clips) editableClip(p, id).transitionIn = value;
+        });
+    return static_cast<int>(clips.size());
+}
+
 void Editor::setClipVolume(const Id& clipId, double v) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");

@@ -19,6 +19,7 @@
 #include "vstudio/render.hpp"
 #include "vstudio/scheduler.hpp"
 #include "vstudio/transfer.hpp"
+#include "vstudio/transitions.hpp"
 #include "vtest.hpp"
 
 using namespace vstudio;
@@ -1445,4 +1446,143 @@ TEST("tracker: follows a moving logo frame by frame, then few keys describe it")
         CHECK(s.box.w <= 0.6 + 1e-9 && s.box.w >= 0.15 - 1e-9);
         CHECK(s.box.x + s.box.w / 2 >= 0 && s.box.x + s.box.w / 2 <= 1);
     }
+}
+
+// ------------------------------------------------------------------ transitions
+
+namespace {
+// Mean absolute difference per channel, 0..255.
+double frameDiff(const VideoFrame& a, const VideoFrame& b) {
+    double sum = 0;
+    for (std::size_t i = 0; i < a.rgba.size(); ++i) sum += std::abs(int(a.rgba[i]) - int(b.rgba[i]));
+    return sum / static_cast<double>(a.rgba.size());
+}
+}  // namespace
+
+TEST("transitions: every type starts exactly on A, ends exactly on B, and moves without jumps") {
+    CHECK(transitionCatalog().size() >= 30u);
+    std::set<std::string> ids;
+    for (const auto& t : transitionCatalog()) ids.insert(t.id);
+    CHECK_EQ(ids.size(), transitionCatalog().size());
+    // Two smooth, different pictures (gradients), so a step measures the transition, not texture aliasing.
+    auto gradient = [](bool flip) {
+        VideoFrame g;
+        g.allocate(96, 54);
+        for (int y = 0; y < 54; ++y)
+            for (int x = 0; x < 96; ++x) {
+                std::uint8_t* px = &g.rgba[(static_cast<std::size_t>(y) * 96 + x) * 4];
+                px[0] = static_cast<std::uint8_t>(flip ? 230 - x * 2 : 20 + x * 2);
+                px[1] = static_cast<std::uint8_t>(flip ? 40 + y * 3 : 200 - y * 3);
+                px[2] = static_cast<std::uint8_t>(flip ? 60 : 180);
+                px[3] = 255;
+            }
+        return g;
+    };
+    const VideoFrame a = gradient(false), bInv = gradient(true);
+    for (const auto& info : transitionCatalog()) {
+        VideoFrame out, prev;
+        out.allocate(96, 54);
+        applyTransition(info.id, a, bInv, 0.0, out, sec(1));
+        CHECK(frameDiff(out, a) < 0.6);
+        applyTransition(info.id, a, bInv, 1.0, out, sec(1));
+        CHECK(frameDiff(out, bInv) < 0.6);
+        // 50 steps: no single step changes the picture abruptly ("không bục một phát").
+        double worst = 0;
+        for (int s = 0; s <= 50; ++s) {
+            applyTransition(info.id, a, bInv, s / 50.0, out, sec(1));
+            if (s > 0) worst = std::max(worst, frameDiff(out, prev));
+            prev = out;
+        }
+        if (std::getenv("VSTUDIO_TRANSITION_STEPS") || worst >= 10) std::printf("  transition %s: largest step %.1f\n", info.id.c_str(), worst);
+        CHECK(worst < 10);
+    }
+    // Deep frames work too.
+    VideoFrame da = convertedFrame(a, PixelFormat::RGBA16F), db = convertedFrame(bInv, PixelFormat::RGBA16F), dout;
+    dout.allocate(96, 54, PixelFormat::RGBA16F);
+    applyTransition("circle_open", da, db, 1.0, dout);
+    CHECK(frameDiff(convertedFrame(dout, PixelFormat::RGBA8), bInv) < 1.0);
+}
+
+TEST("transitions: centred on the cut, from/to nothing inside the clip, clamped, audio fades") {
+    Fixture f;
+    const Id c1 = f.ed.appendClip(f.v1, f.asset, sec(2), sec(4));  // timeline 0..2
+    const Id c2 = f.ed.appendClip(f.v1, f.asset, sec(6), sec(8));  // timeline 2..4
+    f.ed.setTransition(c2, TransitionEdge::In, "fade", sec(1));
+    const Track& tr = *f.ed.project().findTrack(f.v1);
+    CHECK(!transitionAt(tr, sec(1.4)));
+    auto at = transitionAt(tr, sec(2.0));
+    CHECK(at && at->type == "fade" && at->from->id == c1 && at->to->id == c2);
+    CHECK(std::abs(at->progress - 0.5) < 1e-9);
+    CHECK(at->start == sec(1.5) && at->end == sec(2.5));
+    CHECK(!transitionAt(tr, sec(2.5)));
+    // The end of c1 touching c2 IS that cut: setting it there lands on c2's start.
+    f.ed.setTransition(c1, TransitionEdge::Out, "wipe_left", sec(0.8));
+    CHECK(f.ed.project().findClip(c2)->transitionIn["type"] == "wipe_left");
+    CHECK(f.ed.project().findClip(c1)->transitionOut.is_null());
+    f.ed.setTransition(c2, TransitionEdge::In, "fade", sec(1));
+    // Free start and end: inside the clip, at most half of it.
+    f.ed.setTransition(c1, TransitionEdge::In, "dip_black", sec(0.4));
+    f.ed.setTransition(c2, TransitionEdge::Out, "fade", sec(5));
+    at = transitionAt(f.ed.project().tracks[0], sec(0.2));
+    CHECK(at && !at->from && at->to->id == c1 && std::abs(at->progress - 0.5) < 1e-9);
+    at = transitionAt(f.ed.project().tracks[0], sec(3.5));
+    CHECK(at && at->from->id == c2 && !at->to && at->start == sec(3.0));  // 5 s clamped to half of 2 s
+    const auto cuts = cutPoints(f.ed.project().tracks[0]);
+    CHECK_EQ(cuts.size(), 3u);  // start, the cut, end
+    CHECK(cuts[1].from && cuts[1].to && cuts[1].duration == sec(1));
+    CHECK(cuts[2].duration == sec(1));
+    // Audio: c1 falls over the first half of the cut, c2 rises over the second; silent at the cut itself.
+    const Track& t2 = f.ed.project().tracks[0];
+    const Clip& k1 = t2.clips[0];
+    const Clip& k2 = t2.clips[1];
+    CHECK(std::abs(transitionGain(t2, k1, sec(1.0)) - 1.0) < 1e-9);
+    CHECK(transitionGain(t2, k1, sec(1.75)) > 0.4 && transitionGain(t2, k1, sec(1.75)) < 0.6);
+    CHECK(transitionGain(t2, k1, sec(2.0)) < 1e-9);
+    CHECK(transitionGain(t2, k2, sec(2.0)) < 1e-9);
+    CHECK(std::abs(transitionGain(t2, k2, sec(2.5)) - 1.0) < 1e-9);
+    CHECK(transitionGain(t2, k1, sec(0.0)) < 1e-9);  // fades in from silence
+    // Split keeps the clip's start on the left half and its end on the right; undo; JSON round trip.
+    const Id right = f.ed.splitClip(c2, sec(3));
+    CHECK(f.ed.project().findClip(c2)->transitionIn["type"] == "fade");
+    CHECK(f.ed.project().findClip(c2)->transitionOut.is_null());
+    CHECK(f.ed.project().findClip(right)->transitionIn.is_null());
+    CHECK(f.ed.project().findClip(right)->transitionOut["type"] == "fade");
+    const Project back = projectFromJson(toJson(f.ed.project()));
+    CHECK(back.findClip(right)->transitionOut == f.ed.project().findClip(right)->transitionOut);
+    CHECK(back.findClip(c2)->extra.empty() || !back.findClip(c2)->extra.contains("transition_in"));
+    CHECK_THROWS(f.ed.setTransition(c1, TransitionEdge::In, "nope"));
+    f.ed.setTransition(c2, TransitionEdge::In, "");
+    CHECK(f.ed.project().findClip(c2)->transitionIn.is_null());
+    CHECK(f.ed.undo());
+    CHECK(f.ed.project().findClip(c2)->transitionIn["type"] == "fade");
+    // Apply to all: every cut between touching clips.
+    CHECK_EQ(f.ed.setTransitionEverywhere("push_left", sec(0.6)), 2);
+    CHECK(f.ed.project().findClip(right)->transitionIn["type"] == "push_left");
+    CHECK(f.ed.project().findClip(c1)->transitionIn["type"] == "dip_black");  // free starts untouched
+}
+
+TEST("render: a transition blends both clips, each reading past its edge, and fades in from black") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(2), sec(4));                 // source frames 60..119 on 0..2 s
+    const Id c2 = f.ed.appendClip(f.v1, f.asset, sec(6), sec(8));  // source frames 180..239 on 2..4 s
+    f.ed.setTransition(c2, TransitionEdge::In, "fade", sec(1));
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    Renderer r(f.ed.project(), pool);
+    const std::size_t centre = (36 * 128 + 64) * 4;
+    auto red = [&](double s) { return int(r.renderVideo(sec(s), 128, 72).rgba[centre]); };
+    CHECK_EQ(red(1.4), 102);                    // before the window: c1 alone
+    CHECK(std::abs(red(2.0) - 150) <= 1);       // c1 at source 4.0 (frame 120, past its out) + c2 at 6.0 (180)
+    CHECK(std::abs(red(2.25) - 178) <= 1);      // eased: already mostly c2
+    CHECK_EQ(red(2.5), 195);                    // after: c2 alone
+    f.ed.setTransition(f.ed.project().tracks[0].clips[0].id, TransitionEdge::In, "fade", sec(0.4));
+    Renderer r2(f.ed.project(), pool);
+    CHECK(std::abs(int(r2.renderVideo(sec(0.2), 128, 72).rgba[centre]) - 33) <= 1);  // half of frame 66 over black
+    // Audio: silent exactly at the cut, full a little after.
+    const AudioBuffer au = r2.renderAudio(sec(2.0).toSample(48000), 4800);
+    CHECK(std::abs(au.samples[0]) < 1e-6);
+    const AudioBuffer full = r2.renderAudio(sec(3.0).toSample(48000), 480);
+    float peak = 0;
+    for (float v : full.samples) peak = std::max(peak, std::abs(v));
+    CHECK(peak > 0.2f);
 }
