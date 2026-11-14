@@ -523,6 +523,12 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
             t->setElideMode(Qt::ElideNone);
             t->setUsesScrollButtons(true);
         }
+        // As in the demo, the library opens on Media and the clip settings on Cơ bản
+        // (a raise before the window is shown does not stick to the tab bar).
+        if (!restoredLayout_) {
+            mediaDock_->raise();
+            inspectorDock_->raise();
+        }
     });
     // Layout as built is the default; then the user's saved layout, if any.
     defaultState_ = saveState(kLayoutVersion);

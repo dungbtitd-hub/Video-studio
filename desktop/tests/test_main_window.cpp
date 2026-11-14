@@ -1100,6 +1100,10 @@ private slots:
         const QString out = qEnvironmentVariable("VSTUDIO_WALKTHROUGH_OUT");
         if (!out.isEmpty()) QDir().mkpath(out);
         win_->resize(1440, 900);
+        // Default panels as a new user sees them (another test may have saved a different layout).
+        win_->resetLayout();
+        for (const char* name : {"media", "inspector"})
+            if (auto* d = win_->findChild<QDockWidget*>(name)) d->raise();
         auto shot = [&](const QString& name) {
             QTest::qWait(700);  // frames and thumbnails arrive
             if (!out.isEmpty()) win_->grab().save(out + "/" + name + ".png");
