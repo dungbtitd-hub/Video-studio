@@ -25,6 +25,33 @@ std::array<double, 3> rgb(const Json& p, const char* key, double def) {
     return out;
 }
 
+// The look's per-channel tone curve (exposure, white balance, lift/gain, gamma, S-curve,
+// fade): shared by the CPU effect and the GPU table so both use the same numbers.
+struct LookCurve {
+    double exposure, k, fade;
+    std::array<double, 3> lift, gamma, gain, wb;
+    explicit LookCurve(const Json& p) {
+        exposure = std::pow(2.0, std::clamp(p.value("exposure", 0.0), -4.0, 4.0));
+        k = std::clamp(p.value("contrast", 1.0), 0.0, 2.0) - 1.0;  // S-curve amount
+        const double temp = std::clamp(p.value("temperature", 0.0), -1.0, 1.0);
+        const double tint = std::clamp(p.value("tint", 0.0), -1.0, 1.0);
+        fade = std::clamp(p.value("fade", 0.0), 0.0, 0.5);
+        lift = rgb(p, "lift", 0.0);
+        gamma = rgb(p, "gamma", 1.0);
+        gain = rgb(p, "gain", 1.0);
+        wb = {1.0 + 0.12 * temp, 1.0 - 0.10 * tint, 1.0 - 0.12 * temp};
+    }
+    float operator()(int c, double v) const {
+        const double g = std::max(0.05, gamma[c]);
+        double x = v * exposure * wb[c];
+        x = gain[c] * x + lift[c] * (1.0 - x);
+        x = std::pow(std::clamp(x, 0.0, 1.0), 1.0 / g);
+        x = x - k * std::sin(2 * kPi * x) / (2 * kPi);  // slope 1+k at mid-grey, 0 and 1 fixed
+        x = fade + x * (1.0 - fade);
+        return static_cast<float>(std::clamp(x, 0.0, 1.0));
+    }
+};
+
 }  // namespace
 
 // Parameters (all optional, defaults leave the image unchanged):
@@ -39,25 +66,9 @@ void applyColorLook(VideoFrame& f, const Json& p) {
     if (f.empty()) return;
     const double strength = std::clamp(p.value("strength", 1.0), 0.0, 1.0);
     if (strength <= 0) return;
-    const double exposure = std::pow(2.0, std::clamp(p.value("exposure", 0.0), -4.0, 4.0));
-    const double k = std::clamp(p.value("contrast", 1.0), 0.0, 2.0) - 1.0;  // S-curve amount
-    const double temp = std::clamp(p.value("temperature", 0.0), -1.0, 1.0);
-    const double tint = std::clamp(p.value("tint", 0.0), -1.0, 1.0);
-    const double fade = std::clamp(p.value("fade", 0.0), 0.0, 0.5);
-    const auto lift = rgb(p, "lift", 0.0), gamma = rgb(p, "gamma", 1.0), gain = rgb(p, "gain", 1.0);
-    const std::array<double, 3> wb{1.0 + 0.12 * temp, 1.0 - 0.10 * tint, 1.0 - 0.12 * temp};
-
     // Per-channel tone curve as a table: built once per frame, so the per-pixel cost is a
     // lookup. 256 entries for 8-bit frames; 4097 (interpolated) for deep ones.
-    auto curve = [&](int c, double v) {
-        const double g = std::max(0.05, gamma[c]);
-        double x = v * exposure * wb[c];
-        x = gain[c] * x + lift[c] * (1.0 - x);
-        x = std::pow(std::clamp(x, 0.0, 1.0), 1.0 / g);
-        x = x - k * std::sin(2 * kPi * x) / (2 * kPi);  // slope 1+k at mid-grey, 0 and 1 fixed
-        x = fade + x * (1.0 - fade);
-        return static_cast<float>(std::clamp(x, 0.0, 1.0));
-    };
+    const LookCurve curve(p);
     constexpr int kDeepSteps = 4096;
     std::array<std::array<std::uint8_t, 256>, 3> lut{};
     std::array<std::array<float, 256>, 3> lutf{};
@@ -253,6 +264,30 @@ void applyColorLook(VideoFrame& f, const Json& p) {
             }
         }
     });
+}
+
+LookGpu lookGpu(const Json& p, int steps) {
+    LookGpu g;
+    const float strength = static_cast<float>(std::clamp(p.value("strength", 1.0), 0.0, 1.0));
+    g.active = strength > 0.0f;
+    const LookCurve curve(p);
+    for (int c = 0; c < 3; ++c) {
+        g.curve[c].resize(static_cast<std::size_t>(steps) + 1);
+        for (int v = 0; v <= steps; ++v) g.curve[c][v] = curve(c, static_cast<double>(v) / steps);
+    }
+    const bool mono = p.value("mono", false);
+    const float sat = static_cast<float>(std::clamp(p.value("saturation", 1.0), 0.0, 3.0));
+    const float vib = static_cast<float>(std::clamp(p.value("vibrance", 0.0), -1.0, 1.0));
+    const auto sh = rgb(p, "shadows", 0.0), hi = rgb(p, "highlights", 0.0);
+    const bool split = sh[0] != 0 || sh[1] != 0 || sh[2] != 0 || hi[0] != 0 || hi[1] != 0 || hi[2] != 0;
+    const bool colour = mono || sat != 1.0f || vib != 0.0f || split;
+    const float vig = static_cast<float>(std::clamp(p.value("vignette", 0.0), 0.0, 1.0));
+    const float u[16] = {g.active ? 1.0f : 0.0f, strength, mono ? 0.0f : sat, mono ? 0.0f : vib,
+                         colour ? 1.0f : 0.0f, split ? 1.0f : 0.0f, vig, 0.0f,
+                         float(sh[0]), float(sh[1]), float(sh[2]), 0.0f,
+                         float(hi[0]), float(hi[1]), float(hi[2]), 0.0f};
+    std::copy(u, u + 16, g.u);
+    return g;
 }
 
 const std::vector<ColorLook>& colorLooks() {

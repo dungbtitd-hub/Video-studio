@@ -316,7 +316,7 @@ private slots:
         ctrl_->setSelectedClip(clip);
         QComboBox* list = panel->pluginList();
         QTRY_COMPARE(list->count(), 2);
-        for (const QString id : {QString("example.invert"), QString("example.gain")}) {
+        for (const QString& id : {QString("example.invert"), QString("example.gain")}) {
             list->setCurrentIndex(list->findData(id));
             panel->pluginOn()->setChecked(true);
             QVERIFY(ctrl_->hasPluginEffect(clip, id));

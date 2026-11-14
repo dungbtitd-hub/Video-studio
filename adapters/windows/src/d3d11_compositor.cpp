@@ -35,20 +35,21 @@ cbuffer Layer : register(b0) {
     int2 offset;
     uint graded;
     uint3 pad;
-    float4 g[4];     // grade uniforms (GpuGrade::u)
+    float4 g[10];    // grade, look and key uniforms (GpuGrade::u)
 };
 Texture2D<float4> tex : register(t0);
-Texture2D<float4> gradeTab : register(t1);  // R32G32B32A32_FLOAT, 4098 x 2 (GpuGrade::table); Load only
+Texture2D<float4> gradeTab : register(t1);  // R32G32B32A32_FLOAT, 4098 x 3 (GpuGrade::table); Load only
 SamplerState smp : register(s0);
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
 // Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
-float tone(float v, float4 m) {
+float toneRow(float v, float4 m, int row) {
     float pos = saturate(v) * 4096.0;
     int i = min(int(pos), 4095);
     float t = pos - float(i);
-    return lerp(dot(gradeTab.Load(int3(i, 0, 0)), m), dot(gradeTab.Load(int3(i + 1, 0, 0)), m), t);
+    return lerp(dot(gradeTab.Load(int3(i, row, 0)), m), dot(gradeTab.Load(int3(i + 1, row, 0)), m), t);
 }
+float tone(float v, float4 m) { return toneRow(v, m, 0); }
 float4 hueRow(float h) {
     float pos = h - 360.0 * floor(h / 360.0);
     int i = clamp(int(pos), 0, 359);
@@ -119,6 +120,40 @@ float3 grade(float3 c) {
     return hsv2rgb(hsv);
 }
 
+// ---- one-tap look after the grade: the same steps as applyColorLook() on the CPU ----
+// pos: the pixel centre in the layer texture's own pixels (the vignette's coordinates); sz: its size.
+float3 look(float3 c, float2 pos, float2 sz) {
+    float3 o = float3(toneRow(c.r, float4(1, 0, 0, 0), 2), toneRow(c.g, float4(0, 1, 0, 0), 2), toneRow(c.b, float4(0, 0, 1, 0), 2));
+    if (g[5].x > 0.5) {
+        float l = dot(o, float3(0.2126, 0.7152, 0.0722));
+        float s = g[4].z;
+        if (g[4].w != 0.0) s *= 1.0 + g[4].w * (1.0 - (max(o.r, max(o.g, o.b)) - min(o.r, min(o.g, o.b))));
+        o = l + (o - l) * s;
+        if (g[5].y > 0.5) o += (1.0 - l) * (1.0 - l) * g[6].rgb + l * l * g[7].rgb;
+    }
+    if (g[5].z > 0.0) {
+        float2 d = (pos - sz * 0.5) / length(sz * 0.5);
+        float t = saturate((sqrt(min(1.0, dot(d, d))) - 0.45) / 0.55);
+        o *= 1.0 - g[5].z * t * t * (3.0 - 2.0 * t);
+    }
+    return c + (saturate(o) - c) * g[4].y;
+}
+
+// ---- chroma key, last: the same steps as cliptools::applyChromaKey() on the CPU ----
+float4 key(float4 c) {
+    float3 x = saturate(c.rgb);
+    float y = dot(x, float3(0.2126, 0.7152, 0.0722));
+    float2 cbcr = float2((x.b - y) / 1.8556, (x.r - y) / 1.5748);
+    float a = smoothstep(g[9].x, g[9].x + g[9].y + 1e-4, length(cbcr - g[8].xy));
+    float proj = dot(cbcr, g[8].zw);
+    if (g[9].z > 0.0 && proj > 0.0) {
+        float2 n = cbcr - g[9].z * proj * g[8].zw;
+        float r = y + 1.5748 * n.y, b = y + 1.8556 * n.x;
+        x = float3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+    }
+    return float4(saturate(x), c.a * a);
+}
+
 float4 vs_quad(uint vid : SV_VertexID) : SV_Position {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
     return float4(lerp(quad.x, quad.z, t.x), lerp(quad.y, quad.w, t.y), 0.0, 1.0);
@@ -128,12 +163,24 @@ float4 ps_layer(float4 pos : SV_Position) : SV_Target {
     float2 p = pos.xy;  // pixel centre (x + 0.5, y + 0.5)
     if (p.x < rect.x || p.x >= rect.z || p.y < rect.y || p.y >= rect.w) discard;
     float4 c;
+    uint tw, th;
+    tex.GetDimensions(tw, th);
+    float2 sz = float2(tw, th);
+    float2 xyPos;
     if (exact != 0u) {
-        c = tex.Load(int3(int2(floor(p)) - offset, 0));
+        int2 xy = int2(floor(p)) - offset;
+        c = tex.Load(int3(xy, 0));
+        xyPos = float2(xy) + 0.5;
     } else {
-        c = tex.SampleLevel(smp, (p - rect.xy) / (rect.zw - rect.xy), 0);
+        float2 uv = (p - rect.xy) / (rect.zw - rect.xy);
+        c = tex.SampleLevel(smp, uv, 0);
+        xyPos = uv * sz;
     }
-    if (graded != 0u) c.rgb = saturate(grade(c.rgb));
+    if (graded != 0u) {
+        if (g[3].z > 0.5) c.rgb = saturate(grade(c.rgb));
+        if (g[4].x > 0.5) c.rgb = look(c.rgb, xyPos, sz);
+        if (g[9].w > 0.5) c = key(c);
+    }
     c.a *= opacity;
     return c;
 }
@@ -147,7 +194,7 @@ struct LayerCB {
     std::int32_t offset[2];
     std::uint32_t graded;
     std::uint32_t pad[3];
-    float g[16];
+    float g[40];
 };
 static_assert(sizeof(LayerCB) % 16 == 0, "constant buffer size");
 
@@ -207,7 +254,7 @@ public:
                        {}};
             ID3D11ShaderResourceView* gsrv = nullptr;
             if (l.grade) {
-                std::copy(l.grade->u, l.grade->u + 16, cb.g);
+                std::copy(l.grade->u, l.grade->u + 40, cb.g);
                 gsrv = gradeTexture(l.grade);
                 if (!gsrv) return fail(error, "cannot upload a grade table");
             }
@@ -371,7 +418,7 @@ private:
         GradeTex t{g.get(), g, nullptr, nullptr};
         D3D11_TEXTURE2D_DESC d{};
         d.Width = UINT(GpuGrade::kTableWidth);
-        d.Height = 2;
+        d.Height = UINT(GpuGrade::kTableRows);
         d.MipLevels = 1;
         d.ArraySize = 1;
         d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;

@@ -31,7 +31,7 @@ struct Quad { float4 rect; };  // NDC x0, y0 (top), x1, y1 (bottom), one pixel l
 // rect: layer in output pixels (left, top, right, bottom). Coverage and texture
 // coordinates come from the pixel centre, exactly as the CPU reference computes
 // them, so edges do not depend on the rasteriser's rules or snapping.
-struct Layer { float4 rect; float opacity; uint exact; int2 offset; uint graded; uint pad0, pad1, pad2; float4 g[4]; };
+struct Layer { float4 rect; float opacity; uint exact; int2 offset; uint graded; uint pad0, pad1, pad2; float4 g[10]; };
 
 vertex VOut vs_quad(uint vid [[vertex_id]], constant Quad& q [[buffer(0)]]) {
     float2 t = float2(float(vid & 1u), float(vid >> 1));
@@ -42,13 +42,14 @@ vertex VOut vs_quad(uint vid [[vertex_id]], constant Quad& q [[buffer(0)]]) {
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
 // Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
-// gt: RGBA32Float, 4098 x 2 (see GpuGrade in grade.hpp), read() only.
-float tone(texture2d<float> gt, float v, float4 m) {
+// gt: RGBA32Float, 4098 x 3 (see GpuGrade in grade.hpp), read() only.
+float toneRow(texture2d<float> gt, float v, float4 m, uint row) {
     float pos = clamp(v, 0.0, 1.0) * 4096.0;
     uint i = min(uint(pos), 4095u);
     float t = pos - float(i);
-    return mix(dot(gt.read(uint2(i, 0)), m), dot(gt.read(uint2(i + 1, 0)), m), t);
+    return mix(dot(gt.read(uint2(i, row)), m), dot(gt.read(uint2(i + 1, row)), m), t);
 }
+float tone(texture2d<float> gt, float v, float4 m) { return toneRow(gt, v, m, 0u); }
 float4 hueRow(texture2d<float> gt, float h) {
     float pos = h - 360.0 * floor(h / 360.0);  // hue shifts may leave 0..360
     uint i = uint(clamp(int(pos), 0, 359));
@@ -119,18 +120,63 @@ float3 grade(float3 c, texture2d<float> gt, constant float4* g) {
     return hsv2rgb(hsv);
 }
 
+// ---- one-tap look after the grade: the same steps as applyColorLook() on the CPU ----
+// pos: the pixel centre in the layer texture's own pixels (the vignette's coordinates); sz: its size.
+float3 look(float3 c, float2 pos, float2 sz, texture2d<float> gt, constant float4* g) {
+    float3 o = float3(toneRow(gt, c.r, float4(1, 0, 0, 0), 2u), toneRow(gt, c.g, float4(0, 1, 0, 0), 2u),
+                      toneRow(gt, c.b, float4(0, 0, 1, 0), 2u));
+    if (g[5].x > 0.5) {
+        float l = dot(o, float3(0.2126, 0.7152, 0.0722));
+        float s = g[4].z;
+        if (g[4].w != 0.0) s *= 1.0 + g[4].w * (1.0 - (max(o.r, max(o.g, o.b)) - min(o.r, min(o.g, o.b))));
+        o = l + (o - l) * s;
+        if (g[5].y > 0.5) o += (1.0 - l) * (1.0 - l) * g[6].rgb + l * l * g[7].rgb;
+    }
+    if (g[5].z > 0.0) {
+        float2 d = (pos - sz * 0.5) / length(sz * 0.5);
+        float t = clamp((sqrt(min(1.0, dot(d, d))) - 0.45) / 0.55, 0.0, 1.0);
+        o *= 1.0 - g[5].z * t * t * (3.0 - 2.0 * t);
+    }
+    return c + (clamp(o, 0.0, 1.0) - c) * g[4].y;
+}
+
+// ---- chroma key, last: the same steps as cliptools::applyChromaKey() on the CPU ----
+float4 key(float4 c, constant float4* g) {
+    float3 x = clamp(c.rgb, 0.0, 1.0);
+    float y = dot(x, float3(0.2126, 0.7152, 0.0722));
+    float2 cbcr = float2((x.b - y) / 1.8556, (x.r - y) / 1.5748);
+    float a = smoothstep(g[9].x, g[9].x + g[9].y + 1e-4, length(cbcr - g[8].xy));
+    float proj = dot(cbcr, g[8].zw);
+    if (g[9].z > 0.0 && proj > 0.0) {
+        float2 n = cbcr - g[9].z * proj * g[8].zw;
+        float r = y + 1.5748 * n.y, b = y + 1.8556 * n.x;
+        x = float3(r, (y - 0.2126 * r - 0.0722 * b) / 0.7152, b);
+    }
+    return float4(clamp(x, 0.0, 1.0), c.a * a);
+}
+
 fragment float4 fs_layer(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                          texture2d<float> gradeTab [[texture(1)]], constant Layer& l [[buffer(0)]]) {
     float2 p = in.pos.xy;  // pixel centre (x + 0.5, y + 0.5)
     if (p.x < l.rect.x || p.x >= l.rect.z || p.y < l.rect.y || p.y >= l.rect.w) discard_fragment();
     float4 c;
+    float2 sz = float2(float(tex.get_width()), float(tex.get_height()));
+    float2 pos;
     if (l.exact != 0u) {
-        c = tex.read(uint2(int2(floor(p)) - l.offset));
+        int2 xy = int2(floor(p)) - l.offset;
+        c = tex.read(uint2(xy));
+        pos = float2(xy) + 0.5;
     } else {
         constexpr sampler s(filter::linear, address::clamp_to_edge, coord::normalized);
-        c = tex.sample(s, (p - l.rect.xy) / (l.rect.zw - l.rect.xy));
+        float2 uv = (p - l.rect.xy) / (l.rect.zw - l.rect.xy);
+        c = tex.sample(s, uv);
+        pos = uv * sz;
     }
-    if (l.graded != 0u) c.rgb = clamp(grade(c.rgb, gradeTab, l.g), 0.0, 1.0);
+    if (l.graded != 0u) {
+        if (l.g[3].z > 0.5) c.rgb = clamp(grade(c.rgb, gradeTab, l.g), 0.0, 1.0);
+        if (l.g[4].x > 0.5) c.rgb = look(c.rgb, pos, sz, gradeTab, l.g);
+        if (l.g[9].w > 0.5) c = key(c, l.g);
+    }
     c.a *= l.opacity;
     return c;
 }
@@ -146,9 +192,9 @@ struct LayerU {
     int32_t offset[2];
     uint32_t graded;
     uint32_t pad[3];
-    float g[16];
+    float g[40];
 };
-static_assert(sizeof(LayerU) == 112, "matches the MSL Layer struct");
+static_assert(sizeof(LayerU) == 208, "matches the MSL Layer struct");
 
 class MetalCompositor final : public ICompositor {
 public:
@@ -341,7 +387,7 @@ private:
             }
         MTLTextureDescriptor* d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
                                                                                      width:GpuGrade::kTableWidth
-                                                                                    height:2
+                                                                                    height:GpuGrade::kTableRows
                                                                                  mipmapped:NO];
         d.usage = MTLTextureUsageShaderRead;
 #if TARGET_OS_OSX
@@ -351,7 +397,7 @@ private:
 #endif
         id<MTLTexture> tex = [device_ newTextureWithDescriptor:d];
         if (!tex) return nil;
-        [tex replaceRegion:MTLRegionMake2D(0, 0, GpuGrade::kTableWidth, 2)
+        [tex replaceRegion:MTLRegionMake2D(0, 0, GpuGrade::kTableWidth, GpuGrade::kTableRows)
                mipmapLevel:0
                  withBytes:g->table.data()
                bytesPerRow:NSUInteger(GpuGrade::kTableWidth) * 16];

@@ -62,46 +62,80 @@ inline double smoothstep(double a, double b, double x) {
 
 Json defaultChromaKey() { return Json{{"color", "#00ff00"}, {"similarity", 0.4}, {"smoothness", 0.1}, {"spill", 0.5}}; }
 
-void applyChromaKey(VideoFrame& f, const Json& p) {
-    if (f.empty() || f.deep()) return;
-    const Rgb key = parseColor(p.value("color", Json("#00ff00")));
-    double kcb, kcr;
-    chroma(key.r, key.g, key.b, kcb, kcr);
-    const double klen = std::max(1e-6, std::hypot(kcb, kcr));
-    const double ux = kcb / klen, uy = kcr / klen;
-    // Similarity 0..1 is a chroma distance relative to the key colour's own saturation.
-    const double sim = std::clamp(p.value("similarity", 0.4), 0.0, 1.0) * klen;
-    const double smooth = std::clamp(p.value("smoothness", 0.1), 0.0, 1.0) * klen;
-    const double spill = std::clamp(p.value("spill", 0.5), 0.0, 1.0);
-    const std::size_t w = static_cast<std::size_t>(f.width);
-    detail::parallelRows(f.height, w * f.height, [&](int y0, int y1) {
-    std::uint8_t* px = f.rgba.data() + static_cast<std::size_t>(y0) * w * 4;
-    const std::size_t n = static_cast<std::size_t>(y1 - y0) * w;
-    for (std::size_t i = 0; i < n; ++i, px += 4) {
-        const double r = px[0] / 255.0, g = px[1] / 255.0, b = px[2] / 255.0;
+namespace {
+
+// The key's numbers, shared by the CPU effect and the GPU uniforms.
+struct KeyPlan {
+    double kcb, kcr, ux, uy, sim, smooth, spill;
+    explicit KeyPlan(const Json& p) {
+        const Rgb key = parseColor(p.value("color", Json("#00ff00")));
+        chroma(key.r, key.g, key.b, kcb, kcr);
+        const double klen = std::max(1e-6, std::hypot(kcb, kcr));
+        ux = kcb / klen;
+        uy = kcr / klen;
+        // Similarity 0..1 is a chroma distance relative to the key colour's own saturation.
+        sim = std::clamp(p.value("similarity", 0.4), 0.0, 1.0) * klen;
+        smooth = std::clamp(p.value("smoothness", 0.1), 0.0, 1.0) * klen;
+        spill = std::clamp(p.value("spill", 0.5), 0.0, 1.0);
+    }
+    // Keyed colour (spill removed) and alpha factor for one pixel, channels 0..1.
+    void apply(double& r, double& g, double& b, double& alpha) const {
         double cb, cr;
         chroma(r, g, b, cb, cr);
-        const double d = std::hypot(cb - kcb, cr - kcr);
-        const double a = smoothstep(sim, sim + smooth + 1e-4, d);
-        double nr = r, ng = g, nb = b;
-        if (spill > 0) {
-            // Removes the key's tint from what is kept (green fringe on hair and edges).
-            const double proj = cb * ux + cr * uy;
-            if (proj > 0) {
-                const double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                const double k = spill * proj;
-                const double ncb = cb - k * ux, ncr = cr - k * uy;
-                nr = y + 1.5748 * ncr;
-                nb = y + 1.8556 * ncb;
-                ng = (y - 0.2126 * nr - 0.0722 * nb) / 0.7152;
-            }
-        }
-        px[0] = static_cast<std::uint8_t>(std::clamp(nr, 0.0, 1.0) * 255 + 0.5);
-        px[1] = static_cast<std::uint8_t>(std::clamp(ng, 0.0, 1.0) * 255 + 0.5);
-        px[2] = static_cast<std::uint8_t>(std::clamp(nb, 0.0, 1.0) * 255 + 0.5);
-        px[3] = static_cast<std::uint8_t>(px[3] * a + 0.5);
+        alpha = smoothstep(sim, sim + smooth + 1e-4, std::hypot(cb - kcb, cr - kcr));
+        if (spill <= 0) return;
+        // Removes the key's tint from what is kept (green fringe on hair and edges).
+        const double proj = cb * ux + cr * uy;
+        if (proj <= 0) return;
+        const double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const double k = spill * proj;
+        const double ncb = cb - k * ux, ncr = cr - k * uy;
+        r = y + 1.5748 * ncr;
+        b = y + 1.8556 * ncb;
+        g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
     }
+};
+
+}  // namespace
+
+void applyChromaKey(VideoFrame& f, const Json& p) {
+    if (f.empty()) return;
+    const KeyPlan key(p);
+    const std::size_t w = static_cast<std::size_t>(f.width);
+    detail::parallelRows(f.height, w * f.height, [&](int y0, int y1) {
+        const std::size_t first = static_cast<std::size_t>(y0) * w, n = static_cast<std::size_t>(y1 - y0) * w;
+        if (f.deep()) {  // 10-bit / Log sources stay deep through the effects
+            std::uint16_t* px = f.half.data() + first * 4;
+            for (std::size_t i = 0; i < n; ++i, px += 4) {
+                double r = std::clamp(halfToFloat(px[0]), 0.0f, 1.0f), g = std::clamp(halfToFloat(px[1]), 0.0f, 1.0f),
+                       b = std::clamp(halfToFloat(px[2]), 0.0f, 1.0f), a = 1;
+                key.apply(r, g, b, a);
+                px[0] = floatToHalf(static_cast<float>(std::clamp(r, 0.0, 1.0)));
+                px[1] = floatToHalf(static_cast<float>(std::clamp(g, 0.0, 1.0)));
+                px[2] = floatToHalf(static_cast<float>(std::clamp(b, 0.0, 1.0)));
+                px[3] = floatToHalf(static_cast<float>(halfToFloat(px[3]) * a));
+            }
+            return;
+        }
+        std::uint8_t* px = f.rgba.data() + first * 4;
+        for (std::size_t i = 0; i < n; ++i, px += 4) {
+            double r = px[0] / 255.0, g = px[1] / 255.0, b = px[2] / 255.0, a = 1;
+            key.apply(r, g, b, a);
+            px[0] = static_cast<std::uint8_t>(std::clamp(r, 0.0, 1.0) * 255 + 0.5);
+            px[1] = static_cast<std::uint8_t>(std::clamp(g, 0.0, 1.0) * 255 + 0.5);
+            px[2] = static_cast<std::uint8_t>(std::clamp(b, 0.0, 1.0) * 255 + 0.5);
+            px[3] = static_cast<std::uint8_t>(px[3] * a + 0.5);
+        }
     });
+}
+
+KeyGpu chromaKeyGpu(const Json& p) {
+    const KeyPlan k(p);
+    KeyGpu g;
+    g.active = true;
+    const float u[8] = {float(k.kcb), float(k.kcr), float(k.ux), float(k.uy), float(k.sim), float(k.smooth), float(k.spill), 1.0f};
+    std::copy(u, u + 8, g.u);
+    return g;
 }
 
 std::string guessKeyColor(const VideoFrame& f) {

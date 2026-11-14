@@ -39,6 +39,13 @@ constexpr const char* kStabilizeEffect = "builtin.stabilize";
 Json defaultChromaKey();  // green, similarity 0.4, smoothness 0.1, spill 0.5
 // Keys `frame` (RGBA8) in place. Exposed for tests and thumbnails.
 void applyChromaKey(VideoFrame& frame, const Json& params);
+// The key in the form GPU compositors run it, last after the grade and look (grade.hpp
+// GpuGrade): 2 vec4 uniforms [keyCb, keyCr, dirCb, dirCr], [similarity, smoothness, spill, on].
+struct KeyGpu {
+    bool active = false;
+    float u[8] = {};
+};
+KeyGpu chromaKeyGpu(const Json& params);
 // The dominant saturated colour of a frame's border (the likely screen colour), "#rrggbb".
 std::string guessKeyColor(const VideoFrame& frame);
 
