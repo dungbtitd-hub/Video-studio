@@ -394,7 +394,7 @@ class Encoder final : public IMediaEncoder {
 public:
     ~Encoder() override {
         clearQueues();
-        if (writer_ && !finished_) [writer_ cancelWriting];
+        if (writer_ && !finished_ && writer_.status == AVAssetWriterStatusWriting) [writer_ cancelWriting];
         if (afmt_) CFRelease(afmt_);
     }
 

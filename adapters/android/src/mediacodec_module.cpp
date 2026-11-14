@@ -502,7 +502,7 @@ private:
 class Encoder final : public IMediaEncoder {
 public:
     ~Encoder() override {
-        if (muxer_ && !finished_) finish(nullptr);
+        if (muxer_ && opened_ && !finished_) finish(nullptr);  // a failed open() has nothing to flush
         if (muxer_) AMediaMuxer_delete(muxer_);
         if (fd_ >= 0) ::close(fd_);
     }
@@ -565,6 +565,7 @@ public:
                 return fail(error, "this device has no AAC encoder");
         }
         nv12_.resize(static_cast<size_t>(s.width) * s.height * 3 / 2 * (tenBit_ ? 2 : 1));
+        opened_ = true;
         logI("encoder open " + std::to_string(s.width) + "x" + std::to_string(s.height) + (aenc_ ? " +aac" : ""));
         return true;
     }
@@ -603,6 +604,7 @@ public:
 
     bool finish(std::string* error) override {
         if (finished_) return true;
+        if (!opened_) return fail(error, "encoder was not opened");
         finished_ = true;
         logI("encoder finish after " + std::to_string(videoIndex_) + " frames");
         bool ok = true;
@@ -762,7 +764,7 @@ private:
     CodecPtr venc_, aenc_;
     ssize_t vTrack_ = -1, aTrack_ = -1;
     int tracksAdded_ = 0;
-    bool started_ = false, finished_ = false, tenBit_ = false;
+    bool started_ = false, finished_ = false, tenBit_ = false, opened_ = false;
     std::vector<Held> held_;
     std::vector<uint8_t> nv12_;
     std::vector<int16_t> pcm_;
