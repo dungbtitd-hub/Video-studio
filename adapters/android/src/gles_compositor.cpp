@@ -47,11 +47,12 @@ uniform vec4 uG[4];
 out vec4 color;
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
-float tone(float v, int ch) {
+// Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
+float tone(float v, vec4 m) {
     float pos = clamp(v, 0.0, 1.0) * 4096.0;
     int i = min(int(pos), 4095);
     float t = pos - float(i);
-    return mix(texelFetch(uGrade, ivec2(i, 0), 0)[ch], texelFetch(uGrade, ivec2(i + 1, 0), 0)[ch], t);
+    return mix(dot(texelFetch(uGrade, ivec2(i, 0), 0), m), dot(texelFetch(uGrade, ivec2(i + 1, 0), 0), m), t);
 }
 vec4 hueRow(float h) {
     float pos = h - 360.0 * floor(h / 360.0);  // hue shifts may leave 0..360
@@ -93,7 +94,7 @@ float rangeMask(float v, float lo, float hi, float soft) {
     return t * t * (3.0 - 2.0 * t);
 }
 vec3 grade(vec3 c) {
-    if (uG[0].y > 0.5) c = vec3(tone(c.r, 0), tone(c.g, 1), tone(c.b, 2));
+    if (uG[0].y > 0.5) c = vec3(tone(c.r, vec4(1, 0, 0, 0)), tone(c.g, vec4(0, 1, 0, 0)), tone(c.b, vec4(0, 0, 1, 0)));
     if (uG[0].x != 1.0) {
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
         c = l + (c - l) * uG[0].x;

@@ -424,7 +424,7 @@ private:
 class Encoder final : public IMediaEncoder {
 public:
     ~Encoder() override {
-        if (fmt_ && !finished_) finish(nullptr);
+        if (fmt_ && headerWritten_ && !finished_) finish(nullptr);  // an open() that failed has nothing to flush
         if (fmt_) {
             if (!(fmt_->oformat->flags & AVFMT_NOFILE) && fmt_->pb) avio_closep(&fmt_->pb);
             avformat_free_context(fmt_);
@@ -535,6 +535,7 @@ public:
         if (!(fmt_->oformat->flags & AVFMT_NOFILE) && (e = avio_open(&fmt_->pb, path.c_str(), AVIO_FLAG_WRITE)) < 0)
             return fail(error, "cannot write " + path + ": " + avErr(e));
         if ((e = avformat_write_header(fmt_, nullptr)) < 0) return fail(error, "cannot write header: " + avErr(e));
+        headerWritten_ = true;
         pkt_.reset(av_packet_alloc());
         yuv_.reset(av_frame_alloc());
         yuv_->format = vctx_->pix_fmt;
@@ -593,6 +594,7 @@ public:
 
     bool finish(std::string* error) override {
         if (finished_) return true;
+        if (!headerWritten_) return fail(error, "encoder was not opened");
         finished_ = true;
         bool ok = true;
         if (actx_) ok = drainAudio(true, error) && encode(actx_.get(), ast_, nullptr, error);
@@ -657,7 +659,7 @@ private:
     SwsPtr sws_;
     AVPixelFormat swsSrc_ = AV_PIX_FMT_NONE;
     std::vector<std::uint16_t> deepBuf_;
-    bool tenBit_ = false;
+    bool tenBit_ = false, headerWritten_ = false;
     std::vector<float> fifo_;
     std::int64_t videoIndex_ = 0, audioSamples_ = 0;
     bool finished_ = false;

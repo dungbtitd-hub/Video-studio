@@ -42,11 +42,12 @@ Texture2D<float4> gradeTab : register(t1);  // R32G32B32A32_FLOAT, 4098 x 2 (Gpu
 SamplerState smp : register(s0);
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
-float tone(float v, int ch) {
+// Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
+float tone(float v, float4 m) {
     float pos = saturate(v) * 4096.0;
     int i = min(int(pos), 4095);
     float t = pos - float(i);
-    return lerp(gradeTab.Load(int3(i, 0, 0))[ch], gradeTab.Load(int3(i + 1, 0, 0))[ch], t);
+    return lerp(dot(gradeTab.Load(int3(i, 0, 0)), m), dot(gradeTab.Load(int3(i + 1, 0, 0)), m), t);
 }
 float4 hueRow(float h) {
     float pos = h - 360.0 * floor(h / 360.0);
@@ -88,7 +89,7 @@ float rangeMask(float v, float lo, float hi, float soft) {
     return t * t * (3.0 - 2.0 * t);
 }
 float3 grade(float3 c) {
-    if (g[0].y > 0.5) c = float3(tone(c.r, 0), tone(c.g, 1), tone(c.b, 2));
+    if (g[0].y > 0.5) c = float3(tone(c.r, float4(1, 0, 0, 0)), tone(c.g, float4(0, 1, 0, 0)), tone(c.b, float4(0, 0, 1, 0)));
     if (g[0].x != 1.0) {
         float l = dot(c, float3(0.2126, 0.7152, 0.0722));
         c = l + (c - l) * g[0].x;

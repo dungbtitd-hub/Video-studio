@@ -80,8 +80,24 @@ inline Diff compare(const VideoFrame& a, const VideoFrame& b, int tolerance) {
 inline void expectClose(const VideoFrame& got, const VideoFrame& ref, const char* what) {
     const Diff d = compare(got, ref, 3);
     if (d.badFraction > 0.003) {
+        // Name the worst pixel so a driver-specific difference can be reproduced from the log.
+        std::string worst;
+        int best = -1;
+        for (int y = 0; y < got.height && got.height == ref.height && got.width == ref.width; ++y)
+            for (int x = 0; x < got.width; ++x) {
+                const std::size_t i = (static_cast<std::size_t>(y) * got.width + x) * 4;
+                int m = 0;
+                for (int k = 0; k < 4; ++k) m = std::max(m, std::abs(int(got.rgba[i + k]) - int(ref.rgba[i + k])));
+                if (m > best) {
+                    best = m;
+                    worst = " worst at (" + std::to_string(x) + "," + std::to_string(y) + "): got " +
+                            std::to_string(got.rgba[i]) + "," + std::to_string(got.rgba[i + 1]) + "," +
+                            std::to_string(got.rgba[i + 2]) + " want " + std::to_string(ref.rgba[i]) + "," +
+                            std::to_string(ref.rgba[i + 1]) + "," + std::to_string(ref.rgba[i + 2]);
+                }
+            }
         throw Failure{std::string(what) + ": " + std::to_string(d.badFraction * 100) + "% pixels differ (max " +
-                      std::to_string(d.maxDiff) + ")"};
+                      std::to_string(d.maxDiff) + ")" + worst};
     }
 }
 

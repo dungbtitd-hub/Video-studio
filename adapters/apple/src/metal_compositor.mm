@@ -41,12 +41,13 @@ vertex VOut vs_quad(uint vid [[vertex_id]], constant Quad& q [[buffer(0)]]) {
 }
 
 // ---- colour grade: the same steps and tables as applyColorGrade() on the CPU ----
+// Channels are picked with one-hot masks, not v[ch]: some mobile drivers get dynamic component indexing wrong.
 // gt: RGBA32Float, 4098 x 2 (see GpuGrade in grade.hpp), read() only.
-float tone(texture2d<float> gt, float v, int ch) {
+float tone(texture2d<float> gt, float v, float4 m) {
     float pos = clamp(v, 0.0, 1.0) * 4096.0;
     uint i = min(uint(pos), 4095u);
     float t = pos - float(i);
-    return mix(gt.read(uint2(i, 0))[ch], gt.read(uint2(i + 1, 0))[ch], t);
+    return mix(dot(gt.read(uint2(i, 0)), m), dot(gt.read(uint2(i + 1, 0)), m), t);
 }
 float4 hueRow(texture2d<float> gt, float h) {
     float pos = h - 360.0 * floor(h / 360.0);  // hue shifts may leave 0..360
@@ -88,7 +89,7 @@ float rangeMask(float v, float lo, float hi, float soft) {
     return t * t * (3.0 - 2.0 * t);
 }
 float3 grade(float3 c, texture2d<float> gt, constant float4* g) {
-    if (g[0].y > 0.5) c = float3(tone(gt, c.r, 0), tone(gt, c.g, 1), tone(gt, c.b, 2));
+    if (g[0].y > 0.5) c = float3(tone(gt, c.r, float4(1, 0, 0, 0)), tone(gt, c.g, float4(0, 1, 0, 0)), tone(gt, c.b, float4(0, 0, 1, 0)));
     if (g[0].x != 1.0) {
         float l = dot(c, float3(0.2126, 0.7152, 0.0722));
         c = l + (c - l) * g[0].x;
