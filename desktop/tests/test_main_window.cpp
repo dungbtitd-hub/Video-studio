@@ -39,6 +39,11 @@
 #include "RecentStrip.h"
 #include "VideoFxPanel.h"
 #include "SubtitlePanel.h"
+#include "AudioPanel.h"
+#include "MixerPanel.h"
+#include "ClipToolsPanel.h"
+#include "vstudio/audio_fx.hpp"
+#include <QDoubleSpinBox>
 #include <QTableView>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -229,6 +234,76 @@ private slots:
         QVERIFY(ctrl_->clipVideoFx(clip, "reflect").isEmpty());
         ctrl_->undo();
         QCOMPARE(ctrl_->clipVideoFx(clip, "reflect").value("fx").toString(), QString("reflect_water"));
+    }
+
+    void soundPanelAndMixer() {
+        AudioPanel* panel = win_->audioPanel();
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString clip = QString::fromStdString(v1.clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        panel->fadeIn()->setValue(5);
+        panel->fadeOut()->setValue(10);
+        emit panel->fadeIn()->sliderReleased();
+        QCOMPARE(ctrl_->clipAudio(clip)["fade_in"].get<double>(), 0.5);
+        QCOMPARE(ctrl_->clipAudio(clip)["fade_out"].get<double>(), 1.0);
+        panel->eqPreset()->setCurrentIndex(panel->eqPreset()->findData("voice"));
+        emit panel->eqPreset()->activated(panel->eqPreset()->currentIndex());
+        QCOMPARE(QString::fromStdString(ctrl_->clipAudio(clip)["eq"]["preset"].get<std::string>()), QString("voice"));
+        QCOMPARE(panel->band(0)->value(), -6);  // the preset's curve shows on the bands
+        panel->band(4)->setValue(9);
+        emit panel->band(4)->sliderReleased();
+        QCOMPARE(ctrl_->clipAudio(clip)["eq"]["gains"][4].get<int>(), 9);
+        // Detach: a new audio clip at the same place; the button then says it is done.
+        const auto audioTracks = [&] {
+            int n = 0;
+            for (const auto& t : ctrl_->project()->tracks) n += t.type == vstudio::TrackType::Audio;
+            return n;
+        };
+        const int before = audioTracks();
+        panel->detachButton()->click();
+        QVERIFY(vstudio::audiofx::detached(*ctrl_->project()->findClip(clip.toStdString())));
+        QVERIFY(audioTracks() >= before);
+        QVERIFY(!panel->detachButton()->isEnabled());
+        // Mixer: one strip per track with sound; solo through the controller.
+        MixerPanel* mixer = win_->mixerPanel();
+        QVERIFY(mixer->strips() >= 3);
+        const QString a1 = QString::fromStdString(ctrl_->project()->tracks.back().id);
+        ctrl_->setTrackMix(a1, -0.5, true);
+        QVERIFY(vstudio::audiofx::trackSolo(ctrl_->project()->tracks.back()));
+        QCOMPARE(vstudio::audiofx::trackPan(ctrl_->project()->tracks.back()), -0.5);
+        ctrl_->undo();
+        QVERIFY(!vstudio::audiofx::trackSolo(ctrl_->project()->tracks.back()));
+    }
+
+    void clipToolsPanel() {
+        ClipToolsPanel* panel = win_->clipToolsPanel();
+        const auto& v1 = ctrl_->project()->tracks.front();
+        const QString clip = QString::fromStdString(v1.clips.front().id);
+        ctrl_->setSelectedClip(clip);
+        panel->reverse()->setChecked(true);
+        QVERIFY(ctrl_->clipReversed(clip));
+        panel->chroma()->setChecked(true);
+        QCOMPARE(QString::fromStdString(ctrl_->chromaKey(clip)["color"].get<std::string>()), QString("#00ff00"));
+        panel->chroma()->setChecked(false);
+        QVERIFY(ctrl_->chromaKey(clip).is_null());
+        // Freeze at 0.5 s into the clip: the track grows by 3 s.
+        const double end = ctrl_->project()->trackOfClip(clip.toStdString())->end().seconds();
+        const auto& clipNow = *ctrl_->project()->findClip(clip.toStdString());
+        ctrl_->seek(clipNow.timelineIn.seconds() + 0.5);
+        panel->freezeButton()->click();
+        QCOMPARE(ctrl_->project()->trackOfClip(clip.toStdString())->end().seconds(), end + 3.0);
+        QVERIFY(vstudio::cliptools::isFreeze(*ctrl_->project()->findClip(ctrl_->selectedClip().toStdString())));
+        // Favourites: starred items go first with a star.
+        QTemporaryDir tmp;
+        ctrl_->setFavoritesFile(tmp.filePath("fav.json"));
+        VideoFxPanel* fx = win_->videoFxPanel();
+        QListWidget* list = fx->list();
+        const QString last = list->item(list->count() - 1)->data(Qt::UserRole).toString();
+        ctrl_->toggleFavorite("video_fx", last);
+        QTRY_COMPARE(list->item(0)->data(Qt::UserRole).toString(), last);
+        QVERIFY(list->item(0)->text().startsWith(QString::fromUtf8("★")));
+        ctrl_->toggleFavorite("video_fx", last);
+        QTRY_VERIFY(!list->item(0)->text().startsWith(QString::fromUtf8("★")));
     }
 
     void oneTapLooks() {

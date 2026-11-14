@@ -10,6 +10,8 @@ qt_add_library(vstudio_desktop_common STATIC
   common/EditorController.cpp common/EditorController.h
   common/AudioOutput.cpp common/AudioOutput.h
   common/TranslationClient.cpp common/TranslationClient.h
+  common/VoiceRecorder.cpp common/VoiceRecorder.h
+  common/EditorControllerTools.cpp
 )
 target_include_directories(vstudio_desktop_common PUBLIC common)
 target_link_libraries(vstudio_desktop_common PUBLIC Qt6::Core Qt6::Gui Qt6::Multimedia Qt6::Network vstudio::core)

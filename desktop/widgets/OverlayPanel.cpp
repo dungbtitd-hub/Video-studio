@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "EditorController.h"
+#include "Favorites.h"
 #include "vstudio/overlays.hpp"
 
 namespace {
@@ -52,6 +53,7 @@ OverlayPanel::OverlayPanel(EditorController* editor, QWidget* parent) : QWidget(
         category_->addItem(QString::fromStdString(c), QString::fromStdString(c));
     l->addWidget(category_);
     list_ = new QListWidget(this);
+    favorites::attach(list_, editor_, "overlay");
     list_->setViewMode(QListView::IconMode);
     list_->setIconSize(QSize(kIconW, kIconH));
     list_->setGridSize(QSize(kIconW + 14, kIconH + 30));

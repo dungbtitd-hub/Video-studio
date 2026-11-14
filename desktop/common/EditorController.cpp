@@ -104,6 +104,8 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
 }
 
 EditorController::~EditorController() {
+    stabCancel_.cancel();
+    toolJobs_.reset();
     exportCancel_.cancel();
     trackCancel_.cancel();
     trackJobs_.reset();

@@ -16,6 +16,9 @@ class CoverPanel;
 class TransitionsPanel;
 class TextPanel;
 class SubtitlePanel;
+class AudioPanel;
+class MixerPanel;
+class ClipToolsPanel;
 class StickerPanel;
 class OverlayPanel;
 class RecentStrip;
@@ -40,6 +43,9 @@ public:
     [[nodiscard]] TransitionsPanel* transitionsPanel() const { return transitions_; }
     [[nodiscard]] TextPanel* textPanel() const { return text_; }
     [[nodiscard]] SubtitlePanel* subtitlePanel() const { return subtitles_; }
+    [[nodiscard]] AudioPanel* audioPanel() const { return audio_; }
+    [[nodiscard]] MixerPanel* mixerPanel() const { return mixer_; }
+    [[nodiscard]] ClipToolsPanel* clipToolsPanel() const { return clipTools_; }
     [[nodiscard]] StickerPanel* stickerPanel() const { return stickers_; }
     [[nodiscard]] OverlayPanel* overlayPanel() const { return overlays_; }
     [[nodiscard]] VideoFxPanel* videoFxPanel() const { return videoFx_; }
@@ -81,6 +87,9 @@ private:
     TransitionsPanel* transitions_;
     TextPanel* text_;
     SubtitlePanel* subtitles_;
+    AudioPanel* audio_ = nullptr;
+    MixerPanel* mixer_ = nullptr;
+    ClipToolsPanel* clipTools_ = nullptr;
     StickerPanel* stickers_;
     OverlayPanel* overlays_;
     VideoFxPanel* videoFx_;

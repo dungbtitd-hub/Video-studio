@@ -25,6 +25,10 @@ qt_add_executable(main_window_tests
   ../widgets/RecentStrip.cpp ../widgets/RecentStrip.h
   ../widgets/VideoFxPanel.cpp ../widgets/VideoFxPanel.h
   ../widgets/SubtitlePanel.cpp ../widgets/SubtitlePanel.h
+  ../widgets/AudioPanel.cpp ../widgets/AudioPanel.h
+  ../widgets/MixerPanel.cpp ../widgets/MixerPanel.h
+  ../widgets/ClipToolsPanel.cpp ../widgets/ClipToolsPanel.h
+  ../widgets/Favorites.cpp ../widgets/Favorites.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h
 )

@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 
+#include "vstudio/clip_tools.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/media_library.hpp"
 #include "vstudio/modules.hpp"
@@ -258,6 +259,52 @@ public:
     [[nodiscard]] bool translating() const;
     // Fonts the user added (files kept in the app data folder, registered at start-up).
     bool addFontFile(const QUrl& file, QString* fontId = nullptr);
+    // ---- sound (vstudio/audio_fx.hpp); edits are one undo step ----
+    // Clip "audio" settings: fade_in, fade_out (s), eq {preset, gains[5]}, denoise {amount, profile}.
+    [[nodiscard]] vstudio::Json clipAudio(const QString& clipId) const;
+    void setClipAudio(const QStringList& clipIds, const vstudio::Json& patch);
+    void setClipVolume(const QString& clipId, double volume);
+    [[nodiscard]] double clipVolume(const QString& clipId) const;
+    // Moves the selected clip's sound to an audio track ("Tách âm thanh").
+    void detachAudio();
+    void setTrackVolume(const QString& trackId, double volume);
+    void setTrackMix(const QString& trackId, double pan, bool solo);
+    // Measures the selected clip's background noise (background job), then turns noise
+    // reduction on with that profile at `amount`.
+    void analyzeNoise(double amount);
+    [[nodiscard]] bool analyzingNoise() const { return noiseBusy_; }
+    // Voice-over: records the microphone while the timeline plays from the playhead; on stop
+    // the take lands on a "Thu âm" audio track at the time recording started.
+    void startVoiceOver();
+    void stopVoiceOver();
+    [[nodiscard]] bool recordingVoice() const;
+    [[nodiscard]] QString voiceOverError() const { return voiceError_; }
+
+    // ---- clip tools (vstudio/clip_tools.hpp) ----
+    void setReversed(const QStringList& clipIds, bool on);
+    [[nodiscard]] bool clipReversed(const QString& clipId) const;
+    // Holds the frame at the playhead on the selected clip for `seconds`.
+    void freezeFrame(double seconds = 3.0);
+    // Chroma key on the selected clip: params (null removes); current params or null.
+    void setChromaKey(const QStringList& clipIds, const vstudio::Json& params);
+    [[nodiscard]] vstudio::Json chromaKey(const QString& clipId) const;
+    // Key colour guessed from the frame on the preview ("#rrggbb").
+    [[nodiscard]] QString guessKeyColor() const;
+    // Stabilisation: measures the selected clip's shake in the background, then adds the effect.
+    void stabilize(double strength);
+    void setStabilizeStrength(double strength);  // re-smooths the measured path (no new analysis)
+    void removeStabilize();
+    [[nodiscard]] vstudio::Json stabilizeParams(const QString& clipId) const;
+    [[nodiscard]] bool stabilizing() const { return stabBusy_; }
+    [[nodiscard]] double stabilizeProgress() const { return stabProgress_; }
+    void cancelStabilize() { stabCancel_.cancel(); }
+
+    // ---- favourites (looks, transitions, video effects, stickers, overlays...) ----
+    [[nodiscard]] bool isFavorite(const QString& category, const QString& id) const;
+    void toggleFavorite(const QString& category, const QString& id);
+    [[nodiscard]] QStringList favorites(const QString& category) const;
+    void setFavoritesFile(const QString& file);  // tests
+
     double exportProgress() const { return exportProgress_; }
     bool exporting() const { return exporting_; }
     QString status() const { return status_; }
@@ -298,6 +345,8 @@ signals:
     void subtitleTrackChanged();
     void translationProgress(int done, int total);
     void translationFinished(bool ok, const QString& message);
+    void toolsChanged();      // noise analysis, stabilisation or voice-over state changed
+    void favoritesChanged();
 
 private:
     template <class F>
@@ -361,4 +410,17 @@ private:
     TranslationClient* translator_ = nullptr;
     QString translateTrack_;
     int translateMode_ = 1;
+    // sound + clip tools (EditorControllerTools.cpp)
+    std::unique_ptr<vstudio::JobScheduler> toolJobs_;
+    bool noiseBusy_ = false;
+    bool stabBusy_ = false;
+    double stabProgress_ = 0;
+    vstudio::CancelToken stabCancel_;
+    class VoiceRecorder* recorder_ = nullptr;
+    double voiceStart_ = 0;
+    QString voiceError_;
+    void onVoiceRecorded(const QString& file, double at);
+    mutable std::unique_ptr<vstudio::cliptools::Favorites> favorites_;
+    QString favoritesFile_;
+    vstudio::cliptools::Favorites& favoriteStore() const;
 };

@@ -31,6 +31,10 @@ qt_add_executable(VideoStudio
   RecentStrip.cpp RecentStrip.h
   VideoFxPanel.cpp VideoFxPanel.h
   SubtitlePanel.cpp SubtitlePanel.h
+  AudioPanel.cpp AudioPanel.h
+  MixerPanel.cpp MixerPanel.h
+  ClipToolsPanel.cpp ClipToolsPanel.h
+  Favorites.cpp Favorites.h
   ${VSTUDIO_APP_ICON_SOURCES}
 )
 target_compile_definitions(VideoStudio PRIVATE VSTUDIO_VERSION="${PROJECT_VERSION}")

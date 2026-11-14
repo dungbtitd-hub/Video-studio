@@ -17,6 +17,7 @@
 #include <functional>
 
 #include "EditorController.h"
+#include "Favorites.h"
 #include "vstudio/video_fx.hpp"
 
 namespace {
@@ -59,6 +60,7 @@ VideoFxPanel::VideoFxPanel(EditorController* editor, QWidget* parent) : QWidget(
         group_->addItem(QString::fromStdString(vstudio::videofx::groupName(g)), QString(g));
     l->addWidget(group_);
     list_ = new QListWidget(this);
+    favorites::attach(list_, editor_, "video_fx");
     list_->setObjectName("videoFxList");
     list_->setViewMode(QListView::IconMode);
     list_->setIconSize(QSize(kIconW, kIconH));
