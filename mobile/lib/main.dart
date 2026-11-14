@@ -40,12 +40,20 @@ import 'ui/workspace_layout.dart';
 
 void main() => runApp(const VideoStudioApp());
 
+/// Launch route that opens the editor on a new empty project instead of the start screen.
+const kOpenEditorRoute = '/editor';
+
 class VideoStudioApp extends StatelessWidget {
   const VideoStudioApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-      title: 'Video Studio', theme: buildTheme(), home: const EditorPage(), debugShowCheckedModeBanner: false);
+      title: 'Video Studio',
+      theme: buildTheme(),
+      // The launch route only picks what EditorPage opens (see kOpenEditorRoute); navigation starts at home.
+      initialRoute: '/',
+      home: const EditorPage(),
+      debugShowCheckedModeBanner: false);
 }
 
 class EditorPage extends StatefulWidget {
@@ -118,6 +126,11 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       final version = VStudio.coreVersion; // loads the core library
       await _loadProjects();
       debugPrint('vstudio: core $version ready'); // CI smoke test looks for this line
+      // Started with the "/editor" route (adb: am start --es route /editor): straight into a new,
+      // empty project. The CI smoke test uses this to check the native preview draws.
+      if (ui.PlatformDispatcher.instance.defaultRouteName == kOpenEditorRoute) {
+        await _switchProject(aspect: '9:16', pickMedia: false);
+      }
     } catch (e) {
       setState(() => _error = 'Không nạp được Video Studio Core: $e');
       debugPrint('vstudio: core failed: $e');
@@ -214,7 +227,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   }
 
   /// Opens [path], or a new project with [aspect] (then the media picker, as in the prototype).
-  Future<void> _switchProject({String? path, String? aspect}) async {
+  Future<void> _switchProject({String? path, String? aspect, bool pickMedia = true}) async {
     final store = _store;
     if (store == null || (path != null && path == _packagePath && _vs != null)) return;
     await _closeProject();
@@ -223,7 +236,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           ? (VStudio.open(path), path)
           : await _createProject(store, 'Dự án ${_projects.length + 1}', aspect: aspect ?? '9:16');
       await _attach(vs, p);
-      if (path == null && mounted) await _import();
+      if (path == null && pickMedia && mounted) await _import();
     } catch (e) {
       setState(() {
         _home = true;
