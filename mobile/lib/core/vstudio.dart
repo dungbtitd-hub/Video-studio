@@ -112,6 +112,28 @@ class CoverState {
 
 enum TrackState { idle, running, done, lost, cancelled, failed }
 
+class SpeedPreset {
+  const SpeedPreset(this.id, this.name, this.points);
+  final String id, name;
+  final List<(double, double)> points;
+}
+
+class ClipSpeed {
+  const ClipSpeed(
+      {required this.can,
+      required this.why,
+      required this.speed,
+      required this.points,
+      required this.preset,
+      required this.seconds});
+  final bool can;
+  final String why;
+  final double speed;
+  final List<(double, double)> points;
+  final String preset;
+  final double seconds;
+}
+
 class TransitionInfo {
   const TransitionInfo(this.id, this.name, this.category);
   final String id, name, category;
@@ -1040,6 +1062,36 @@ class VStudio {
       tool({'cmd': 'set_track_volume', 'track': trackId, 'volume': volume});
   void setClipVolume(String clipId, double volume) => tool({'cmd': 'set_clip_volume', 'clip': clipId, 'volume': volume});
   void setReversed(List<String> clipIds, bool on) => tool({'cmd': 'set_reversed', 'clips': clipIds, 'on': on});
+
+  /// Ready-made speed ramps: (id, name, points as (u 0..1 of the clip, speed)).
+  List<SpeedPreset> speedPresets() => [
+        for (final e in (tool({'cmd': 'speed_presets'})['presets'] as List).cast<Map<String, dynamic>>())
+          SpeedPreset(e['id'] as String, e['name'] as String, _points(e['points'] as List))
+      ];
+  ClipSpeed clipSpeed(String clipId) {
+    final o = tool({'cmd': 'clip_speed', 'clip': clipId});
+    return ClipSpeed(
+      can: o['can'] == true,
+      why: o['why'] as String? ?? '',
+      speed: (o['speed'] as num).toDouble(),
+      points: _points(o['points'] as List),
+      preset: o['preset'] as String? ?? '',
+      seconds: ticksToSeconds((o['duration'] as num).toInt()),
+    );
+  }
+
+  /// [speed] 0.1..10; [points] empty = constant. The clips after it move with its end.
+  void setSpeed(List<String> clipIds, double speed, {List<(double, double)> points = const [], String preset = ''}) =>
+      tool({
+        'cmd': 'set_speed',
+        'clips': clipIds,
+        'speed': speed,
+        'points': [for (final (u, v) in points) [u, v]],
+        'preset': preset,
+      });
+  static List<(double, double)> _points(List raw) => [
+        for (final p in raw.cast<List>()) ((p[0] as num).toDouble(), (p[1] as num).toDouble())
+      ];
   String freezeFrame(String clipId, double at, {double seconds = 3}) => tool({
         'cmd': 'freeze_frame',
         'clip': clipId,

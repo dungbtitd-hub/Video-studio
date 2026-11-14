@@ -130,14 +130,15 @@ void trimClip(Project& p, const Id& clipId, TrimEdge edge, Time t) {
     t = t.snapToFrame(p.fps);
     if (c.reversed) {
         // Backwards clip: the timeline start shows sourceOut, the end shows sourceIn.
-        const Time d = (t - c.timelineIn).scaled(c.speed);
+        // toSource(t) + 1 tick = the source edge reached at timeline t.
+        const Time edgeAt = c.toSource(t) + Time::fromTicks(1);
         if (edge == TrimEdge::Start) {
             if (t >= c.timelineOut()) throw EditError("trim start past clip end");
-            c.sourceOut = c.sourceOut - d;
+            c.sourceOut = edgeAt;
             c.timelineIn = t;
         } else {
             if (t <= c.timelineIn) throw EditError("trim end before clip start");
-            c.sourceIn = c.sourceOut - d;
+            c.sourceIn = edgeAt;
         }
     } else if (edge == TrimEdge::Start) {
         if (t >= c.timelineOut()) throw EditError("trim start past clip end");
@@ -170,7 +171,7 @@ void splitClip(Project& p, const Id& clipId, Time t, const Id& newClipId) {
     right.id = newClipId;
     right.timelineIn = t;
     if (left.reversed) {
-        const Time cutSource = left.sourceOut - (t - left.timelineIn).scaled(left.speed);
+        const Time cutSource = left.toSource(t) + Time::fromTicks(1);
         left.sourceIn = cutSource;
         right.sourceOut = cutSource;
     } else {

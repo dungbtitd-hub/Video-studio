@@ -6,6 +6,8 @@
 
 #include <QImage>
 #include <QObject>
+#include <QPointF>
+#include <QVector>
 #include <QRectF>
 #include <QVariantMap>
 #include <QPointer>
@@ -286,6 +288,12 @@ public:
     [[nodiscard]] bool clipReversed(const QString& clipId) const;
     // Holds the frame at the playhead on the selected clip for `seconds`.
     void freezeFrame(double seconds = 3.0);
+    // Speed (speed_curve.hpp): base speed 0.1..10 and a ramp as points (u 0..1 of the clip,
+    // speed); no points = constant. The clips after it on the track move with its new end.
+    void setClipSpeed(const QStringList& clipIds, double speed, const QVector<QPointF>& points = {},
+                      const QString& preset = {});
+    // {"can", "why", "speed", "points" (QVariantList of QPointF), "preset", "seconds"}
+    [[nodiscard]] QVariantMap clipSpeed(const QString& clipId) const;
     // Chroma key on the selected clip: params (null removes); current params or null.
     void setChromaKey(const QStringList& clipIds, const vstudio::Json& params);
     [[nodiscard]] vstudio::Json chromaKey(const QString& clipId) const;

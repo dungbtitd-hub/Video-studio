@@ -7,6 +7,7 @@
 #include <QStandardPaths>
 
 #include "EditorController.h"
+#include "vstudio/speed_curve.hpp"
 #include "VoiceRecorder.h"
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/plugins.hpp"
@@ -182,6 +183,30 @@ void EditorController::freezeFrame(double seconds) {
         setSelectedClip(q(still));
         setStatus(tr("Đã đóng băng khung hình %1 giây").arg(seconds, 0, 'f', 1));
     }
+}
+
+void EditorController::setClipSpeed(const QStringList& clipIds, double speedValue, const QVector<QPointF>& points,
+                                    const QString& preset) {
+    std::vector<vstudio::speed::CurvePoint> pts;
+    for (const QPointF& p : points) pts.push_back({p.x(), p.y()});
+    if (VS_EDIT(editor_->setClipSpeed(ids(clipIds), speedValue, pts, preset.toStdString())))
+        setStatus(pts.empty() ? tr("Tốc độ %1x").arg(speedValue, 0, 'f', 2) : tr("Đã đặt đường cong tốc độ"));
+}
+
+QVariantMap EditorController::clipSpeed(const QString& clipId) const {
+    QVariantMap m;
+    const Clip* c = snapshot_ ? snapshot_->findClip(s(clipId)) : nullptr;
+    if (!c) return m;
+    std::string why;
+    m["can"] = vstudio::speed::canChangeSpeed(*snapshot_, *c, &why);
+    m["why"] = QString::fromStdString(why);
+    m["speed"] = vstudio::speed::baseSpeed(*c);
+    QVariantList pts;
+    for (const auto& p : vstudio::speed::pointsOf(*c)) pts.push_back(QPointF(p.u, p.v));
+    m["points"] = pts;
+    m["preset"] = QString::fromStdString(c->extra.value("speed_preset", std::string()));
+    m["seconds"] = c->duration().seconds();
+    return m;
 }
 
 void EditorController::setChromaKey(const QStringList& clipIds, const Json& params) {

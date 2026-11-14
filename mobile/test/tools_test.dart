@@ -53,6 +53,29 @@ void main() {
     expect(back.list('look'), ['c']);
   });
 
+  test('speed and speed curves through dart:ffi', () {
+    final vs = VStudio.create('ffi-speed', width: 640, height: 360);
+    addTearDown(vs.dispose);
+    final track = vs.addTrack(audio: false, name: 'V1');
+    final clip = vs.appendClip(track, vs.importMedia(media!));
+    final len = vs.clipSpeed(clip).seconds;
+    vs.setSpeed([clip], 2);
+    expect(vs.clipSpeed(clip).speed, closeTo(2, 1e-9));
+    expect(vs.clipSpeed(clip).seconds, closeTo(len / 2, 1e-3));
+    // The Dart view of the project agrees with the core, ramps included.
+    final presets = vs.speedPresets();
+    expect(presets.map((p) => p.id), containsAll(['montage', 'hero', 'bullet']));
+    vs.setSpeed([clip], 1, points: presets.firstWhere((p) => p.id == 'hero').points, preset: 'hero');
+    final info = vs.clipSpeed(clip);
+    expect(info.preset, 'hero');
+    expect(info.points, isNotEmpty);
+    final view = vs.project().tracks.first.clips.first;
+    expect(view.duration, closeTo(info.seconds, 1e-3));
+    vs.setSpeed([clip], 1);
+    expect(vs.clipSpeed(clip).points, isEmpty);
+    expect(vs.clipSpeed(clip).seconds, closeTo(len, 1e-3));
+  });
+
   test('sound and clip tools through dart:ffi', () {
     final vs = VStudio.create('ffi-tools', width: 640, height: 360);
     addTearDown(vs.dispose);

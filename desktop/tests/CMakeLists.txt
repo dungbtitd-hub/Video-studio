@@ -28,6 +28,7 @@ qt_add_executable(main_window_tests
   ../widgets/AudioPanel.cpp ../widgets/AudioPanel.h
   ../widgets/MixerPanel.cpp ../widgets/MixerPanel.h
   ../widgets/ClipToolsPanel.cpp ../widgets/ClipToolsPanel.h
+  ../widgets/SpeedCurveEditor.cpp ../widgets/SpeedCurveEditor.h
   ../widgets/Favorites.cpp ../widgets/Favorites.h
   ../widgets/PreviewWidget.cpp ../widgets/PreviewWidget.h
   ../widgets/TimelineWidget.cpp ../widgets/TimelineWidget.h ../widgets/Theme.h

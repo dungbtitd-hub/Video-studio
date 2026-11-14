@@ -42,6 +42,7 @@
 #include "AudioPanel.h"
 #include "MixerPanel.h"
 #include "ClipToolsPanel.h"
+#include "SpeedCurveEditor.h"
 #include "vstudio/audio_fx.hpp"
 #include <QDoubleSpinBox>
 #include <QTableView>
@@ -280,6 +281,26 @@ private slots:
         const auto& v1 = ctrl_->project()->tracks.front();
         const QString clip = QString::fromStdString(v1.clips.front().id);
         ctrl_->setSelectedClip(clip);
+        // Speed: 2x halves the clip; a preset curve shows the editor; back to normal.
+        {
+            const double len = ctrl_->clipSpeed(clip).value("seconds").toDouble();
+            QSlider* sp = panel->speedSlider();
+            sp->setValue(30);  // 10^0.3 = 2x
+            emit sp->sliderReleased();
+            QCOMPARE(qRound(ctrl_->clipSpeed(clip).value("speed").toDouble() * 100), 200);
+            QVERIFY(std::abs(ctrl_->clipSpeed(clip).value("seconds").toDouble() - len / 2) < 0.01);
+            QComboBox* cv = panel->speedCurve();
+            cv->setCurrentIndex(cv->findData("hero"));
+            emit cv->activated(cv->currentIndex());
+            QCOMPARE(ctrl_->clipSpeed(clip).value("preset").toString(), QString("hero"));
+            QTRY_VERIFY(panel->curveEditor()->isVisibleTo(panel));
+            cv->setCurrentIndex(0);
+            emit cv->activated(0);
+            QVERIFY(ctrl_->clipSpeed(clip).value("points").toList().isEmpty());
+            sp->setValue(0);
+            emit sp->sliderReleased();
+            QVERIFY(std::abs(ctrl_->clipSpeed(clip).value("seconds").toDouble() - len) < 0.01);
+        }
         panel->reverse()->setChecked(true);
         QVERIFY(ctrl_->clipReversed(clip));
         panel->chroma()->setChecked(true);

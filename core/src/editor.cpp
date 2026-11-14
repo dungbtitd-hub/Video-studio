@@ -1141,6 +1141,35 @@ void Editor::setClipReversed(const std::vector<Id>& clipIds, bool reversed) {
     });
 }
 
+void Editor::setClipSpeed(const std::vector<Id>& clipIds, double speedValue, const std::vector<speed::CurvePoint>& curve,
+                          const std::string& preset) {
+    if (clipIds.empty()) return;
+    const auto tracks = tracksOf(project_, clipIds);
+    for (const Id& id : clipIds) {
+        const Track* tr = project_.trackOfClip(id);
+        if (tr->locked) throw EditError("track is locked: " + tr->name);
+        std::string why;
+        if (!speed::canChangeSpeed(project_, *tr->findClip(id), &why)) throw EditError(why);
+    }
+    const Rational base = speed::toRational(speedValue);
+    run(curve.empty() ? "Speed" : "Speed curve", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& id : clipIds) {
+            Track* tr = p.trackOfClip(id);
+            Clip* c = tr->findClip(id);
+            const Time oldOut = c->timelineOut();
+            c->speed = base;
+            c->speedCurve = speed::keysFor(*c, curve);
+            if (curve.empty() || preset.empty()) c->extra.erase("speed_preset");
+            else c->extra["speed_preset"] = preset;
+            const Time delta = c->timelineOut() - oldOut;
+            if (delta == Time::zero()) continue;
+            for (Clip& x : tr->clips)  // ripple: the rest of the track follows the new end
+                if (x.id != id && x.timelineIn >= oldOut) x.timelineIn = x.timelineIn + delta;
+            tr->sortClips();
+        }
+    });
+}
+
 Id Editor::freezeFrame(const Id& clipId, Time t, Time duration) {
     const Track* tr = project_.trackOfClip(clipId);
     if (!tr) throw EditError("clip not found");

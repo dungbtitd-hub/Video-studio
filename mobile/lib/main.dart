@@ -24,6 +24,7 @@ import 'ui/keyframes.dart';
 import 'ui/looks_sheet.dart';
 import 'ui/media_cache.dart';
 import 'ui/recent_strip.dart';
+import 'ui/speed_sheet.dart';
 import 'ui/subtitle_sheet.dart';
 import 'ui/text_sticker.dart';
 import 'ui/theme.dart';
@@ -1174,6 +1175,21 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     );
   }
 
+  Future<void> _speed() async {
+    final vs = _vs, clip = _selectedMediaClip;
+    if (vs == null || clip == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: VsColors.panel,
+      barrierColor: Colors.black26,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.6,
+        child: SpeedSheet(vs: vs, clipId: clip.id, onEdit: _edit),
+      ),
+    );
+  }
+
   Future<void> _clipTools() async {
     final vs = _vs, clip = _selectedMediaClip;
     if (vs == null || clip == null) return;
@@ -1689,6 +1705,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 icon: _recording ? Icons.stop_circle : Icons.mic_none,
                 label: _recording ? 'Dừng' : 'Thu âm',
                 onTap: _vs == null ? null : _voiceOver),
+            _Tool(icon: Icons.speed, label: 'Tốc độ', onTap: _selectedMediaClip == null ? null : _speed),
             _Tool(icon: Icons.handyman_outlined, label: 'Công cụ', onTap: _selectedMediaClip == null ? null : _clipTools),
             _Tool(icon: Icons.blur_on, label: 'Che mờ', onTap: _selectedMediaClip == null ? null : _enterCovers),
             _Tool(icon: Icons.vignette_outlined, label: 'Mặt nạ', onTap: _selectedMediaClip == null ? null : _enterMasks),

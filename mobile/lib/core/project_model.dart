@@ -1,10 +1,42 @@
 // Read-only view of the schema v0 project JSON produced by the core
 // (vs_project_json). The UI draws from this; all edits go through the core.
 import 'dart:convert';
+import 'dart:math' as math;
 
 const int ticksPerSecond = 705600000;
 
 double ticksToSeconds(int ticks) => ticks / ticksPerSecond;
+
+/// Seconds of timeline that source span [a, b] takes with a speed ramp: keys (source s, x speed),
+/// linear between keys, held outside, times [base]. Same closed form as Clip::curveElapsed.
+double curveElapsed(List<(double, double)> keys, double base, double a, double b) {
+  if (b <= a || keys.isEmpty) return b > a ? (b - a) / base : 0;
+  double rate(double s) {
+    if (s <= keys.first.$1) return base * keys.first.$2;
+    if (s >= keys.last.$1) return base * keys.last.$2;
+    for (var i = 1; i < keys.length; i++) {
+      if (s <= keys[i].$1) {
+        final (t0, v0) = keys[i - 1], (t1, v1) = keys[i];
+        return base * (t1 > t0 ? v0 + (v1 - v0) * (s - t0) / (t1 - t0) : v1);
+      }
+    }
+    return base * keys.last.$2;
+  }
+
+  // Break [a, b] at the keys: the rate is linear on each piece.
+  final cuts = <double>[a, for (final k in keys) if (k.$1 > a && k.$1 < b) k.$1, b];
+  var t = 0.0;
+  for (var i = 1; i < cuts.length; i++) {
+    final x0 = cuts[i - 1], x1 = cuts[i], r0 = rate(x0), r1 = rate(x1);
+    if ((r1 - r0).abs() < 1e-12) {
+      t += (x1 - x0) / r0;
+    } else {
+      final k = (r1 - r0) / (x1 - x0);
+      t += math.log(r1 / r0) / k;
+    }
+  }
+  return t;
+}
 int secondsToTicks(double s) => (s * ticksPerSecond).round();
 
 class ClipView {
@@ -167,14 +199,26 @@ class ProjectView {
         final start = ticksToSeconds((m['timeline_in'] as num).toInt());
         final sourceIn = ticksToSeconds((m['source_in'] as num).toInt());
         final clipSpeed = speed > 0 ? speed : 1.0;
-        final clipDur = speed > 0 ? srcDur / speed : srcDur;
+        final sourceOut = ticksToSeconds((m['source_out'] as num).toInt());
+        final curve = [
+          for (final k in (m['speed_curve'] as List? ?? const []).cast<Map<String, dynamic>>())
+            (ticksToSeconds((k['t'] as num).toInt()), (k['v'] as num).toDouble())
+        ];
+        final reversed = m['reverse'] == true;
+        // Timeline seconds from the clip start to source time `s` (speed ramps included).
+        double sinceStart(double s) {
+          if (curve.isEmpty) return (reversed ? sourceOut - s : s - sourceIn) / clipSpeed;
+          return reversed ? curveElapsed(curve, clipSpeed, s, sourceOut) : curveElapsed(curve, clipSpeed, sourceIn, s);
+        }
+
+        final clipDur = curve.isEmpty ? srcDur / clipSpeed : curveElapsed(curve, clipSpeed, sourceIn, sourceOut);
         // Keys are stored in source time; shown where they fall on the timeline.
         List<double> keys(List<String> props) {
           final out = <double>{};
           final kf = m['keyframes'] as Map<String, dynamic>? ?? const {};
           for (final p in props) {
             for (final k in (kf[p] as List? ?? const []).cast<Map<String, dynamic>>()) {
-              final t = start + (ticksToSeconds((k['t'] as num).toInt()) - sourceIn) / clipSpeed;
+              final t = start + sinceStart(ticksToSeconds((k['t'] as num).toInt()));
               if (t >= start - 1e-6 && t <= start + clipDur + 1e-6) out.add((t * 1e6).roundToDouble() / 1e6);
             }
           }
@@ -189,7 +233,8 @@ class ProjectView {
           duration: clipDur,
           name: content != null ? generatedLabel(content) : assets[m['asset_id']]?.name ?? '?',
           sourceIn: sourceIn,
-          speed: clipSpeed,
+          // Average speed for the filmstrip and waveform (exact for constant speed).
+          speed: curve.isEmpty || clipDur <= 0 ? clipSpeed : srcDur / clipDur,
           look: look?['look'] as String?,
           lookStrength: ((look?['strength'] ?? 1) as num).toDouble(),
           colorSpace: effect('builtin.color_space')?['input'] as String?,

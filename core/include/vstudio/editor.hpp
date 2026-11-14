@@ -19,6 +19,7 @@
 #include "vstudio/history.hpp"
 #include "vstudio/keyframes.hpp"
 #include "vstudio/model.hpp"
+#include "vstudio/speed_curve.hpp"
 #include "vstudio/subtitles.hpp"
 #include "vstudio/timeline.hpp"
 #include "vstudio/transitions.hpp"
@@ -173,6 +174,11 @@ public:
     // Holds the frame shown at timeline time `t` for `duration`: splits the clip there, inserts
     // the still and pushes the rest of the track right. Returns the freeze clip's id.
     Id freezeFrame(const Id& clipId, Time t, Time duration = Time::fromSeconds(3.0));
+    // Speed (speed_curve.hpp): `speed` 0.1..10 x, and a ramp drawn over each clip (empty = none;
+    // `preset` names a ready-made one for the UI). The clips after each one on its track move by
+    // the change in length, so nothing overlaps and no gap opens.
+    void setClipSpeed(const std::vector<Id>& clipIds, double speed, const std::vector<speed::CurvePoint>& curve = {},
+                      const std::string& preset = "");
 
     bool undo();
     bool redo();

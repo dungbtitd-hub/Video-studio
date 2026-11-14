@@ -392,6 +392,9 @@ VS_API int vs_project_poster(const char* package_dir, uint8_t* dst, int64_t dst_
  *   place_audio {asset, at (ticks), track?}     -> {"clip"}: a voice-over take on a free "Thu âm" track
  *   set_track_mix {track, pan (-1..1), solo}; set_track_volume {track, volume}; set_clip_volume {clip, volume}
  *   set_reversed {clips, on}; freeze_frame {clip, at, duration?} -> {"clip"}
+ *   speed_presets -> {"presets": [{"id","name","points": [[u, v]...]}]}
+ *   clip_speed {clip} -> {"can","why","speed","points": [[u (0..1 of the clip), v]...],"preset","duration" (ticks)}
+ *   set_speed {clips, speed (0.1..10), points?, preset?}  points [] = constant speed; later clips move
  *   set_effect {clips, type, params|null}; effect {clip, type} -> {"params"}  (builtin.chroma_key...)
  *   guess_key_color                             -> {"color": "#rrggbb"} from the last preview frame
  *   start {job: "noise"|"stabilize", clip, value (amount|strength)}; job_status -> {"status","progress",

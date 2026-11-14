@@ -14,6 +14,7 @@
 #include "vstudio/tracker.hpp"
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/clip_tools.hpp"
+#include "vstudio/speed_curve.hpp"
 #include "vstudio/editor.hpp"
 #include "vstudio/export_presets.hpp"
 #include "vstudio/keyframes.hpp"
@@ -1863,6 +1864,30 @@ Json toolCommand(vs_session* s, const Json& in) {
         ed.setTrackVolume(in.at("track").get<std::string>(), in.value("volume", 1.0));
     } else if (cmd == "set_clip_volume") {
         ed.setClipVolume(clip().id, in.value("volume", 1.0));
+    } else if (cmd == "speed_presets") {
+        Json arr = Json::array();
+        for (const auto& pr : speed::curvePresets()) {
+            Json pts = Json::array();
+            for (const auto& q : pr.points) pts.push_back({q.u, q.v});
+            arr.push_back({{"id", pr.id}, {"name", pr.name}, {"points", pts}});
+        }
+        out["presets"] = arr;
+    } else if (cmd == "clip_speed") {
+        const Clip& c = clip();
+        std::string why;
+        out["can"] = speed::canChangeSpeed(ed.project(), c, &why);
+        out["why"] = why;
+        out["speed"] = speed::baseSpeed(c);
+        Json pts = Json::array();
+        for (const auto& q : speed::pointsOf(c)) pts.push_back({q.u, q.v});
+        out["points"] = pts;
+        out["preset"] = c.extra.value("speed_preset", std::string());
+        out["duration"] = c.duration().ticks();
+    } else if (cmd == "set_speed") {
+        std::vector<speed::CurvePoint> pts;
+        for (const auto& q : in.value("points", Json::array()))
+            if (q.is_array() && q.size() == 2) pts.push_back({q[0].get<double>(), q[1].get<double>()});
+        ed.setClipSpeed(idList(in.at("clips")), in.value("speed", 1.0), pts, in.value("preset", std::string()));
     } else if (cmd == "set_reversed") {
         ed.setClipReversed(idList(in.at("clips")), in.value("on", true));
     } else if (cmd == "freeze_frame") {

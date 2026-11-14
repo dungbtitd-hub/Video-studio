@@ -50,6 +50,17 @@ struct MediaAsset {
     Json extra = Json::object();
 };
 
+// A point of a speed curve: at SOURCE time `t` the clip plays `v` times its base speed.
+// Between points the speed changes linearly with source time; before the first and after
+// the last it holds. Source times keep the curve on the same pictures when the clip is
+// trimmed or split (like keyframes).
+inline constexpr double kMinCurveSpeed = 0.05, kMaxCurveSpeed = 20.0;
+struct SpeedKey {
+    Time t;
+    double v = 1.0;  // 0.05..20
+    bool operator==(const SpeedKey&) const = default;
+};
+
 struct Clip {
     Id id;
     Id assetId;
@@ -73,22 +84,37 @@ struct Clip {
     // Plays the source range backwards (clip_tools.hpp). Source times then run from
     // sourceOut down to sourceIn; keyframes stay keyed in source time.
     bool reversed = false;
+    // Speed ramp (speed_curve.hpp): empty = the constant `speed`. Otherwise the speed at a
+    // source time is `speed` x the curve's value there.
+    std::vector<SpeedKey> speedCurve;
     Json extra = Json::object();
 
     [[nodiscard]] bool generated() const { return content.is_object() && content.contains("kind"); }
+    [[nodiscard]] bool curved() const { return !speedCurve.empty(); }
     [[nodiscard]] Time sourceDuration() const { return sourceOut - sourceIn; }
-    [[nodiscard]] Time duration() const { return sourceDuration().scaled(speed.inverse()); }
+    [[nodiscard]] Time duration() const {
+        return curved() ? curveElapsed(sourceIn, sourceOut) : sourceDuration().scaled(speed.inverse());
+    }
     [[nodiscard]] Time timelineOut() const { return timelineIn + duration(); }
     [[nodiscard]] TimeRange range() const { return {timelineIn, timelineOut()}; }
     // Maps a timeline time inside this clip to source time.
     [[nodiscard]] Time toSource(Time timeline) const {
+        if (curved()) return curveToSource(timeline - timelineIn);
         const Time d = (timeline - timelineIn).scaled(speed);
         return reversed ? sourceOut - Time::fromTicks(1) - d : sourceIn + d;
     }
     // Maps a source time to timeline time.
     [[nodiscard]] Time toTimeline(Time source) const {
+        if (curved())
+            return timelineIn + (reversed ? curveElapsed(source + Time::fromTicks(1), sourceOut) : curveElapsed(sourceIn, source));
         return timelineIn + (reversed ? sourceOut - Time::fromTicks(1) - source : source - sourceIn).scaled(speed.inverse());
     }
+    // Speed (x real time) at a source time, curve included.
+    [[nodiscard]] double speedAt(Time source) const;
+    // Timeline time taken to play the source span [a, b] (a <= b) with the curve.
+    [[nodiscard]] Time curveElapsed(Time a, Time b) const;
+    // Source time reached `sinceStart` into the clip with the curve (toSource for curved clips).
+    [[nodiscard]] Time curveToSource(Time sinceStart) const;
 };
 
 struct Track {

@@ -1,6 +1,7 @@
 #include "vstudio/model.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace vstudio {
@@ -158,6 +159,11 @@ Json clipJ(const Clip& c, const Id& trackId) {
     if (c.transitionOut.is_object()) j["transition_out"] = c.transitionOut;
     if (c.content.is_object()) j["content"] = c.content;
     if (c.reversed) j["reverse"] = true;
+    if (c.curved()) {
+        Json keys = Json::array();
+        for (const auto& k : c.speedCurve) keys.push_back({{"t", timeJ(k.t)}, {"v", k.v}});
+        j["speed_curve"] = std::move(keys);
+    }
     mergeExtra(j, c.extra);
     return j;
 }
@@ -179,9 +185,15 @@ Clip clipFrom(const Json& j) {
     if (auto it = j.find("transition_out"); it != j.end() && it->is_object()) c.transitionOut = *it;
     if (auto it = j.find("content"); it != j.end() && it->is_object()) c.content = *it;
     if (auto it = j.find("reverse"); it != j.end() && it->is_boolean()) c.reversed = it->get<bool>();
+    if (auto it = j.find("speed_curve"); it != j.end() && it->is_array()) {
+        for (const auto& k : *it)
+            if (k.is_object() && k.contains("t"))
+                c.speedCurve.push_back({timeFrom(k.at("t")), std::clamp(k.value("v", 1.0), kMinCurveSpeed, kMaxCurveSpeed)});
+        std::sort(c.speedCurve.begin(), c.speedCurve.end(), [](const SpeedKey& a, const SpeedKey& b) { return a.t < b.t; });
+    }
     c.extra = collectExtra(j, {"clip_id", "asset_id", "track_id", "timeline_in", "source_in", "source_out", "speed",
                                "volume", "transform", "effects", "keyframes", "transition_in", "transition_out",
-                               "content", "reverse"});
+                               "content", "reverse", "speed_curve"});
     return c;
 }
 
@@ -265,6 +277,119 @@ Project projectFromJson(const Json& j) {
                                "required_capabilities", "created_by_platform", "created_at", "modified_at", "assets",
                                "tracks"});
     return p;
+}
+
+
+// ---- speed curves ----
+// The speed is linear in source time between keys, so the time spent on a piece of source
+// and its inverse have closed forms: no tables, exact at any zoom, cheap for a few keys.
+namespace {
+
+struct Piece {  // a stretch of source [s0, s1] (seconds) where rate(s) = r0 + k (s - s0)
+    double s0, s1, r0, k;
+    [[nodiscard]] double rate(double s) const { return r0 + k * (s - s0); }
+    // Time to play [a, b] inside the piece.
+    [[nodiscard]] double time(double a, double b) const {
+        if (std::abs(k) < 1e-12) return (b - a) / r0;
+        return std::log(rate(b) / rate(a)) / k;
+    }
+    // Source reached after `dt` seconds from `x` (forwards or backwards).
+    [[nodiscard]] double advance(double x, double dt, bool forward) const {
+        const double r = rate(x);
+        if (std::abs(k) < 1e-12) return forward ? x + dt * r : x - dt * r;
+        return x + r * (std::exp(forward ? k * dt : -k * dt) - 1) / k;
+    }
+};
+
+// The pieces covering [a, b] (seconds), in order.
+std::vector<Piece> pieces(const Clip& c, double a, double b) {
+    const double base = static_cast<double>(c.speed.num) / c.speed.den;
+    std::vector<Piece> out;
+    const auto& keys = c.speedCurve;
+    double x = a;
+    auto at = [&](std::size_t i) { return keys[i].t.seconds(); };
+    std::size_t i = 0;
+    while (i < keys.size() && at(i) <= x) ++i;  // keys[i] is the first key after x
+    while (x < b) {
+        double end = b, r0, k;
+        if (i == 0) {  // before the first key: hold its value
+            end = std::min(b, at(0));
+            r0 = base * keys[0].v;
+            k = 0;
+        } else if (i >= keys.size()) {  // after the last key
+            r0 = base * keys.back().v;
+            k = 0;
+        } else {
+            end = std::min(b, at(i));
+            const double t0 = at(i - 1), t1 = at(i);
+            const double v0 = base * keys[i - 1].v, v1 = base * keys[i].v;
+            k = t1 > t0 ? (v1 - v0) / (t1 - t0) : 0;
+            r0 = v0 + k * (x - t0);
+        }
+        if (end > x) out.push_back({x, end, r0, k});
+        x = end;
+        ++i;
+    }
+    return out;
+}
+
+}  // namespace
+
+double Clip::speedAt(Time source) const {
+    const double base = static_cast<double>(speed.num) / speed.den;
+    if (!curved()) return base;
+    const double s = source.seconds();
+    const auto& k = speedCurve;
+    if (s <= k.front().t.seconds()) return base * k.front().v;
+    if (s >= k.back().t.seconds()) return base * k.back().v;
+    for (std::size_t i = 1; i < k.size(); ++i)
+        if (s <= k[i].t.seconds()) {
+            const double t0 = k[i - 1].t.seconds(), t1 = k[i].t.seconds();
+            const double u = t1 > t0 ? (s - t0) / (t1 - t0) : 1;
+            return base * (k[i - 1].v + (k[i].v - k[i - 1].v) * u);
+        }
+    return base * k.back().v;
+}
+
+Time Clip::curveElapsed(Time a, Time b) const {
+    if (b <= a) return Time::zero();
+    if (!curved()) return (b - a).scaled(speed.inverse());
+    double t = 0;
+    for (const Piece& p : pieces(*this, a.seconds(), b.seconds())) t += p.time(p.s0, p.s1);
+    return Time::fromTicks(std::llround(t * Time::kTicksPerSecond));
+}
+
+Time Clip::curveToSource(Time sinceStart) const {
+    double left = std::max(0.0, sinceStart.seconds());
+    const double a = sourceIn.seconds(), b = sourceOut.seconds();
+    auto ps = pieces(*this, a, b);
+    double s = reversed ? b : a;
+    if (!reversed) {
+        for (const Piece& p : ps) {
+            const double need = p.time(p.s0, p.s1);
+            if (left <= need) {
+                s = p.advance(p.s0, left, true);
+                left = 0;
+                break;
+            }
+            left -= need;
+            s = p.s1;
+        }
+    } else {
+        for (auto it = ps.rbegin(); it != ps.rend(); ++it) {
+            const double need = it->time(it->s0, it->s1);
+            if (left <= need) {
+                s = it->advance(it->s1, left, false);
+                left = 0;
+                break;
+            }
+            left -= need;
+            s = it->s0;
+        }
+    }
+    Time out = Time::fromTicks(std::llround(s * Time::kTicksPerSecond));
+    if (reversed) out = out - Time::fromTicks(1);
+    return std::clamp(out, sourceIn, sourceOut - Time::fromTicks(1));
 }
 
 }  // namespace vstudio
