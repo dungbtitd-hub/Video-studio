@@ -83,8 +83,13 @@ public:
         settings = s;
         return true;
     }
-    bool writeVideo(const vstudio::VideoFrame& f, std::string*) override {
+    bool writeVideo(const vstudio::VideoFrame& f, std::string* err) override {
+        if (failAt >= 0 && videoFrames == failAt) {
+            if (err) *err = "disk full";
+            return false;
+        }
         ++videoFrames;
+        pts.push_back(f.pts);
         lastWidth = f.width;
         firstPixels.push_back(f.rgba.empty() ? 0 : f.rgba[0]);
         return true;
@@ -101,6 +106,8 @@ public:
     std::int64_t videoFrames = 0, audioFrames = 0;
     int lastWidth = 0;
     bool finished = false;
+    std::int64_t failAt = -1;        // writeVideo fails on this frame
+    std::vector<vstudio::Time> pts;  // in the order written
     std::vector<int> firstPixels;
 };
 

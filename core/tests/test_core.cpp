@@ -364,6 +364,34 @@ TEST("export: cancel stops quickly") {
     CHECK_EQ(enc.videoFrames, 10);
 }
 
+TEST("export: frames reach the encoder in order while the next ones render") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    fake::Encoder enc;
+    ExportSettings s;
+    s.width = 160;
+    s.height = 90;
+    auto res = exportProject(f.ed.project(), pool, enc, "o.mp4", s);
+    CHECK(res.ok);
+    CHECK_EQ(static_cast<std::int64_t>(enc.pts.size()), enc.videoFrames);
+    for (std::size_t i = 0; i < enc.pts.size(); ++i) CHECK(enc.pts[i] == Time::fromFrame(static_cast<std::int64_t>(i), s.fps));
+}
+
+TEST("export: an encoder error stops the render thread and is reported") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    fake::Encoder enc;
+    enc.failAt = 5;
+    auto res = exportProject(f.ed.project(), pool, enc, "o.mp4", {});
+    CHECK(!res.ok);
+    CHECK_EQ(res.error, std::string("disk full"));
+    CHECK_EQ(enc.videoFrames, 5);
+}
+
 // ------------------------------------------------------------------ preview
 
 TEST("preview: latest request wins and audio ring feeds the device") {

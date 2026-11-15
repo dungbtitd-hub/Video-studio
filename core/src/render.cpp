@@ -9,8 +9,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <mutex>
+#include <thread>
 
 #include "detail/paths.hpp"
 #include "vstudio/generators.hpp"
@@ -722,24 +726,81 @@ ExportResult exportProject(const Project& p, MediaPool& pool, IMediaEncoder& enc
     renderer.setDeepOutput(s.bitDepth > 8 && enc.supportsDeep());
     if (!enc.open(outPath, s, &r.error)) return r;
     const std::int64_t total = p.duration().toFrame(s.fps, Rounding::Up);
+
+    // Two stages that overlap: a render thread decodes and composites frame N+1 (GPU compositor
+    // where there is one) while this thread encodes frame N (hardware encoder where there is
+    // one). A few frames are queued between them, so neither waits on the other for long and
+    // memory stays bounded (3 x one output frame).
+    struct Item {
+        VideoFrame video;
+        AudioBuffer audio;
+        bool hasAudio = false;
+    };
+    constexpr std::size_t kQueued = 3;
+    std::deque<Item> queue;
+    std::mutex mu;
+    std::condition_variable ready, space;
+    bool produced = false;          // the render thread is done (or stopped)
+    std::atomic<bool> stop{false};  // the encoder failed or the export was cancelled
+    auto cancelled = [&] { return stop.load() || (cancel && cancel->load()); };
+    std::thread render([&] {
+        for (std::int64_t i = 0; i < total && !cancelled(); ++i) {
+            const Time t = Time::fromFrame(i, s.fps);
+            Item item;
+            item.video = renderer.renderVideo(t, s.width, s.height, "export");
+            item.video.pts = t;
+            // Sample range derived from frame boundaries: cumulative, so no drift.
+            const std::int64_t a0 = t.toSample(s.sampleRate);
+            const std::int64_t a1 = Time::fromFrame(i + 1, s.fps).toSample(s.sampleRate);
+            if (a1 > a0) {
+                item.audio = renderer.renderAudio(a0, a1 - a0, "export-audio");
+                item.hasAudio = true;
+            }
+            std::unique_lock lk(mu);
+            space.wait(lk, [&] { return queue.size() < kQueued || cancelled(); });
+            if (cancelled()) break;
+            queue.push_back(std::move(item));
+            ready.notify_one();
+        }
+        std::lock_guard lk(mu);
+        produced = true;
+        ready.notify_one();
+    });
+    auto stopRender = [&] {
+        {
+            std::lock_guard lk(mu);
+            stop = true;
+        }
+        space.notify_all();
+        render.join();
+    };
     for (std::int64_t i = 0; i < total; ++i) {
-        if (cancel && cancel->load()) {
-            r.cancelled = true;
-            r.error = "cancelled";
-            enc.finish(nullptr);
+        Item item;
+        {
+            std::unique_lock lk(mu);
+            // Woken at least every 100 ms so a cancel is seen even while a frame renders.
+            while (queue.empty() && !produced && !(cancel && cancel->load())) ready.wait_for(lk, std::chrono::milliseconds(100));
+            if (cancel && cancel->load()) {
+                lk.unlock();
+                stopRender();
+                r.cancelled = true;
+                r.error = "cancelled";
+                enc.finish(nullptr);
+                return r;
+            }
+            if (queue.empty()) break;  // render thread stopped early (cannot happen without a cancel)
+            item = std::move(queue.front());
+            queue.pop_front();
+        }
+        space.notify_one();
+        if (!enc.writeVideo(item.video, &r.error) || (item.hasAudio && !enc.writeAudio(item.audio, &r.error))) {
+            stopRender();
             return r;
         }
-        const Time t = Time::fromFrame(i, s.fps);
-        VideoFrame f = renderer.renderVideo(t, s.width, s.height, "export");
-        f.pts = t;
-        if (!enc.writeVideo(f, &r.error)) return r;
-        // Sample range derived from frame boundaries: cumulative, so no drift.
-        const std::int64_t a0 = t.toSample(s.sampleRate);
-        const std::int64_t a1 = Time::fromFrame(i + 1, s.fps).toSample(s.sampleRate);
-        if (a1 > a0 && !enc.writeAudio(renderer.renderAudio(a0, a1 - a0, "export-audio"), &r.error)) return r;
         ++r.framesWritten;
         if (onProgress) onProgress({i + 1, total});
     }
+    render.join();
     if (!enc.finish(&r.error)) return r;
     r.ok = true;
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
