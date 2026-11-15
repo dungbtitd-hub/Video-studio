@@ -25,6 +25,13 @@ namespace vstudio::ffmpeg {
 
 namespace {
 
+// Encoders that run on a GPU / media engine rather than the CPU.
+bool isHardwareEncoder(const char* name) {
+    for (const char* tag : {"_nvenc", "_qsv", "_amf", "_videotoolbox", "_vaapi", "_mf"})
+        if (std::strstr(name, tag)) return true;
+    return false;
+}
+
 std::string avErr(int e) {
     char buf[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(e, buf, sizeof buf);
@@ -517,7 +524,11 @@ public:
             if (candidates.empty())
                 return fail(error, std::string("no H.265 encoder on this device") + (tenBit_ ? " (10-bit)" : ""));
         } else if (s.videoCodec == "h264") {
-            for (const char* n : {"libx264", "h264_mf", "h264_videotoolbox", "libopenh264"})
+            // GPU encoders first (NVIDIA, Intel, AMD, Apple): the encoder is the slowest step of an
+            // export, and these run beside the CPU. Each is tried in turn; a machine without that
+            // GPU (or driver) fails to open it and the next one is used. x264 is the CPU fallback.
+            for (const char* n : {"h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "libx264", "h264_mf",
+                                  "libopenh264"})
                 if (const AVCodec* c = avcodec_find_encoder_by_name(n)) candidates.push_back(c);
             if (const AVCodec* c = avcodec_find_encoder(AV_CODEC_ID_H264)) candidates.push_back(c);
         }
@@ -535,7 +546,8 @@ public:
         av_log_set_level(AV_LOG_QUIET);
         for (const AVCodec* vc : candidates) {
           for (AVPixelFormat pf : pixFmts) {
-            if (!hevc && pf != AV_PIX_FMT_YUV420P) break;  // every H.264 / MPEG-4 candidate accepts it
+            // Software H.264 / MPEG-4 take planar 4:2:0; Quick Sync and some GPU encoders only NV12.
+            if (!hevc && pf != AV_PIX_FMT_YUV420P && !isHardwareEncoder(vc->name)) break;
             vctx_.reset(avcodec_alloc_context3(vc));
             vctx_->width = s.width;
             vctx_->height = s.height;
@@ -551,7 +563,13 @@ public:
             vctx_->bit_rate = s.videoBitrate;
             vctx_->thread_count = 0;
             if (s.gopSize > 0) vctx_->gop_size = s.gopSize;
-            if (std::strcmp(vc->name, "libx264") == 0) {
+            if (std::strcmp(vc->name, "h264_nvenc") == 0 || std::strcmp(vc->name, "hevc_nvenc") == 0) {
+                av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "p1" : "p4", 0);
+            } else if (std::strcmp(vc->name, "h264_qsv") == 0 || std::strcmp(vc->name, "hevc_qsv") == 0) {
+                av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "veryfast" : "medium", 0);
+            } else if (std::strcmp(vc->name, "h264_amf") == 0 || std::strcmp(vc->name, "hevc_amf") == 0) {
+                av_opt_set(vctx_->priv_data, "quality", s.fastPreset ? "speed" : "balanced", 0);
+            } else if (std::strcmp(vc->name, "libx264") == 0) {
                 av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "veryfast", 0);
             } else if (std::strcmp(vc->name, "libx265") == 0) {
                 av_opt_set(vctx_->priv_data, "preset", s.fastPreset ? "ultrafast" : "fast", 0);

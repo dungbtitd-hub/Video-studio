@@ -781,6 +781,8 @@ void MainWindow::buildMenus() {
     act(editMenu, "Xóa clip", {K(Qt::Key_Delete), K(Qt::Key_Backspace)}, [this] { editor_->deleteSelected(); });
     act(editMenu, "Xóa và dồn khoảng trống", {K("Shift+Delete"), K("Shift+Backspace")},
         [this] { editor_->rippleDeleteSelected(); });
+    act(editMenu, "Xóa hết phía trước playhead", {K("Ctrl+Shift+Left")}, [this] { editor_->deleteSide(true); });
+    act(editMenu, "Xóa hết phía sau playhead", {K("Ctrl+Shift+Right")}, [this] { editor_->deleteSide(false); });
     act(editMenu, "Bỏ chọn", {K(Qt::Key_Escape)}, [this] { editor_->setSelectedClip({}); });
     editMenu->addSeparator();
     act(editMenu, "Keyframe hình ảnh", {K("Ctrl+K")}, [this] { editor_->toggleKeyframe(false); });

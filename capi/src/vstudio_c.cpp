@@ -1,5 +1,7 @@
 #include "vstudio/vstudio_c.h"
 
+#include "audio_device.hpp"
+
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -71,6 +73,7 @@ struct vs_session {
 
     // Created lazily: a session that is only edited never starts threads.
     std::unique_ptr<PreviewEngine> preview;
+    std::unique_ptr<capi::AudioDevice> audioOut;  // preview sound while playing (declared after preview: closed first)
     std::unique_ptr<JobScheduler> jobs;
     // Thumbnails / waveforms: their own background worker, so they never wait behind an export.
     std::unique_ptr<JobScheduler> libJobs;
@@ -309,6 +312,7 @@ void vs_session_destroy(vs_session* s) {
     s->library.reset();  // cancels thumbnail/waveform work
     s->libJobs.reset();
     s->jobs.reset();     // joins export job
+    s->audioOut.reset();  // stops the device callback before the preview it pulls from
     s->preview.reset();  // joins preview threads
     delete s;
 }
@@ -415,6 +419,30 @@ int vs_split_at(vs_session* s, int64_t t) {
     int n = -1;
     if (guard(s, [&] {
             n = s->editor->splitAt(Time::fromTicks(t));
+            s->edited();
+        }) != 0)
+        return -1;
+    return n;
+}
+
+int vs_remove_clips(vs_session* s, const char* clip_ids_json, int ripple) {
+    int n = -1;
+    if (guard(s, [&] {
+            const Json j = Json::parse(str(clip_ids_json));
+            if (!j.is_array()) throw std::runtime_error("clip ids must be a JSON array");
+            std::vector<Id> ids;
+            for (const auto& v : j) ids.push_back(v.get<std::string>());
+            n = s->editor->removeClips(ids, ripple != 0);
+            s->edited();
+        }) != 0)
+        return -1;
+    return n;
+}
+
+int vs_delete_side(vs_session* s, int64_t t, int before) {
+    int n = -1;
+    if (guard(s, [&] {
+            n = s->editor->deleteSide(Time::fromTicks(t), before != 0);
             s->edited();
         }) != 0)
         return -1;
@@ -1433,11 +1461,22 @@ void vs_preview_seek(vs_session* s, int64_t t) {
 }
 
 void vs_play(vs_session* s, int64_t from) {
-    if (s) s->previewEngine().play(Time::fromTicks(from));
+    if (!s) return;
+    PreviewEngine& pe = s->previewEngine();
+    pe.play(Time::fromTicks(from));
+    // Sound on the device speaker while playing. Opened on each play, so a route change
+    // (headphones in or out, Bluetooth) is picked up; without a device the preview plays
+    // silently on the wall clock.
+    s->audioOut.reset();
+    const Project& p = s->editor->project();
+    s->audioOut = capi::AudioDevice::open(p.sampleRate, p.audioChannels,
+                                          [&pe](float* out, std::int64_t frames) { pe.pullAudio(out, frames); });
 }
 
 void vs_pause(vs_session* s) {
-    if (s && s->preview) s->preview->pause();
+    if (!s) return;
+    if (s->preview) s->preview->pause();
+    s->audioOut.reset();
 }
 
 int vs_is_playing(vs_session* s) { return s && s->preview && s->preview->playing() ? 1 : 0; }
@@ -1675,6 +1714,7 @@ int vs_relink_asset(vs_session* s, const char* asset_id, const char* path) {
         s->editor->relinkAsset(asset_id, makeUri(p, s->packageDir), fingerprintFile(p));
         if (s->library) s->library->forget(asset_id);
         // Decoders opened on the old file are dropped with the preview engine's pool.
+        s->audioOut.reset();
         s->preview.reset();
         s->edited();
     });

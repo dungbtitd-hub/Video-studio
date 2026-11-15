@@ -406,14 +406,68 @@ void EditorController::splitAtPlayhead() {
     });
 }
 
+QStringList EditorController::pickedClips() const {
+    QStringList all;
+    // Only clips still in the project (an undo may have taken a picked one away).
+    for (const QString& id : QStringList{selected_} + picked_)
+        if (!id.isEmpty() && !all.contains(id) && editor_->project().findClip(s(id))) all.append(id);
+    return all;
+}
+
+void EditorController::togglePicked(const QString& id) {
+    if (id.isEmpty()) return;
+    if (selected_.isEmpty()) {
+        setSelectedClip(id);
+    } else if (id == selected_) {
+        // The main selection goes; another picked clip (if any) takes its place.
+        const QStringList rest = picked_;
+        picked_.clear();
+        setSelectedClip(rest.isEmpty() ? QString() : rest.front());
+        picked_ = rest.mid(1);
+    } else if (picked_.contains(id)) {
+        picked_.removeAll(id);
+    } else {
+        picked_.append(id);
+    }
+    if (picked_.size() + (selected_.isEmpty() ? 0 : 1) > 1)
+        setStatus(tr("Đã chọn %1 clip. Bấm Delete để xóa tất cả.").arg(picked_.size() + 1));
+    emit selectionChanged();
+}
+
 void EditorController::deleteSelected() {
-    if (selected_.isEmpty()) return;
-    if (edit([&] { editor_->removeClip(s(selected_)); })) setSelectedClip({});
+    const QStringList ids = pickedClips();
+    if (ids.isEmpty()) return;
+    std::vector<Id> v;
+    for (const QString& c : ids) v.push_back(s(c));
+    if (edit([&] { editor_->removeClips(v, false); })) {
+        picked_.clear();
+        setSelectedClip({});
+    }
 }
 
 void EditorController::rippleDeleteSelected() {
-    if (selected_.isEmpty()) return;
-    if (edit([&] { editor_->rippleDelete(s(selected_)); })) setSelectedClip({});
+    const QStringList ids = pickedClips();
+    if (ids.isEmpty()) return;
+    std::vector<Id> v;
+    for (const QString& c : ids) v.push_back(s(c));
+    if (edit([&] { editor_->removeClips(v, true); })) {
+        picked_.clear();
+        setSelectedClip({});
+    }
+}
+
+void EditorController::deleteSide(bool before) {
+    const double at = playhead_;
+    int n = 0;
+    if (!edit([&] { n = editor_->deleteSide(Time::fromSeconds(at), before); })) return;
+    setSelectedClip({});
+    if (n == 0) {
+        setStatus(before ? tr("Không có gì phía trước playhead") : tr("Không có gì phía sau playhead"));
+        return;
+    }
+    if (before) seek(0);
+    setStatus(before ? tr("Đã xóa hết phía trước playhead. Ctrl+Z để lấy lại.")
+                     : tr("Đã xóa hết phía sau playhead. Ctrl+Z để lấy lại."));
 }
 
 void EditorController::setClipLook(const QStringList& clipIds, const QString& lookId, double strength) {
@@ -1365,6 +1419,8 @@ void EditorController::endLive() {
 void EditorController::setSelectedClip(const QString& id) {
     if (id == selected_) return;
     selected_ = id;
+    picked_.removeAll(id);
+    if (id.isEmpty()) picked_.clear();  // clicking empty timeline drops the whole selection
     if (cut_.valid() && cut_.clipId != id) {  // a cut belongs to the clip that stores it
         cut_ = {};
         emit cutChanged();

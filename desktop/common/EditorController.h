@@ -85,6 +85,8 @@ public:
     Q_INVOKABLE void splitAtPlayhead();
     Q_INVOKABLE void deleteSelected();
     Q_INVOKABLE void rippleDeleteSelected();  // delete and close the gap on its track
+    // Everything before / after the playhead on the unlocked tracks (one undo step).
+    Q_INVOKABLE void deleteSide(bool before);
     Q_INVOKABLE void seekBy(double seconds);
     Q_INVOKABLE void jumpEditPoint(bool forward);  // previous/next clip edge on any track
     Q_INVOKABLE void moveClip(const QString& clipId, const QString& trackId, double seconds);
@@ -131,6 +133,10 @@ public:
     QString timecode() const;
     bool playing() const;
     QString selectedClip() const { return selected_; }
+    // Ctrl (Cmd on a Mac) + click adds clips to the selection; Delete removes them all at once.
+    void togglePicked(const QString& id);
+    bool isPicked(const QString& id) const { return id == selected_ || picked_.contains(id); }
+    QStringList pickedClips() const;
     // Colour looks (vstudio/looks.hpp): one undo step for any number of clips; "" removes.
     void setClipLook(const QStringList& clipIds, const QString& lookId, double strength);
     // Video effects (vstudio/video_fx.hpp): zoom / rotate / reflect, one per group; "" removes the group's.
@@ -455,6 +461,7 @@ private:
     double playhead_ = 0;
     bool wasPlaying_ = false;
     QString selected_;
+    QStringList picked_;  // more clips selected with Ctrl + click
     QString activeCover_;
     Cut cut_;
     bool tracking_ = false;

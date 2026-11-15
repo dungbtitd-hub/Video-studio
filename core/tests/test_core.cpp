@@ -326,6 +326,51 @@ TEST("render: edits re-use decoded frames from the cache") {
     CHECK_EQ(fake::decodes.load(), decodesBefore);  // zero new decodes after the edit
 }
 
+TEST("edit: delete several clips in one step, with or without closing the gaps") {
+    Fixture f;
+    const Id c1 = f.ed.appendClip(f.v1, f.asset, sec(0), sec(2));
+    const Id c2 = f.ed.appendClip(f.v1, f.asset, sec(0), sec(3));
+    const Id c3 = f.ed.appendClip(f.v1, f.asset, sec(0), sec(4));
+    const Id m = f.ed.appendClip(f.a1, f.asset, sec(0), sec(5));
+    CHECK_EQ(f.ed.removeClips({c1, m, c1}, true), 2);
+    const Track* v = f.ed.project().findTrack(f.v1);
+    CHECK_EQ(v->clips.size(), 2u);
+    CHECK(f.ed.project().findClip(c2)->timelineIn == sec(0));  // gap closed
+    CHECK(f.ed.project().findClip(c3)->timelineIn == sec(3));
+    CHECK(f.ed.project().findTrack(f.a1)->clips.empty());
+    f.ed.undo();  // one step brings both back
+    CHECK(f.ed.project().findClip(c1) && f.ed.project().findClip(m));
+    CHECK(f.ed.project().findClip(c2)->timelineIn == sec(2));
+    CHECK_EQ(f.ed.removeClips({c2, c3}, false), 2);
+    CHECK(f.ed.project().findClip(c1)->timelineIn == sec(0));
+    CHECK_EQ(f.ed.project().findTrack(f.v1)->clips.size(), 1u);
+}
+
+TEST("edit: delete everything before or after the playhead") {
+    Fixture f;
+    const Id c1 = f.ed.appendClip(f.v1, f.asset, sec(0), sec(2));  // 0-2
+    const Id c2 = f.ed.appendClip(f.v1, f.asset, sec(5), sec(9));  // 2-6 (source 5-9)
+    const Id m = f.ed.appendClip(f.a1, f.asset, sec(0), sec(7));   // 0-7
+    // After 3 s: c2 keeps 2-3, music keeps 0-3.
+    CHECK_EQ(f.ed.deleteSide(sec(3), false), 2);
+    CHECK(f.ed.project().findClip(c1)->timelineOut() == sec(2));
+    CHECK(f.ed.project().findClip(c2)->timelineOut() == sec(3));
+    CHECK(f.ed.project().findClip(m)->timelineOut() == sec(3));
+    CHECK(f.ed.project().duration() == sec(3));
+    f.ed.undo();
+    CHECK(f.ed.project().duration() == sec(7));
+    // Before 3 s: c1 goes, c2 starts at 0 showing source 6 s, the music starts at 0 from 3 s.
+    CHECK_EQ(f.ed.deleteSide(sec(3), true), 3);
+    CHECK(!f.ed.project().findClip(c1));
+    const Clip* rest = f.ed.project().findTrack(f.v1)->clips.data();
+    CHECK(rest->timelineIn == sec(0));
+    CHECK(rest->sourceIn == sec(6));
+    CHECK(f.ed.project().findTrack(f.a1)->clips.front().sourceIn == sec(3));
+    CHECK(f.ed.project().duration() == sec(4));
+    f.ed.undo();
+    CHECK(f.ed.project().findClip(c1) && f.ed.project().duration() == sec(7));
+}
+
 TEST("export: frame count and audio sample count are exact (no A/V drift)") {
     Editor ed{Editor::newProject("NTSC", 640, 360, {30000, 1001}, "test")};
     const Id a = ed.addAsset(syntheticAsset("A", 10));
@@ -362,6 +407,34 @@ TEST("export: cancel stops quickly") {
     }, &cancel);
     CHECK(res.cancelled);
     CHECK_EQ(enc.videoFrames, 10);
+}
+
+TEST("export: frames reach the encoder in order while the next ones render") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    fake::Encoder enc;
+    ExportSettings s;
+    s.width = 160;
+    s.height = 90;
+    auto res = exportProject(f.ed.project(), pool, enc, "o.mp4", s);
+    CHECK(res.ok);
+    CHECK_EQ(static_cast<std::int64_t>(enc.pts.size()), enc.videoFrames);
+    for (std::size_t i = 0; i < enc.pts.size(); ++i) CHECK(enc.pts[i] == Time::fromFrame(static_cast<std::int64_t>(i), s.fps));
+}
+
+TEST("export: an encoder error stops the render thread and is reported") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset);
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    fake::Encoder enc;
+    enc.failAt = 5;
+    auto res = exportProject(f.ed.project(), pool, enc, "o.mp4", {});
+    CHECK(!res.ok);
+    CHECK_EQ(res.error, std::string("disk full"));
+    CHECK_EQ(enc.videoFrames, 5);
 }
 
 // ------------------------------------------------------------------ preview

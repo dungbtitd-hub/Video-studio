@@ -26,6 +26,7 @@ class TimelineView extends StatefulWidget {
     required this.project,
     required this.playhead,
     required this.selectedClip,
+    this.multi,
     required this.onSeek,
     required this.onSelect,
     required this.onMove,
@@ -49,6 +50,9 @@ class TimelineView extends StatefulWidget {
   final MediaCache? media; // thumbnails / waveforms drawn inside clips when ready
   final double playhead;
   final String? selectedClip;
+
+  /// Clips picked in "Chọn nhiều" (null when that mode is off): drawn with an orange frame and a tick.
+  final Set<String>? multi;
   final ValueChanged<double> onSeek;
 
   /// true when a swipe starts (pause playback), false when it ends.
@@ -393,6 +397,7 @@ class _TimelineViewState extends State<TimelineView> {
               tops: _tops,
               playhead: _head,
               selected: widget.selectedClip,
+              multi: widget.multi,
               pxPerSec: pxPerSec,
               scroll: scroll,
               dragClip: _dragClip,
@@ -420,6 +425,7 @@ class _TimelinePainter extends CustomPainter {
     required this.tops,
     required this.playhead,
     required this.selected,
+    this.multi,
     required this.pxPerSec,
     required this.scroll,
     required this.dragClip,
@@ -439,6 +445,7 @@ class _TimelinePainter extends CustomPainter {
   final List<double> tops;
   final double playhead;
   final String? selected;
+  final Set<String>? multi;
   final double pxPerSec;
   final double scroll;
   final String? dragClip;
@@ -529,6 +536,28 @@ class _TimelinePainter extends CustomPainter {
           canvas.restore();
         }
         final isSel = c.id == selected;
+        if (multi?.contains(c.id) ?? false) {
+          canvas.drawRRect(
+              r,
+              Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 3
+                ..color = VsColors.accent);
+          final dot = Offset(r.outerRect.left + 10, r.outerRect.top + 10);
+          if (r.outerRect.width > 20) {
+            canvas.drawCircle(dot, 7, Paint()..color = VsColors.accent);
+            final tick = Path()
+              ..moveTo(dot.dx - 3.5, dot.dy)
+              ..lineTo(dot.dx - 1, dot.dy + 2.5)
+              ..lineTo(dot.dx + 3.5, dot.dy - 2.5);
+            canvas.drawPath(
+                tick,
+                Paint()
+                  ..style = PaintingStyle.stroke
+                  ..strokeWidth = 1.8
+                  ..color = Colors.black);
+          }
+        }
         if (isSel || c.id == underHead || ((dragging || trimming) && snapped)) {
           canvas.drawRRect(
               r,
@@ -731,6 +760,7 @@ class _TimelinePainter extends CustomPainter {
       old.selectedCut != selectedCut ||
       old.playhead != playhead ||
       old.selected != selected ||
+      old.multi != multi ||
       old.pxPerSec != pxPerSec ||
       old.scroll != scroll ||
       old.dragClip != dragClip ||

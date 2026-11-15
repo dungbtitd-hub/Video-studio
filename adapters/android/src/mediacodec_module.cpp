@@ -430,6 +430,32 @@ void yuvToRgba(const uint8_t* src, int cropX, int cropY, int srcW, int srcH, int
     const uint8_t* yPlane = src;
     const uint8_t* uvPlane = src + static_cast<size_t>(stride) * sliceH;
     const uint8_t* vPlane = uvPlane + static_cast<size_t>(stride / 2) * (sliceH / 2);
+    // BT.601 limited range, fixed point.
+    auto put = [](uint8_t* d, int Y, int U, int V) {
+        const int c = 298 * (Y - 16) + 128, dd = U - 128, e = V - 128;
+        d[0] = static_cast<uint8_t>(std::clamp((c + 409 * e) >> 8, 0, 255));
+        d[1] = static_cast<uint8_t>(std::clamp((c - 100 * dd - 208 * e) >> 8, 0, 255));
+        d[2] = static_cast<uint8_t>(std::clamp((c + 516 * dd) >> 8, 0, 255));
+        d[3] = 255;
+    };
+    if (w == srcW && h == srcH && (cropX % 2) == 0) {
+        // Same size (export decodes at the native size): straight rows, two pixels per chroma
+        // sample, no per-pixel lookups.
+        for (int y = 0; y < h; ++y) {
+            const int sy = cropY + y;
+            const uint8_t* yRow = yPlane + static_cast<size_t>(sy) * stride + cropX;
+            const uint8_t* uvRow = nv12 ? uvPlane + static_cast<size_t>(sy / 2) * stride + cropX
+                                        : uvPlane + static_cast<size_t>(sy / 2) * (stride / 2) + cropX / 2;
+            const uint8_t* vRow = vPlane + static_cast<size_t>(sy / 2) * (stride / 2) + cropX / 2;
+            uint8_t* d = out.rgba.data() + static_cast<size_t>(y) * w * 4;
+            for (int x = 0; x < w; ++x, d += 4) {
+                const int U = nv12 ? uvRow[x & ~1] : uvRow[x / 2];
+                const int V = nv12 ? uvRow[(x & ~1) + 1] : vRow[x / 2];
+                put(d, yRow[x], U, V);
+            }
+        }
+        return;
+    }
     std::vector<int> cols(static_cast<size_t>(w));
     for (int x = 0; x < w; ++x) cols[static_cast<size_t>(x)] = cropX + std::min(srcW - 1, static_cast<int>((2LL * x + 1) * srcW / (2LL * w)));
     for (int y = 0; y < h; ++y) {
@@ -444,12 +470,7 @@ void yuvToRgba(const uint8_t* src, int cropX, int cropY, int srcW, int srcH, int
             const int Y = yRow[sx];
             const int U = nv12 ? uvRow[sx & ~1] : uvRow[sx / 2];
             const int V = nv12 ? uvRow[(sx & ~1) + 1] : vRow[sx / 2];
-            // BT.601 limited range
-            const int c = Y - 16, dd = U - 128, e = V - 128;
-            d[0] = static_cast<uint8_t>(std::clamp((298 * c + 409 * e + 128) >> 8, 0, 255));
-            d[1] = static_cast<uint8_t>(std::clamp((298 * c - 100 * dd - 208 * e + 128) >> 8, 0, 255));
-            d[2] = static_cast<uint8_t>(std::clamp((298 * c + 516 * dd + 128) >> 8, 0, 255));
-            d[3] = 255;
+            put(d, Y, U, V);
         }
     }
 }

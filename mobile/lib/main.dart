@@ -96,6 +96,8 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
   // "Đoạn áp dụng": the part an effect plays in, set with the playhead (range_bar.dart).
   TimeRange? _range;
   bool _keyMode = false; // the selected clip's panel shows keyframes instead of the range
+  // "Chọn nhiều": the clips picked for a delete in one go (null = off). Taps toggle clips.
+  Set<String>? _multi;
 
   @override
   void initState() {
@@ -211,6 +213,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
       _coverMode = false;
       _gradeMode = false;
       _fullscreen = false;
+      _multi = null;
     });
     _stopScopes();
     old.dispose();
@@ -1707,6 +1710,54 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
     });
   }
 
+  /// Deletes every clip picked in "Chọn nhiều" (one undo step).
+  void _deleteMulti({bool ripple = false}) {
+    final ids = _multi?.toList() ?? const <String>[];
+    if (ids.isEmpty) {
+      setState(() => _status = 'Chạm vào các clip cần xóa trên timeline');
+      return;
+    }
+    _edit((vs) {
+      final n = vs.removeClips(ids, ripple: ripple);
+      _multi = null;
+      _selected = null;
+      _status = 'Đã xóa $n clip. Bấm ↶ để lấy lại.';
+    });
+    _vs?.seek(_playhead);
+  }
+
+  /// Deletes everything before or after the playhead line, on every unlocked track.
+  void _deleteSide({required bool before}) {
+    _edit((vs) {
+      final at = _playhead;
+      final n = vs.deleteSide(at, before: before);
+      _multi = null;
+      _selected = null;
+      if (n == 0) {
+        _status = before ? 'Không có gì phía trước thanh playback' : 'Không có gì phía sau thanh playback';
+        return;
+      }
+      final end = vs.project().duration;
+      if (before) {
+        _playhead = 0; // what is left now starts at 0
+        _status = 'Đã xóa hết phía trước ${_tc(at)}. Bấm ↶ để lấy lại.';
+      } else {
+        // The cut falls on a frame; the line goes to the last frame of what is left.
+        _playhead = math.max(0, math.min(at, end - 1 / 30));
+        _status = 'Đã xóa hết phía sau ${_tc(end)}. Bấm ↶ để lấy lại.';
+      }
+    });
+    _vs?.seek(_playhead);
+  }
+
+  void _startMulti() => setState(() {
+        _multi = {if (_selected != null) _selected!};
+        _selected = null;
+        _keyMode = false;
+        _range = null;
+        _status = 'Chạm vào các clip cần xóa';
+      });
+
   void _deleteSelected({bool ripple = false}) {
     if (!_target()) return;
     final id = _selected!;
@@ -2004,13 +2055,22 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               child: TimelineView(
                 project: project,
                 playhead: _playhead,
-                selectedClip: _selected,
+                selectedClip: _multi != null ? null : _selected,
+                multi: _multi,
                 onSeek: _seek,
                 onScrub: (on) {
                   if (on && (_vs?.playing ?? false)) _vs!.pause();
                 },
                 range: _range == null ? null : (_range!.start, _range!.end),
                 onSelect: (id) => setState(() {
+                  final multi = _multi;
+                  if (multi != null) {
+                    // "Chọn nhiều": a tap adds or removes that clip.
+                    if (id != null) {
+                      _multi = multi.contains(id) ? ({...multi}..remove(id)) : {...multi, id};
+                    }
+                    return;
+                  }
                   if (id != _selected) {
                     _activeCover = null;
                     _range = null;
@@ -2024,13 +2084,15 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                   }
                   if (_coverMode) _activeCover = _coverIds().firstOrNull;
                 }),
-                onMove: (clip, track, start) => _edit((vs) => vs.moveClip(clip, track, start)),
+                onMove: (clip, track, start) {
+                  if (_multi == null) _edit((vs) => vs.moveClip(clip, track, start));
+                },
                 onTrackFlags: (t, {required enabled, required locked, required muted}) =>
                     _edit((vs) => vs.setTrackFlags(t.id, enabled: enabled, locked: locked, muted: muted)),
                 onTrackMenu: _trackMenu,
                 snapMove: (clip, start, tol) => _vs?.snapClipMove(clip, start, tol, playhead: _playhead),
                 // While a part is being chosen every swipe moves the playhead (no trimming).
-                onTrim: _range != null || _keyMode
+                onTrim: _range != null || _keyMode || _multi != null
                     ? null
                     : (clip, {required start, required at}) => _edit((vs) => vs.trimClip(clip, start: start, at: at)),
                 snapTime: (t, tol, clip) => _vs?.snapTime(t, tol, excludeClip: clip, playhead: _playhead),
@@ -2087,10 +2149,45 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
           _rangeStart();
         });
     final del = _Tool(icon: Icons.delete_outline, label: 'Xóa', danger: true, onTap: () => _deleteSelected());
+    final multi = _Tool(icon: Icons.checklist, label: 'Chọn nhiều', onTap: _startMulti);
+    final delBefore = _Tool(
+        icon: Icons.keyboard_double_arrow_left,
+        label: 'Xóa trước',
+        danger: true,
+        onTap: () => _deleteSide(before: true));
+    final delAfter = _Tool(
+        icon: Icons.keyboard_double_arrow_right,
+        label: 'Xóa sau',
+        danger: true,
+        onTap: () => _deleteSide(before: false));
+    final picked = _multi;
+    if (picked != null) {
+      final all = [
+        for (final t in _project?.tracks ?? const <TrackView>[])
+          if (!t.locked) ...t.clips.map((c) => c.id)
+      ];
+      return [
+        _Tool(icon: Icons.close, label: '', accent: true, onTap: () => setState(() => _multi = null)),
+        _Tool(
+            icon: picked.length == all.length && all.isNotEmpty ? Icons.deselect : Icons.select_all,
+            label: picked.length == all.length && all.isNotEmpty ? 'Bỏ chọn' : 'Chọn hết',
+            onTap: () => setState(() => _multi = picked.length == all.length ? <String>{} : all.toSet())),
+        _Tool(icon: Icons.delete_outline, label: 'Xóa (${picked.length})', danger: true, onTap: () => _deleteMulti()),
+        _Tool(
+            icon: Icons.format_indent_decrease,
+            label: 'Xóa dồn (${picked.length})',
+            onTap: () => _deleteMulti(ripple: true)),
+        delBefore,
+        delAfter,
+      ];
+    }
     if (c == null) {
       return [
         split,
         range,
+        multi,
+        delBefore,
+        delAfter,
         _Tool(icon: Icons.music_note_outlined, label: 'Âm thanh', onTap: _audio),
         _Tool(
             icon: _recording ? Icons.stop_circle : Icons.mic_none,
@@ -2120,6 +2217,7 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
               _editObject();
             }),
         del,
+        multi,
       ];
     }
     if (_selectedTrack?.audio ?? false) {
@@ -2139,6 +2237,9 @@ class _EditorPageState extends State<EditorPage> with SingleTickerProviderStateM
                 })),
         del,
         _Tool(icon: Icons.format_indent_decrease, label: 'Xóa dồn', onTap: () => _deleteSelected(ripple: true)),
+        multi,
+        delBefore,
+        delAfter,
       ];
     }
     return [
