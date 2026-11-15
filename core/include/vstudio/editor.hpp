@@ -44,6 +44,13 @@ public:
     void removeClip(const Id& clipId);
     // Removes the clip and closes the gap on its track (one undo step).
     void rippleDelete(const Id& clipId);
+    // Removes several clips in one undo step; `ripple` closes each gap on its track.
+    // Clips on locked tracks are refused (EditError); returns the number removed.
+    int removeClips(const std::vector<Id>& clipIds, bool ripple);
+    // Deletes everything on the unlocked tracks before (`before` = true) or after the playhead,
+    // in one undo step. A clip under the playhead is cut there and only its other side stays.
+    // Before: what is left moves to start at 0. Returns the number of clips removed or cut.
+    int deleteSide(Time timelineTime, bool before);
     // ---- tracks ----
     // Removes a track and its clips (refused while locked). Undoable.
     void removeTrack(const Id& trackId);

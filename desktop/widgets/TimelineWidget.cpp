@@ -209,7 +209,7 @@ void TimelineWidget::paintEvent(QPaintEvent*) {
             if (dragging && drag_ == Drag::TrimStart) s += dragDelta_;
             if (dragging && drag_ == Drag::TrimEnd) e += dragDelta_;
             const QRectF r(timeToX(s), top + 4, std::max(3.0, (e - s) * pxPerSec_), kTrackH - 10);
-            const bool selected = it->id == sel;
+            const bool selected = it->id == sel || editor_->isPicked(it->id);
             p.setPen(QPen(selected ? Theme::accent() : (t.audio ? Theme::clipAudio() : Theme::clipVideo()), selected ? 2 : 1));
             p.setBrush(t.audio ? Theme::clipAudio2()
                                : it->kind == "text"    ? QColor(92, 70, 160)
@@ -352,7 +352,12 @@ void TimelineWidget::mousePressEvent(QMouseEvent* e) {
         editor_->seek(t);
         return;
     }
-    editor_->setSelectedClip(c->id);
+    if (e->modifiers() & Qt::ControlModifier) {  // Shift is kept for dragging without snapping
+        editor_->togglePicked(c->id);  // several clips, e.g. to delete them at once
+        update();
+        return;
+    }
+    if (!editor_->isPicked(c->id) || editor_->pickedClips().size() < 2) editor_->setSelectedClip(c->id);
     // A keyframe diamond: jump to it (moving keys is done by re-keying at the playhead).
     const QRectF cr(timeToX(c->start), kRulerH + ti * kTrackH + 4, (c->end - c->start) * pxPerSec_, kTrackH - 10);
     if (auto k = keyAt(*c, cr, pos)) {

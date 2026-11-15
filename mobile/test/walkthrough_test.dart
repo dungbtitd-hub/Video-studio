@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:video_studio/core/vstudio.dart';
 import 'package:video_studio/main.dart';
+import 'package:video_studio/ui/timeline.dart';
 
 class _Docs extends PathProviderPlatform {
   _Docs(this.dir);
@@ -161,11 +162,22 @@ void main() {
     await settle(tester, 300);
   }
 
+  /// "1:02.3" -> 62.3
+  double seconds(String tc) {
+    final p = tc.trim().split(':');
+    return int.parse(p[0]) * 60 + double.parse(p[1]);
+  }
+
   String timeText(WidgetTester tester) => tester.widget<Text>(find.byKey(const Key('time-row'))).data!;
 
   Future<void> tapTool(WidgetTester tester, String label) async {
     final f = find.text(label);
-    await tester.scrollUntilVisible(f, 80, scrollable: find.byType(Scrollable).last);
+    final row = find.byType(Scrollable).last;
+    try {
+      await tester.scrollUntilVisible(f, 80, scrollable: row, maxScrolls: 20);
+    } on StateError {
+      await tester.scrollUntilVisible(f, -80, scrollable: row, maxScrolls: 20); // it is further back
+    }
     await tester.ensureVisible(f);
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(f);
@@ -292,6 +304,53 @@ void main() {
     await tester.tap(find.byKey(const Key('home-delete-ok')));
     await settle(tester, 600);
     expect(find.text('Dự án 1'), findsNothing);
+  }, skip: skip != null);
+  testWidgets('a person deletes several clips, then everything after and before the line', (tester) async {
+    await app(tester, const Size(412, 892));
+    picker.next = ['$mediaDir/portrait.mp4', '$mediaDir/landscape.mp4', '$mediaDir/photo.jpg'];
+    await tester.tap(find.byKey(const Key('home-new')));
+    await settle(tester, 600);
+    await tester.tap(find.text('Thư viện ảnh và video'));
+    await until(tester, () => find.textContaining('Đã thêm').evaluate().isNotEmpty);
+    expect(timeText(tester), endsWith('/ 0:19.0'));
+    await settle(tester, 800);
+
+    // 1. "Chọn nhiều": pick every clip, tap the first one off again, delete the two others at once.
+    await tapTool(tester, 'Chọn nhiều');
+    await tapTool(tester, 'Chọn hết');
+    expect(find.text('Xóa (3)'), findsOneWidget);
+    final view = tester.widget<TimelineView>(find.byType(TimelineView));
+    final lane = tester.getTopLeft(find.byType(TimelineView)) +
+        Offset(tester.getSize(find.byType(TimelineView)).width / 2 + 20,
+            TimelineView.laneTops(view.project).$1.first + 20);
+    await tester.tapAt(lane); // the clip under the line (the portrait video) is let go
+    await settle(tester, 300);
+    expect(find.text('Xóa (2)'), findsOneWidget);
+    await shot(tester, '20_chon_nhieu');
+    await tapTool(tester, 'Xóa (2)');
+    expect(find.textContaining('Đã xóa 2 clip'), findsOneWidget);
+    expect(timeText(tester), endsWith('/ 0:06.0')); // only the 6 s portrait video is left
+    await shot(tester, '21_da_xoa_nhieu');
+
+    // 2. Everything after the line: swipe into the video, "Xóa sau".
+    await swipeTimeline(tester, -120);
+    final at = seconds(timeText(tester).split(' / ').first);
+    expect(at, inInclusiveRange(1.0, 5.0));
+    await tapTool(tester, 'Xóa sau');
+    expect(find.textContaining('Đã xóa hết phía sau'), findsOneWidget);
+    // The video now ends at the line (the cut falls on a frame: within 0.1 s as shown).
+    expect(seconds(timeText(tester).split(' / ').last), closeTo(at, 0.11));
+    await shot(tester, '22_xoa_phia_sau');
+
+    // 3. Everything before the line: swipe back a little, "Xóa trước"; the rest starts at 0.
+    await swipeTimeline(tester, 50);
+    await tapTool(tester, 'Xóa trước');
+    expect(find.textContaining('Đã xóa hết phía trước'), findsOneWidget);
+    expect(timeText(tester), startsWith('0:00.0'));
+    final left = seconds(timeText(tester).split(' / ').last);
+    expect(left, greaterThan(0.2));
+    expect(left, lessThan(at - 0.2));
+    await shot(tester, '23_xoa_phia_truoc');
   }, skip: skip != null);
   testWidgets('the same on an unfolded Galaxy Z Fold: keyframes, rotate a photo', (tester) async {
     await app(tester, const Size(884, 1004));

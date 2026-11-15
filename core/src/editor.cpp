@@ -2,6 +2,7 @@
 #include "vstudio/audio_fx.hpp"
 #include "vstudio/video_fx.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <limits>
@@ -150,6 +151,72 @@ void Editor::rippleDelete(const Id& clipId) {
     const Track* t = project_.trackOfClip(clipId);
     if (!t) throw EditError("clip not found");
     run("Ripple delete", EditCommand::Scope::Tracks, {t->id}, [clipId](Project& p) { edit::rippleDelete(p, clipId); });
+}
+
+int Editor::removeClips(const std::vector<Id>& clipIds, bool ripple) {
+    std::vector<Id> tracks, ids;
+    for (const Id& id : clipIds) {
+        if (std::find(ids.begin(), ids.end(), id) != ids.end()) continue;
+        const Track* t = project_.trackOfClip(id);
+        if (!t) throw EditError("clip not found");
+        if (t->locked) throw EditError("track is locked");
+        ids.push_back(id);
+        if (std::find(tracks.begin(), tracks.end(), t->id) == tracks.end()) tracks.push_back(t->id);
+    }
+    if (ids.empty()) return 0;
+    // Latest first: closing a later gap never moves an earlier clip still to be removed.
+    std::sort(ids.begin(), ids.end(), [this](const Id& a, const Id& b) {
+        return project_.findClip(a)->timelineIn > project_.findClip(b)->timelineIn;
+    });
+    run(ids.size() == 1 ? "Delete clip" : "Delete " + std::to_string(ids.size()) + " clips", EditCommand::Scope::Tracks,
+        tracks, [ids, ripple](Project& p) {
+            for (const Id& id : ids) ripple ? edit::rippleDelete(p, id) : edit::removeClip(p, id);
+        });
+    return static_cast<int>(ids.size());
+}
+
+namespace {
+// Whether a clip lies on the side of `at` that deleteSide removes. After the cut at the playhead
+// every clip is wholly on one side; one within a frame of it counts by its middle.
+bool removedSide(const Clip& c, Time at, bool before) {
+    const Time mid = Time::fromTicks((c.timelineIn.ticks() + c.timelineOut().ticks()) / 2);
+    return before ? mid < at : mid >= at;
+}
+}  // namespace
+
+int Editor::deleteSide(Time t, bool before) {
+    const Time at = t.snapToFrame(project_.fps);
+    const Time one = Time::fromFrame(1, project_.fps);
+    std::vector<std::pair<Id, Id>> cuts;  // clip under the playhead -> id of its right part
+    std::vector<Id> tracks;
+    int affected = 0;
+    for (const auto& tr : project_.tracks) {
+        if (tr.locked) continue;
+        bool touched = false;
+        for (const Clip& c : tr.clips) {
+            const bool inside = at >= c.timelineIn + one && at <= c.timelineOut() - one;
+            if (inside) cuts.emplace_back(c.id, newId());
+            if (inside || removedSide(c, at, before)) {
+                ++affected;
+                touched = true;
+            }
+        }
+        if (touched || (before && !tr.clips.empty())) tracks.push_back(tr.id);
+    }
+    if (affected == 0) return 0;
+    run(before ? "Delete before playhead" : "Delete after playhead", EditCommand::Scope::Tracks, tracks,
+        [cuts, at, before](Project& p) {
+            for (const auto& [cid, nid] : cuts) edit::splitClip(p, cid, at, nid);
+            for (Track& tr : p.tracks) {
+                if (tr.locked) continue;
+                // After the cut every clip lies wholly on one side (a clip within a frame of the
+                // playhead counts as on the side it mostly covers).
+                std::erase_if(tr.clips, [&](const Clip& c) { return removedSide(c, at, before); });
+                if (before)
+                    for (Clip& c : tr.clips) c.timelineIn = c.timelineIn >= at ? c.timelineIn - at : Time::zero();
+            }
+        });
+    return affected;
 }
 
 void Editor::moveClip(const Id& clipId, const Id& toTrackId, Time timelineIn) {

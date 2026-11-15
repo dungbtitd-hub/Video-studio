@@ -89,6 +89,10 @@ class VStudioBindings {
         removeClip =
             lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
                 'vs_remove_clip'),
+        removeClips = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32),
+            int Function(Pointer<VsSession>, CStr, int)>('vs_remove_clips'),
+        deleteSide = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Int64, Int32),
+            int Function(Pointer<VsSession>, int, int)>('vs_delete_side'),
         undo = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_undo'),
         redo = lib.lookupFunction<Int32 Function(Pointer<VsSession>), int Function(Pointer<VsSession>)>('vs_redo'),
         previewSetSize = lib.lookupFunction<Void Function(Pointer<VsSession>, Int32, Int32),
@@ -289,8 +293,9 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, CStr)>('vs_export_start_preset'),
         exportFormatsJson = lib.lookupFunction<CStr Function(Pointer<VsSession>), CStr Function(Pointer<VsSession>)>(
             'vs_export_formats_json'),
-        exportPresetsFormatJson = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr),
-            CStr Function(Pointer<VsSession>, CStr)>('vs_export_presets_format_json'),
+        exportPresetsFormatJson =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_export_presets_format_json'),
         exportStartPresetFormat = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr, CStr),
             int Function(Pointer<VsSession>, CStr, CStr, CStr)>('vs_export_start_preset_format'),
         exportStart = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, Int32, Int32, Int32, Int32, Int64),
@@ -316,8 +321,9 @@ class VStudioBindings {
             'vs_missing_assets_json'),
         relinkAsset = lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr, CStr),
             int Function(Pointer<VsSession>, CStr, CStr)>('vs_relink_asset'),
-        toolCommand = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
-            'vs_tool_command');
+        toolCommand =
+            lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr), CStr Function(Pointer<VsSession>, CStr)>(
+                'vs_tool_command');
 
   final CStr Function() version;
   final int Function() ticksPerSecond;
@@ -338,6 +344,8 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, int) moveClip;
   final int Function(Pointer<VsSession>, CStr, int, int) trimClip;
   final int Function(Pointer<VsSession>, int) splitAt;
+  final int Function(Pointer<VsSession>, CStr, int) removeClips;
+  final int Function(Pointer<VsSession>, int, int) deleteSide;
   final CStr Function(Pointer<VsSession>, CStr, int) splitClip;
   final int Function(Pointer<VsSession>, CStr) removeTrack;
   final int Function(Pointer<VsSession>, CStr, CStr) renameTrack;

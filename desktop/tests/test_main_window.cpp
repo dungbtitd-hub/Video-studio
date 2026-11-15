@@ -1050,6 +1050,40 @@ private slots:
         QVERIFY(ctrl_->clipOrientation()["flipH"].toBool());
     }
 
+    void deleteSeveralClipsAndEverythingAfterOrBefore() {
+        // Two clips on two tracks, picked with Ctrl + click, go in one step.
+        auto count = [this] {
+            std::size_t n = 0;
+            for (const auto& t : ctrl_->project()->tracks) n += t.clips.size();
+            return n;
+        };
+        const auto& tracks = ctrl_->project()->tracks;
+        QVERIFY(tracks.size() >= 2 && tracks[0].clips.size() >= 2 && !tracks[1].clips.empty());
+        const QString a = QString::fromStdString(tracks[0].clips[1].id), b = QString::fromStdString(tracks[1].clips[0].id);
+        const std::size_t before = count();
+        ctrl_->togglePicked(a);
+        ctrl_->togglePicked(b);
+        QCOMPARE(ctrl_->pickedClips().size(), 2);
+        QVERIFY(ctrl_->isPicked(b));
+        key(Qt::Key_Delete);
+        QCOMPARE(count(), before - 2);
+        QVERIFY(ctrl_->pickedClips().isEmpty());
+        ctrl_->undo();
+        QCOMPARE(count(), before);
+
+        const double total = ctrl_->duration();
+        ctrl_->seek(total / 2);
+        key(Qt::Key_Right, Qt::ControlModifier | Qt::ShiftModifier);  // everything after the playhead
+        QVERIFY(std::abs(ctrl_->duration() - total / 2) < 0.05);
+        ctrl_->seek(1.0);
+        key(Qt::Key_Left, Qt::ControlModifier | Qt::ShiftModifier);  // everything before it
+        QVERIFY(std::abs(ctrl_->duration() - (total / 2 - 1.0)) < 0.05);
+        QVERIFY(ctrl_->playhead() < 0.01);
+        ctrl_->undo();
+        ctrl_->undo();
+        QVERIFY(std::abs(ctrl_->duration() - total) < 1e-6);
+    }
+
     void overlayRunsOverTheWholeVideo() {
         ctrl_->seek(2.0);
         const QString id = ctrl_->addOverlay("snow");

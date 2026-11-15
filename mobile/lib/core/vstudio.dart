@@ -130,6 +130,7 @@ class CoverState {
   String get shape => (json['shape'] ?? 'rect') as String;
   bool get invert => json['invert'] == true;
   bool get following => json['following'] == true;
+
   /// Masks change the clip's transparency instead of drawing over it.
   bool get isMask => style.startsWith('mask_');
 }
@@ -433,8 +434,8 @@ class VStudio {
       tool({'cmd': 'set_clip_orientation', 'clips': clipIds, 'rotate': rotate, 'flip_h': flipH, 'flip_v': flipV});
 
   /// A text / sticker / overlay over [start, end) seconds, in one step.
-  void setGeneratedSpan(String clipId, double start, double end) => tool(
-      {'cmd': 'set_generated_span', 'clip': clipId, 'start': secondsToTicks(start), 'end': secondsToTicks(end)});
+  void setGeneratedSpan(String clipId, double start, double end) =>
+      tool({'cmd': 'set_generated_span', 'clip': clipId, 'start': secondsToTicks(start), 'end': secondsToTicks(end)});
 
   void removeTrack(String trackId) => using((a) => _check(_b.removeTrack(_s, trackId.toNativeUtf8(allocator: a))));
   void renameTrack(String trackId, String name) =>
@@ -468,6 +469,22 @@ class VStudio {
       });
 
   void removeClip(String clipId) => using((a) => _check(_b.removeClip(_s, clipId.toNativeUtf8(allocator: a))));
+
+  /// Removes [clipIds] in one undo step; [ripple] closes the gaps. Returns how many were removed.
+  int removeClips(List<String> clipIds, {bool ripple = false}) {
+    final n = using((a) => _b.removeClips(_s, jsonEncode(clipIds).toNativeUtf8(allocator: a), ripple ? 1 : 0));
+    if (n < 0) throw VStudioException(_b.lastError(_s).toDartString());
+    return n;
+  }
+
+  /// Deletes everything before ([before] true) or after timeline time [t] on the unlocked tracks,
+  /// cutting the clips under it (one undo step). Returns how many clips were removed or cut.
+  int deleteSide(double t, {required bool before}) {
+    final n = _b.deleteSide(_s, secondsToTicks(t), before ? 1 : 0);
+    if (n < 0) throw VStudioException(_b.lastError(_s).toDartString());
+    return n;
+  }
+
   bool undo() => _b.undo(_s) == 1;
   bool redo() => _b.redo(_s) == 1;
   void save(String packageDir) => using((a) => _check(_b.save(_s, packageDir.toNativeUtf8(allocator: a))));
@@ -1010,8 +1027,8 @@ class VStudio {
       });
 
   /// Shared presets, sized for this project (its aspect is kept); bitrate and size for [format].
-  List<ExportPresetView> exportPresets([String format = 'h264']) => using((a) =>
-      (jsonDecode(_take(_b.exportPresetsFormatJson(_s, format.toNativeUtf8(allocator: a)))) as List)
+  List<ExportPresetView> exportPresets([String format = 'h264']) =>
+      using((a) => (jsonDecode(_take(_b.exportPresetsFormatJson(_s, format.toNativeUtf8(allocator: a)))) as List)
           .map((e) => ExportPresetView.fromJson(e as Map<String, dynamic>))
           .toList());
 
@@ -1019,9 +1036,9 @@ class VStudio {
   List<ExportFormatView> exportFormats() => (jsonDecode(_take(_b.exportFormatsJson(_s))) as List)
       .map((e) => ExportFormatView.fromJson(e as Map<String, dynamic>))
       .toList();
-  void startExportPresetFormat(String outPath, String presetId, String format) => using((a) => _check(
-      _b.exportStartPresetFormat(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a),
-          format.toNativeUtf8(allocator: a))));
+  void startExportPresetFormat(String outPath, String presetId, String format) =>
+      using((a) => _check(_b.exportStartPresetFormat(_s, outPath.toNativeUtf8(allocator: a),
+          presetId.toNativeUtf8(allocator: a), format.toNativeUtf8(allocator: a))));
   void startExportPreset(String outPath, String presetId) => using(
       (a) => _check(_b.exportStartPreset(_s, outPath.toNativeUtf8(allocator: a), presetId.toNativeUtf8(allocator: a))));
 
@@ -1090,8 +1107,8 @@ class VStudio {
 
   List<EqPresetInfo> eqPresets() => [
         for (final e in (tool({'cmd': 'eq_presets'})['presets'] as List).cast<Map<String, dynamic>>())
-          EqPresetInfo(e['id'] as String, e['name'] as String,
-              [for (final g in e['gains'] as List) (g as num).toDouble()])
+          EqPresetInfo(
+              e['id'] as String, e['name'] as String, [for (final g in e['gains'] as List) (g as num).toDouble()])
       ];
 
   ClipSound clipSound(String clipId) => ClipSound(tool({'cmd': 'clip_audio', 'clip': clipId}));
@@ -1106,7 +1123,8 @@ class VStudio {
       tool({'cmd': 'set_track_mix', 'track': trackId, 'pan': pan, 'solo': solo});
   void setTrackVolume(String trackId, double volume) =>
       tool({'cmd': 'set_track_volume', 'track': trackId, 'volume': volume});
-  void setClipVolume(String clipId, double volume) => tool({'cmd': 'set_clip_volume', 'clip': clipId, 'volume': volume});
+  void setClipVolume(String clipId, double volume) =>
+      tool({'cmd': 'set_clip_volume', 'clip': clipId, 'volume': volume});
   void setReversed(List<String> clipIds, bool on) => tool({'cmd': 'set_reversed', 'clips': clipIds, 'on': on});
 
   /// Ready-made speed ramps: (id, name, points as (u 0..1 of the clip, speed)).
@@ -1132,18 +1150,16 @@ class VStudio {
         'cmd': 'set_speed',
         'clips': clipIds,
         'speed': speed,
-        'points': [for (final (u, v) in points) [u, v]],
+        'points': [
+          for (final (u, v) in points) [u, v]
+        ],
         'preset': preset,
       });
-  static List<(double, double)> _points(List raw) => [
-        for (final p in raw.cast<List>()) ((p[0] as num).toDouble(), (p[1] as num).toDouble())
-      ];
-  String freezeFrame(String clipId, double at, {double seconds = 3}) => tool({
-        'cmd': 'freeze_frame',
-        'clip': clipId,
-        'at': secondsToTicks(at),
-        'duration': secondsToTicks(seconds)
-      })['clip'] as String;
+  static List<(double, double)> _points(List raw) =>
+      [for (final p in raw.cast<List>()) ((p[0] as num).toDouble(), (p[1] as num).toDouble())];
+  String freezeFrame(String clipId, double at, {double seconds = 3}) =>
+      tool({'cmd': 'freeze_frame', 'clip': clipId, 'at': secondsToTicks(at), 'duration': secondsToTicks(seconds)})[
+          'clip'] as String;
   void setEffect(List<String> clipIds, String type, Map<String, dynamic>? params) =>
       tool({'cmd': 'set_effect', 'clips': clipIds, 'type': type, 'params': params});
   Map<String, dynamic>? effect(String clipId, String type) =>
@@ -1181,8 +1197,8 @@ class VStudio {
   void removePreset(String kind, String name) => tool({'cmd': 'remove_preset', 'kind': kind, 'name': name});
   void renamePreset(String kind, String from, String to) =>
       tool({'cmd': 'rename_preset', 'kind': kind, 'from': from, 'to': to});
-  ExportInfo exportPresetInfo({String? name, Map<String, dynamic>? data}) =>
-      ExportInfo.fromJson(tool({'cmd': 'export_preset_info', if (name != null) 'name': name, if (data != null) 'data': data}));
+  ExportInfo exportPresetInfo({String? name, Map<String, dynamic>? data}) => ExportInfo.fromJson(
+      tool({'cmd': 'export_preset_info', if (name != null) 'name': name, if (data != null) 'data': data}));
   void startExportUserPreset(String outPath, String name) =>
       tool({'cmd': 'export_user_preset', 'name': name, 'path': outPath});
 
