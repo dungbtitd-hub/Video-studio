@@ -19,6 +19,10 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Fakes for the walkthrough test (test/walkthrough_test.dart).
+  file_picker_platform_interface: any
+  path_provider_platform_interface: any
+  cross_file: any
 
 flutter:
   uses-material-design: true

@@ -66,6 +66,8 @@ class VStudioBindings {
             int Function(Pointer<VsSession>, CStr, int, int)>('vs_trim_clip'),
         splitAt = lib.lookupFunction<Int32 Function(Pointer<VsSession>, Int64), int Function(Pointer<VsSession>, int)>(
             'vs_split_at'),
+        splitClip = lib.lookupFunction<CStr Function(Pointer<VsSession>, CStr, Int64),
+            CStr Function(Pointer<VsSession>, CStr, int)>('vs_split_clip'),
         removeTrack =
             lib.lookupFunction<Int32 Function(Pointer<VsSession>, CStr), int Function(Pointer<VsSession>, CStr)>(
                 'vs_remove_track'),
@@ -336,6 +338,7 @@ class VStudioBindings {
   final int Function(Pointer<VsSession>, CStr, CStr, int) moveClip;
   final int Function(Pointer<VsSession>, CStr, int, int) trimClip;
   final int Function(Pointer<VsSession>, int) splitAt;
+  final CStr Function(Pointer<VsSession>, CStr, int) splitClip;
   final int Function(Pointer<VsSession>, CStr) removeTrack;
   final int Function(Pointer<VsSession>, CStr, CStr) renameTrack;
   final int Function(Pointer<VsSession>, CStr, int, int, int) setTrackFlags;

@@ -135,6 +135,11 @@ struct Track {
     void sortClips();
 };
 
+// What a track holds: "text", "sticker", "overlay" (lanes of generated clips, marked
+// extra["lane"] when the core made them; older projects: guessed from the clips), "subtitle",
+// "media" (media clips), "mixed", or "" (an empty track without a mark).
+std::string trackLane(const Track& t);
+
 struct Canvas {
     int width = 1920;
     int height = 1080;

@@ -73,6 +73,9 @@ public:
     QVariantList recentProjects(bool unfinishedOnly, int max = 12) const;
     static QImage projectPoster(const QString& packageDir);
     void forgetRecent(const QString& packageDir);
+    // Deletes a saved project folder (only one holding a project.json, never the open one) and
+    // takes it off the recent list. False with a status message when refused or failed.
+    bool deleteProject(const QString& packageDir);
     // The recent-list file (app data folder by default; tests point it elsewhere).
     void setRecentFile(const QString& file) { recentFile_ = file; }
     [[nodiscard]] QString recentFile() const;
@@ -294,6 +297,30 @@ public:
     [[nodiscard]] bool clipReversed(const QString& clipId) const;
     // Holds the frame at the playhead on the selected clip for `seconds`.
     void freezeFrame(double seconds = 3.0);
+
+    // ---- rotate / flip (orientation.hpp): the selected media clip, or the one under the playhead ----
+    [[nodiscard]] QString mediaClipAtPlayhead() const;  // topmost video/photo clip under the playhead
+    // {valid, rotate (clockwise 0/90/180/270), flipH, flipV}
+    [[nodiscard]] QVariantMap clipOrientation() const;
+    void setClipOrientation(int rotate, bool flipH, bool flipV);
+    void rotateClip(int clockwiseDegrees);
+    void flipClip(bool horizontal);
+    // ---- overlay / text / sticker length: the whole video, or from the playhead to the end ----
+    void setGeneratedSpan(bool wholeVideo);
+
+    // ---- "Đoạn áp dụng": a part of one clip chosen with the playhead (EditorControllerRange.cpp) ----
+    // Điểm đầu at the playhead, Điểm cuối at the playhead, then an action on that part only.
+    void setRangeStart();
+    void setRangeEnd();
+    void clearRange();
+    [[nodiscard]] bool hasRange() const { return rangeStart_ >= 0; }
+    [[nodiscard]] bool rangeComplete() const { return rangeStart_ >= 0 && rangeEnd_ > rangeStart_; }
+    [[nodiscard]] double rangeStart() const { return rangeStart_; }
+    [[nodiscard]] double rangeEnd() const { return rangeEnd_; }
+    [[nodiscard]] QString rangeClip() const { return rangeClip_; }
+    // "zoom" (value = end scale factor), "volume" (end gain), "speed" (x): only that part changes.
+    // "isolate": cuts the clip at both ends and selects the part (effects, looks, colour after it).
+    void applyRange(const QString& action, double value);
     // Speed (speed_curve.hpp): base speed 0.1..10 and a ramp as points (u 0..1 of the clip,
     // speed); no points = constant. The clips after it on the track move with its new end.
     void setClipSpeed(const QStringList& clipIds, double speed, const QVector<QPointF>& points = {},
@@ -371,6 +398,7 @@ signals:
     void playheadChanged();
     void playingChanged();
     void selectionChanged();
+    void rangeChanged();
     void exportChanged();
     void statusChanged();
     void jobsChanged();
@@ -453,6 +481,9 @@ private:
     // sound + clip tools (EditorControllerTools.cpp)
     std::unique_ptr<vstudio::JobScheduler> toolJobs_;
     bool noiseBusy_ = false;
+    double rangeStart_ = -1, rangeEnd_ = -1;
+    QString rangeClip_;
+    QString isolateRange();
     bool stabBusy_ = false;
     double stabProgress_ = 0;
     vstudio::CancelToken stabCancel_;

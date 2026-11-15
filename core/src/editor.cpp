@@ -599,7 +599,8 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
     std::size_t newIndex = 0;
     std::string newName;
     if (target.empty()) {
-        // Topmost overlay track (not the bottom video track) with room here.
+        // Each kind has lanes of its own (texts, stickers, overlay effects), never shared with
+        // media or with another kind: the topmost free lane of this kind, or a new one on top.
         std::size_t firstVideo = project_.tracks.size(), lastVideo = 0;
         for (std::size_t i = 0; i < project_.tracks.size(); ++i)
             if (project_.tracks[i].type == TrackType::Video) {
@@ -608,7 +609,7 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
             }
         for (std::size_t i = project_.tracks.size(); i-- > 0;) {
             const Track& t = project_.tracks[i];
-            if (t.type != TrackType::Video || t.locked || i == firstVideo) continue;
+            if (t.type != TrackType::Video || t.locked || trackLane(t) != kind) continue;
             const bool free = std::none_of(t.clips.begin(), t.clips.end(), [&](const Clip& x) { return x.range().overlaps(c.range()); });
             if (free) {
                 target = t.id;
@@ -628,11 +629,64 @@ Id Editor::addGeneratedClip(const Json& content, Time at, Time duration, const I
                 t.id = target;
                 t.type = TrackType::Video;
                 t.name = newName;
+                t.extra["lane"] = kind;
                 edit::addTrack(p, t, newIndex);
             }
             edit::insertClip(p, target, c);
         });
     return id;
+}
+
+void Editor::setGeneratedClipSpan(const Id& clipId, Time start, Time end) {
+    const Track* tr = project_.trackOfClip(clipId);
+    if (!tr) throw EditError("clip not found");
+    const Clip* c = tr->findClip(clipId);
+    if (!c->generated()) throw EditError("not a generated clip");
+    if (tr->locked) throw EditError("track is locked");
+    start = std::max(Time::zero(), start).snapToFrame(project_.fps);
+    end = end.snapToFrame(project_.fps);
+    if (end - start < Time::fromFrame(1, project_.fps)) throw EditError("clip shorter than one frame");
+    const TimeRange span{start, end};
+    const std::string kind = c->content.value("kind", std::string{});
+    auto freeOn = [&](const Track& t) {
+        return std::none_of(t.clips.begin(), t.clips.end(), [&](const Clip& x) { return x.id != clipId && x.range().overlaps(span); });
+    };
+    Id target;
+    if (freeOn(*tr)) target = tr->id;
+    for (std::size_t i = project_.tracks.size(); target.empty() && i-- > 0;) {
+        const Track& t = project_.tracks[i];
+        if (t.type == TrackType::Video && !t.locked && trackLane(t) == kind && freeOn(t)) target = t.id;
+    }
+    std::size_t newIndex = project_.tracks.size();
+    if (target.empty()) {
+        target = newId();
+        for (std::size_t i = 0; i < project_.tracks.size(); ++i)
+            if (project_.tracks[i].type == TrackType::Video) newIndex = i + 1;
+        if (newIndex > project_.tracks.size()) newIndex = 0;
+    }
+    const Id from = tr->id;
+    const bool fresh = !project_.findTrack(target);
+    run("Clip length", EditCommand::Scope::AllTracks, {}, [=](Project& p) {
+        Track* owner = p.findTrack(from);
+        auto it = std::find_if(owner->clips.begin(), owner->clips.end(), [&](const Clip& x) { return x.id == clipId; });
+        Clip moved = *it;
+        owner->clips.erase(it);
+        // Generated clips have no media end: the length is just the source range (keyframes,
+        // in source time, keep their place from the clip's start).
+        moved.timelineIn = start;
+        moved.sourceOut = moved.sourceIn + (end - start);
+        moved.speed = Rational{1, 1};
+        moved.speedCurve.clear();
+        if (fresh) {
+            Track t;
+            t.id = target;
+            t.type = TrackType::Video;
+            t.name = kind == "text" ? "Chữ" : kind == "overlay" ? "Lớp phủ" : "Sticker";
+            t.extra["lane"] = kind;
+            edit::addTrack(p, t, std::min(newIndex, p.tracks.size()));
+        }
+        edit::insertClip(p, target, moved);
+    });
 }
 
 void Editor::updateClipContent(const Id& clipId, const Json& patch) {
@@ -1063,6 +1117,26 @@ const Track* freeAudioTrack(const Project& p, TimeRange range, const std::string
     return name.empty() ? any : nullptr;
 }
 }  // namespace
+
+void Editor::setClipOrientation(const std::vector<Id>& clipIds, const Orientation& o) {
+    if (clipIds.empty()) throw EditError("no clip");
+    for (const Id& id : clipIds) {
+        const Clip* c = project_.findClip(id);
+        if (!c) throw EditError("clip not found");
+        const MediaAsset* a = c->generated() ? nullptr : project_.findAsset(c->assetId);
+        if (!a || !(a->hasVideo || a->type == MediaType::Image)) throw EditError("only video and photo clips can be turned");
+    }
+    const auto tracks = tracksOf(project_, clipIds);
+    Orientation norm = o;
+    norm.rotate = normalizeQuarterTurn(o.rotate);
+    run("Rotate / flip", EditCommand::Scope::Tracks, tracks, [=](Project& p) {
+        for (const Id& id : clipIds) {
+            Clip* c = p.trackOfClip(id)->findClip(id);
+            if (norm.identity()) c->extra.erase("orient");
+            else c->extra["orient"] = toJson(norm);
+        }
+    });
+}
 
 void Editor::setClipAudio(const std::vector<Id>& clipIds, const Json& patch) {
     if (!patch.is_object()) throw EditError("audio settings must be an object");

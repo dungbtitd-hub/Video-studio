@@ -48,8 +48,13 @@ void main() {
     return tapped;
   }
 
-  Offset badge(WidgetTester tester, CutPoint c) =>
-      tester.getTopLeft(find.byType(CustomPaint).last) + cutBadge(0, c, 0, px).center;
+  // The playhead (0 s) sits in the middle of the 600 px lanes.
+  Offset badge(WidgetTester tester, CutPoint c) {
+    final p = ProjectView.fromJson(_project);
+    final lane = Rect.fromLTWH(0, TimelineView.laneTops(p).$1[0], 600, TimelineView.laneHeight(p.tracks[0]));
+    return tester.getTopLeft(find.byType(CustomPaint).last) +
+        cutBadge(lane, c, TimelineView.scrollFor(0, 600, px), px).center;
+  }
 
   test('a cut plays centred on it; free edges play inside the clip', () {
     expect(cuts['v1']![1].window, (1.5, 2.5));

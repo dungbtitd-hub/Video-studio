@@ -53,6 +53,9 @@ public:
     [[nodiscard]] RecentStrip* recentStrip() const { return recent_; }
     // Fills the "continue" strip with unfinished projects and slides it in (at start).
     void showRecentProjects();
+    void showHome();  // the start page (prototype "home"): new project, recent projects
+    [[nodiscard]] bool homeShown() const;
+    void hideHome();
     // Every shortcut in the menus, as shown in Trợ giúp > Phím tắt (menu, action, keys).
     [[nodiscard]] QList<QStringList> shortcutTable() const;
     // Layout persistence: QSettings group "workspace" (geometry + dock state).
@@ -94,6 +97,7 @@ private:
     OverlayPanel* overlays_;
     VideoFxPanel* videoFx_;
     RecentStrip* recent_;
+    class HomePage* home_ = nullptr;
     QListWidget* assets_;
     QLabel* timecode_;
     QLabel* inspector_;
@@ -112,6 +116,18 @@ private:
     QLabel* kfVolumeLabel_ = nullptr;
     QLabel* kfInfo_ = nullptr;
     QToolBar* tlBar_ = nullptr;  // timeline tools: snapping, zoom
+    QToolBar* mainBar_ = nullptr;  // the tool row of the prototype (Nhập, Lưu, Tách, Chọn đoạn...)
+    QWidget* rangeBar_ = nullptr;  // actions for the part between Điểm đầu and Điểm cuối
+    QLabel* rangeInfo_ = nullptr;
+    QDockWidget* textDock_ = nullptr;
+    QDockWidget* gradeDock_ = nullptr;
+    QDockWidget* videoFxDock_ = nullptr;
+    QDockWidget* looksDock_ = nullptr;
+    QDockWidget* mediaDock_ = nullptr;
+    QDockWidget* inspectorDock_ = nullptr;
+    bool restoredLayout_ = false;    // the user's own saved layout was restored
+    bool sidePanelsFitted_ = false;  // first wide resize gives the side panels the demo widths
+    void refreshRange();
     QByteArray defaultState_;  // dock layout as built, for "reset layout"
     QHash<QString, QIcon> icons_;  // key: asset id + missing flag
 };

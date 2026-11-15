@@ -8,7 +8,9 @@ APK=${1:?apk}
 PKG=com.videostudio.video_studio
 adb install -r "$APK" > /dev/null
 adb logcat -c
-adb shell am start -W -n $PKG/.MainActivity
+# The app opens on its start screen; vstudio.openEditor opens a new empty project instead,
+# so the native preview has something to draw.
+adb shell am start -W -n $PKG/.MainActivity --ez vstudio.openEditor true
 ok=0
 tex=0
 for _ in $(seq 1 30); do

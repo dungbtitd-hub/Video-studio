@@ -107,7 +107,7 @@ EditorController::EditorController(QObject* parent) : QObject(parent) {
     jobs_ = std::make_unique<JobScheduler>();
     libJobs_ = std::make_unique<JobScheduler>(1);
     resetSession(Editor::newProject("Untitled", 1920, 1080, {30, 1}, ModuleRegistry::currentPlatform()), {});
-    if (!backend_) setStatus(tr("No media module available: %1").arg(q(err)));
+    if (!backend_) setStatus(tr("Không có bộ xử lý media: %1").arg(q(err)));
     // UI refresh only; never decodes. ~60 Hz while playing.
     timer_.setInterval(16);
     connect(&timer_, &QTimer::timeout, this, &EditorController::tick);
@@ -205,7 +205,7 @@ void EditorController::loadSyntheticProject(int clips) {
 void EditorController::newProject(const QString& name, int w, int h, int fps) {
     try {
         resetSession(Editor::newProject(s(name), w, h, {fps, 1}, ModuleRegistry::currentPlatform()), {});
-        setStatus(tr("New project"));
+        setStatus(tr("Dự án mới"));
     } catch (const std::exception& e) {
         setStatus(q(e.what()));
     }
@@ -217,7 +217,7 @@ void EditorController::openProject(const QUrl& folder) {
         Project p = loadProject(s(dir));
         if (auto rec = loadAutosave(s(dir))) {
             p = std::move(*rec);  // crash recovery: newer unsaved state
-            setStatus(tr("Recovered unsaved changes"));
+            setStatus(tr("Đã khôi phục phần chỉnh sửa chưa lưu"));
         }
         resetSession(std::move(p), dir);
         try {
@@ -230,7 +230,7 @@ void EditorController::openProject(const QUrl& folder) {
             if (QFileInfo::exists(proxy)) preview_->setProxy(a.id, s(proxy));
         }
     } catch (const std::exception& e) {
-        setStatus(tr("Cannot open project: %1").arg(q(e.what())));
+        setStatus(tr("Không mở được dự án: %1").arg(q(e.what())));
     }
 }
 
@@ -250,9 +250,9 @@ void EditorController::saveProject(const QUrl& folder) {
         } catch (...) {
         }
         emit projectChanged();
-        setStatus(tr("Saved %1").arg(dir));
+        setStatus(tr("Đã lưu %1").arg(dir));
     } catch (const std::exception& e) {
-        setStatus(tr("Save failed: %1").arg(q(e.what())));
+        setStatus(tr("Lưu lỗi: %1").arg(q(e.what())));
     }
 }
 
@@ -291,6 +291,26 @@ void EditorController::forgetRecent(const QString& packageDir) {
     }
 }
 
+bool EditorController::deleteProject(const QString& packageDir) {
+    const QDir dir(packageDir);
+    if (!dir.exists() || !QFileInfo::exists(dir.filePath("project.json"))) {
+        forgetRecent(packageDir);  // already gone: just drop it from the list
+        setStatus(tr("Không còn thư mục dự án này; đã bỏ khỏi danh sách"));
+        return true;
+    }
+    if (!packageDir_.isEmpty() && QDir(packageDir_).canonicalPath() == dir.canonicalPath()) {
+        setStatus(tr("Dự án này đang mở: đóng nó trước khi xóa"));
+        return false;
+    }
+    if (!QDir(dir.absolutePath()).removeRecursively()) {
+        setStatus(tr("Không xóa được %1").arg(packageDir));
+        return false;
+    }
+    forgetRecent(packageDir);
+    setStatus(tr("Đã xóa dự án %1").arg(dir.dirName()));
+    return true;
+}
+
 void EditorController::importMedia(const QList<QUrl>& files, bool appendToTimeline) {
     if (!backend_ || files.isEmpty()) return;
     std::vector<std::string> paths;
@@ -318,11 +338,11 @@ void EditorController::onProbed(const std::optional<MediaAsset>& asset, const st
     --pendingJobs_;
     emit jobsChanged();
     if (!asset) {
-        setStatus(tr("Cannot import %1: %2").arg(q(path), q(err)));
+        setStatus(tr("Không thêm được %1: %2").arg(q(path), q(err)));
         return;
     }
     if (edit([&] { editor_->addAsset(*asset); })) {
-        setStatus(tr("Imported %1").arg(QFileInfo(q(path)).fileName()));
+        setStatus(tr("Đã thêm %1").arg(QFileInfo(q(path)).fileName()));
         if (appendToTimeline) addToTimeline(q(asset->id));
     }
     // Large media (4K, VFR phone video): build a preview proxy in the background.
@@ -382,7 +402,7 @@ void EditorController::addToTimeline(const QString& assetId) {
 
 void EditorController::splitAtPlayhead() {
     edit([&] {
-        if (editor_->splitAt(fromSecs(playhead_)) == 0) setStatus(tr("Nothing to split at the playhead"));
+        if (editor_->splitAt(fromSecs(playhead_)) == 0) setStatus(tr("Không có clip nào dưới playhead để tách"));
     });
 }
 
@@ -492,7 +512,7 @@ void EditorController::setClipLut(const QStringList& clipIds, const QString& fil
     std::string path;
     if (!file.isEmpty()) {
         std::string err;
-        if (!loadCubeLut(s(file), &err)) return setStatus(tr("Cannot use LUT: %1").arg(q(err)));
+        if (!loadCubeLut(s(file), &err)) return setStatus(tr("Không dùng được LUT: %1").arg(q(err)));
         path = packageDir_.isEmpty() ? s(file) : makeUri(s(file), s(packageDir_));
     }
     edit([&] { editor_->setClipLut(ids, path, strength); });
@@ -533,7 +553,7 @@ EditorController::KeyState EditorController::keyState() const {
 
 void EditorController::toggleKeyframe(bool audio) {
     const KeyState k = keyState();
-    if (!k.valid) return setStatus(tr("Select a clip and put the playhead inside it"));
+    if (!k.valid) return setStatus(tr("Chọn một clip và đưa playhead vào trong clip đó"));
     const Clip* c = snapshot_->findClip(s(selected_));
     const Time src = c->toSource(fromSecs(playhead_));
     const auto g = audio ? kf::Group::Audio : kf::Group::Picture;
@@ -544,7 +564,7 @@ void EditorController::toggleKeyframe(bool audio) {
 
 void EditorController::zoomToRegion(const QRectF& r) {
     const KeyState k = keyState();
-    if (!k.valid || !k.video) return setStatus(tr("Select a video or photo clip under the playhead"));
+    if (!k.valid || !k.video) return setStatus(tr("Chọn một clip video hoặc ảnh nằm dưới playhead"));
     const Clip* c = snapshot_->findClip(s(selected_));
     const Time src = c->toSource(fromSecs(playhead_));
     const double W = snapshot_->canvas.width, H = snapshot_->canvas.height;
@@ -552,7 +572,7 @@ void EditorController::zoomToRegion(const QRectF& r) {
                                               r.height() * H);
     edit([&] { editor_->setPropertyAt(c->id, src, {{kf::kScale, z.scale}, {kf::kX, z.x}, {kf::kY, z.y}}); });
     if (!k.pictureAnimated)
-        setStatus(tr("Zoomed the whole clip. For a gradual zoom, add a picture keyframe (◇) where it should start."));
+        setStatus(tr("Đã phóng to cả clip. Muốn zoom dần: chọn đoạn bằng Điểm đầu / Điểm cuối rồi chọn Zoom dần, hoặc đặt keyframe ◇ ở chỗ bắt đầu."));
 }
 
 void EditorController::resetZoom() {
@@ -632,7 +652,7 @@ QString EditorController::addCover(const QString& style, const QString& shape) {
     const Clip* c = snapshot_ ? snapshot_->findClip(s(selected_)) : nullptr;
     const Track* track = c ? snapshot_->trackOfClip(c->id) : nullptr;
     if (!c || track->type != TrackType::Video) {
-        setStatus(track ? tr("Covers need a video or photo clip") : tr("Select a clip first"));
+        setStatus(track ? tr("Che mờ cần một clip video hoặc ảnh") : tr("Chọn một clip trước"));
         return {};
     }
     Id id;
@@ -749,14 +769,14 @@ void EditorController::trackCover() {
             tracking_ = false;
             bool ok = false;
             QString msg;
-            if (r.result.cancelled) msg = tr("Tracking cancelled");
+            if (r.result.cancelled) msg = tr("Đã dừng bám theo");
             else if (!r.result.error.empty()) msg = q(r.result.error);
             else if (r.keys.size() >= 2 && edit([&] { editor_->setCoverTrack(clip, cover, r.keys); })) {
                 ok = true;
-                msg = r.result.lost ? tr("Lost the subject after %1 s: the cover follows it up to there")
+                msg = r.result.lost ? tr("Mất dấu đối tượng sau %1 giây: vùng che bám theo tới đó")
                                           .arg(secs(r.result.samples.back().sourceTime - r.result.samples.front().sourceTime), 0, 'f', 1)
-                                    : tr("The cover now follows the subject (%1 keys)").arg(r.keys.size());
-            } else msg = tr("Could not follow the subject");
+                                    : tr("Vùng che đã bám theo đối tượng (%1 keyframe)").arg(r.keys.size());
+            } else msg = tr("Không bám theo được đối tượng");
             setStatus(msg);
             emit coversChanged();
             emit trackFinished(ok, msg);
@@ -935,8 +955,8 @@ void EditorController::exportTo(const QUrl& file, int width, int height) {
 
 void EditorController::exportWithPreset(const QUrl& file, const QString& presetId, const QString& formatId) {
     const ExportPreset* pr = findExportPreset(s(presetId));
-    if (!pr) return setStatus(tr("Unknown export preset"));
-    if (!findExportFormat(s(formatId))) return setStatus(tr("Unknown export format"));
+    if (!pr) return setStatus(tr("Không rõ preset xuất"));
+    if (!findExportFormat(s(formatId))) return setStatus(tr("Không rõ định dạng xuất"));
     startExport(file, exportSettingsFor(editor_->project(), *pr, s(formatId)));
 }
 
@@ -992,8 +1012,8 @@ void EditorController::startExport(const QUrl& file, const ExportSettings& es) {
         QMetaObject::invokeMethod(this, [this, r, out] {
             exporting_ = false;
             emit exportChanged();
-            if (r.ok) setStatus(tr("Exported %1 in %2 s").arg(q(out)).arg(r.seconds, 0, 'f', 1));
-            else setStatus(r.cancelled ? tr("Export cancelled") : tr("Export failed: %1").arg(q(r.error)));
+            if (r.ok) setStatus(tr("Đã xuất %1 trong %2 giây").arg(q(out)).arg(r.seconds, 0, 'f', 1));
+            else setStatus(r.cancelled ? tr("Đã hủy xuất") : tr("Xuất lỗi: %1").arg(q(r.error)));
         }, Qt::QueuedConnection);
     }, exportCancel_);
 }
@@ -1485,7 +1505,7 @@ void EditorController::relinkToFile(const QString& assetId, const QUrl& file) {
         editor_->relinkAsset(s(assetId), makeUri(path, s(packageDir_)), fingerprintFile(path));
         library_->forget(s(assetId));
     });
-    setStatus(missing_.contains(assetId) ? tr("File still not found") : tr("Media relinked"));
+    setStatus(missing_.contains(assetId) ? tr("Vẫn chưa tìm thấy file") : tr("Đã nối lại file media"));
 }
 
 void EditorController::relinkFromFolder(const QString& assetId, const QUrl& folder) {
@@ -1493,17 +1513,17 @@ void EditorController::relinkFromFolder(const QString& assetId, const QUrl& fold
     if (!a) return;
     ++pendingJobs_;
     emit jobsChanged();
-    setStatus(tr("Searching for %1…").arg(QFileInfo(q(a->uri)).fileName()));
+    setStatus(tr("Đang tìm %1…").arg(QFileInfo(q(a->uri)).fileName()));
     // The search reads directories and hashes same-size files: never on the UI thread.
     libJobs_->submit("relink search", JobPriority::Normal, [this, asset = *a, dir = s(folder.toLocalFile()), assetId](const CancelToken&) {
         const auto found = findRelinkCandidates(asset, dir);
         QMetaObject::invokeMethod(this, [this, found, assetId] {
             --pendingJobs_;
             emit jobsChanged();
-            if (found.empty()) return setStatus(tr("No matching file in that folder"));
+            if (found.empty()) return setStatus(tr("Không có file trùng tên trong thư mục đó"));
             relinkToFile(assetId, QUrl::fromLocalFile(q(found.front().path)));
             if (!found.front().fingerprintMatch)
-                setStatus(tr("Relinked by file name (content differs from the original): %1").arg(q(found.front().path)));
+                setStatus(tr("Đã nối lại theo tên file (nội dung khác bản gốc): %1").arg(q(found.front().path)));
         }, Qt::QueuedConnection);
     });
 }
@@ -1545,15 +1565,15 @@ void EditorController::packProject(const QUrl& file) {
     if (!out.endsWith(".vstudiopkg")) out += ".vstudiopkg";
     const Project project = editor_->project();  // a copy: editing goes on while packing
     const std::string base = mediaBaseDir(s(packageDir_));
-    runTransfer(tr("Packing project…"), [project, base, out](const TransferProgress& p, const std::atomic<bool>* c) {
+    runTransfer(tr("Đang đóng gói dự án…"), [project, base, out](const TransferProgress& p, const std::atomic<bool>* c) {
         return vstudio::packProject(project, base, s(out), p, c);
     }, [this, out](const TransferResult& r) {
         QString msg;
-        if (r.cancelled) msg = tr("Packing cancelled");
-        else if (!r.ok) msg = tr("Packing failed: %1").arg(q(r.error));
+        if (r.cancelled) msg = tr("Đã hủy đóng gói");
+        else if (!r.ok) msg = tr("Đóng gói lỗi: %1").arg(q(r.error));
         else if (!r.missingAssets.empty())
-            msg = tr("Packed %1 (%2 missing media left out)").arg(QFileInfo(out).fileName()).arg(r.missingAssets.size());
-        else msg = tr("Packed %1").arg(QFileInfo(out).fileName());
+            msg = tr("Đã đóng gói %1 (bỏ qua %2 file bị thiếu)").arg(QFileInfo(out).fileName()).arg(r.missingAssets.size());
+        else msg = tr("Đã đóng gói %1").arg(QFileInfo(out).fileName());
         setStatus(msg);
         emit transferFinished(r.ok, out, msg);
     });
@@ -1563,11 +1583,11 @@ void EditorController::openPackage(const QUrl& file, const QUrl& destRoot) {
     if (transferring_) return;
     const QString in = file.toLocalFile();
     const QString root = destRoot.isEmpty() ? QFileInfo(in).absolutePath() : destRoot.toLocalFile();
-    runTransfer(tr("Opening package…"), [in, root](const TransferProgress& p, const std::atomic<bool>* c) {
+    runTransfer(tr("Đang mở gói dự án…"), [in, root](const TransferProgress& p, const std::atomic<bool>* c) {
         return unpackProject(s(in), s(root), p, c);
     }, [this](const TransferResult& r) {
         if (!r.ok) {
-            const QString msg = r.cancelled ? tr("Opening cancelled") : tr("Cannot open package: %1").arg(q(r.error));
+            const QString msg = r.cancelled ? tr("Đã hủy mở") : tr("Không mở được gói dự án: %1").arg(q(r.error));
             setStatus(msg);
             emit transferFinished(false, {}, msg);
             return;

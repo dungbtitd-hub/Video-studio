@@ -16,6 +16,7 @@
 #include "vstudio/media.hpp"
 #include "vstudio/model.hpp"
 #include "vstudio/modules.hpp"
+#include "vstudio/orientation.hpp"
 
 namespace vstudio {
 
@@ -47,8 +48,9 @@ public:
     // maxW/maxH: decode straight to this box (0 = native). Preview passes the
     // preview size so a 4K source is never expanded to full-size RGBA.
     // deep: sources with more than 8 bits come out as RGBA16F (see IMediaDecoder::setDeepOutput).
+    // orient: frames come out turned (orientation.hpp; maxW/maxH are the turned box).
     IMediaDecoder* decoder(const MediaAsset& a, const std::string& purpose, std::string* error, int maxW = 0,
-                           int maxH = 0, bool allowProxy = false, bool deep = false);
+                           int maxH = 0, bool allowProxy = false, bool deep = false, const Orientation& orient = {});
     [[nodiscard]] std::string resolve(const MediaAsset& a) const;
     // Registers a low-resolution proxy file used for preview (never for export).
     void setProxy(const Id& assetId, std::string path);

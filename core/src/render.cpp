@@ -4,6 +4,7 @@
 
 #include "vstudio/grade.hpp"
 #include "vstudio/looks.hpp"
+#include "vstudio/orientation.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -239,17 +240,18 @@ void MediaPool::setProxy(const Id& assetId, std::string path) {
 }
 
 IMediaDecoder* MediaPool::decoder(const MediaAsset& a, const std::string& purpose, std::string* error, int maxW,
-                                  int maxH, bool allowProxy, bool deep) {
+                                  int maxH, bool allowProxy, bool deep, const Orientation& orient) {
     const auto proxy = allowProxy ? proxies_.find(a.id) : proxies_.end();
     const bool useProxy = proxy != proxies_.end();
     const std::string key = a.id + "#" + purpose + "#" + std::to_string(maxW) + "x" + std::to_string(maxH) +
-                            (useProxy ? "#proxy" : "") + (deep ? "#deep" : "");
+                            (useProxy ? "#proxy" : "") + (deep ? "#deep" : "") +
+                            (orient.identity() ? "" : "#" + orient.key());
     if (auto it = decoders_.find(key); it != decoders_.end()) return it->second.get();
     if (!backend_) {
         if (error) *error = "no media backend";
         return nullptr;
     }
-    auto d = backend_->createDecoder();
+    auto d = orientedDecoder(backend_->createDecoder(), orient);
     if (!d) return nullptr;
     d->setMaxOutputSize(maxW, maxH);
     d->setDeepOutput(deep);
@@ -262,11 +264,14 @@ std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer,
     const MediaAsset& a = *layer.asset;
     const bool still = a.type == MediaType::Image;
     const Time src = still ? Time::zero() : layer.sourceTime;
+    // The file's rotation and the clip's rotate / flip (orientation.hpp): the decoder turns
+    // frames once and they are cached turned, so everything after this sees upright pictures.
+    const Orientation orient = combinedOrientation(a, layer.clip);
     // Decode size: preview decodes at output size, export at native size.
     const int dw = preview_ ? outW : 0, dh = preview_ ? outH : 0;
     std::string key;
     const Rational fps = a.fps.num > 0 ? a.fps : project_.fps;
-    const std::string cacheId = deep ? a.id + "#deep" : a.id;
+    const std::string cacheId = (deep ? a.id + "#deep" : a.id) + (orient.identity() ? "" : "#" + orient.key());
     const bool reversed = layer.clip->reversed && !still;
     FrameCache* cache = cache_;
     if (reversed && !cache) {
@@ -278,7 +283,7 @@ std::shared_ptr<const VideoFrame> Renderer::sourceFrame(const VideoLayer& layer,
         if (auto hit = cache->get(key)) return hit;
     }
     std::string err;
-    IMediaDecoder* d = pool_.decoder(a, purpose, &err, dw, dh, preview_, deep);
+    IMediaDecoder* d = pool_.decoder(a, purpose, &err, dw, dh, preview_, deep, orient);
     if (!d) {
         warn("media offline: " + a.uri + (err.empty() ? "" : " (" + err + ")"));
         return nullptr;

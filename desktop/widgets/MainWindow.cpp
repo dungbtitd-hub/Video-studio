@@ -26,6 +26,9 @@
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QTabBar>
+#include <QTimer>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QToolButton>
@@ -42,6 +45,7 @@
 #include "ScopesPanel.h"
 #include "OverlayPanel.h"
 #include "RecentStrip.h"
+#include "HomePage.h"
 #include "VideoFxPanel.h"
 #include "SubtitlePanel.h"
 #include "AudioPanel.h"
@@ -50,6 +54,9 @@
 #include "LooksPanel.h"
 #include "PreviewWidget.h"
 #include "TimelineWidget.h"
+
+// Bumped when the default dock arrangement changes, so an older saved layout is not restored.
+static constexpr int kLayoutVersion = 2;
 
 namespace {
 QToolButton* toolButton(const QString& text, QWidget* parent, bool primary = false) {
@@ -120,30 +127,17 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     resize(1440, 900);
     setDockNestingEnabled(true);
 
-    // ---- toolbar ----
-    auto* tb = addToolBar("Main");
-    tb->setMovable(false);
-    auto* brand = new QLabel("<b>Video Studio</b>  <span style='color:#a4abb8'>· Widgets</span>", tb);
-    tb->addWidget(brand);
-    auto* spacer = new QWidget(tb);
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    tb->addWidget(spacer);
-    auto* open = tb->addAction("Mở");
-    auto* save = tb->addAction("Lưu");
-    undo_ = tb->addAction("↶");
-    redo_ = tb->addAction("↷");
+    // ---- toolbar (as in the prototype): Nhập, Lưu, hoàn tác, the editing tools, Xuất video ----
+    // The tools are added in buildMenus(), from the same actions as the menus and shortcuts.
+    mainBar_ = addToolBar("Main");
+    mainBar_->setObjectName("mainBar");
+    mainBar_->setMovable(false);
+    mainBar_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    undo_ = new QAction("↶ Hoàn tác", this);
+    redo_ = new QAction("↷ Làm lại", this);
     undo_->setShortcut(QKeySequence::Undo);
     redo_->setShortcuts({QKeySequence::Redo, QKeySequence("Ctrl+Shift+Z")});
-    exportBtn_ = toolButton("Xuất video", tb, true);
-    tb->addWidget(exportBtn_);
-    connect(open, &QAction::triggered, this, [this] {
-        const QString d = QFileDialog::getExistingDirectory(this, "Mở project (.vstudio)");
-        if (!d.isEmpty()) editor_->openProject(QUrl::fromLocalFile(d));
-    });
-    connect(save, &QAction::triggered, this, [this] {
-        const QString f = QFileDialog::getSaveFileName(this, "Lưu project", {}, "Video Studio (*.vstudio)");
-        if (!f.isEmpty()) editor_->saveProject(QUrl::fromLocalFile(f));
-    });
+    exportBtn_ = toolButton("Xuất video", mainBar_, true);
     connect(undo_, &QAction::triggered, editor_, &EditorController::undo);
     connect(redo_, &QAction::triggered, editor_, &EditorController::redo);
     connect(exportBtn_, &QToolButton::clicked, this, &MainWindow::exportVideo);
@@ -207,9 +201,63 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     kfVolumeLabel_->setMinimumWidth(44);
     keys->addWidget(kfVolumeLabel_);
     kfInfo_ = new QLabel(centre);
+    kfInfo_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);  // a hint never widens the window
     kfInfo_->setStyleSheet("color: #6e7685; font-size: 11px;");
     keys->addWidget(kfInfo_, 1);
     cl->addLayout(keys);
+
+    // "Đoạn áp dụng": after Điểm đầu (I) and Điểm cuối (O), what to do with that part only.
+    // In a scroll area so the row never makes the window wider than the screen.
+    auto* rangeScroll = new QScrollArea(centre);
+    rangeScroll->setFrameShape(QFrame::NoFrame);
+    rangeScroll->setWidgetResizable(true);
+    rangeScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    rangeScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    rangeScroll->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    rangeBar_ = new QWidget(rangeScroll);
+    rangeBar_->setObjectName("rangeBar");
+    auto* rl = new QHBoxLayout(rangeBar_);
+    rl->setContentsMargins(0, 2, 0, 0);
+    rl->setSpacing(6);
+    rangeInfo_ = new QLabel(rangeBar_);
+    rangeInfo_->setStyleSheet("color: #f2a93b; font-weight: 600;");
+    rl->addWidget(rangeInfo_);
+    auto rangeBtn = [this, rl](const QString& text, const QString& name, auto&& fn) {
+        auto* b = toolButton(text, rangeBar_);
+        b->setObjectName(name);
+        rl->addWidget(b);
+        connect(b, &QToolButton::clicked, this, std::forward<decltype(fn)>(fn));
+        return b;
+    };
+    rangeBtn(tr("Zoom dần 1.3×"), "rangeZoom13", [this] { editor_->applyRange("zoom", 1.3); });
+    rangeBtn(tr("1.6×"), "rangeZoom16", [this] { editor_->applyRange("zoom", 1.6); });
+    rangeBtn(tr("2×"), "rangeZoom2", [this] { editor_->applyRange("zoom", 2.0); });
+    rangeBtn(tr("Thu nhỏ"), "rangeZoomOut", [this] { editor_->applyRange("zoom", 1 / 1.6); });
+    rangeBtn(tr("Tiếng nhỏ dần"), "rangeVol0", [this] { editor_->applyRange("volume", 0); });
+    rangeBtn(tr("Tiếng to dần"), "rangeVol2", [this] { editor_->applyRange("volume", 2); });
+    rangeBtn(tr("Chậm 0.5×"), "rangeSlow", [this] { editor_->applyRange("speed", 0.5); });
+    rangeBtn(tr("Nhanh 2×"), "rangeFast", [this] { editor_->applyRange("speed", 2); });
+    auto openDock = [this](QDockWidget* d) {
+        editor_->applyRange("isolate", 0);
+        if (d) {
+            d->show();
+            d->raise();
+        }
+    };
+    rangeBtn(tr("Hiệu ứng…"), "rangeFx", [this, openDock] { openDock(videoFxDock_); });
+    rangeBtn(tr("Bộ lọc…"), "rangeLook", [this, openDock] { openDock(looksDock_); });
+    rangeBtn(tr("Màu…"), "rangeGrade", [this, openDock] { openDock(gradeDock_); });
+    rl->addStretch();
+    rangeBtn("✕", "rangeClear", [this] { editor_->clearRange(); })->setToolTip(tr("Bỏ đoạn"));
+    rangeScroll->setWidget(rangeBar_);
+    rangeScroll->setFixedHeight(rangeBar_->sizeHint().height() + 14);
+    cl->addWidget(rangeScroll);
+    connect(editor_, &EditorController::rangeChanged, rangeScroll, [this, rangeScroll] { rangeScroll->setVisible(editor_->hasRange()); });
+    rangeScroll->hide();
+    connect(editor_, &EditorController::rangeChanged, this, &MainWindow::refreshRange);
+    connect(editor_, &EditorController::playheadChanged, this, [this] {
+        if (editor_->hasRange() && !editor_->rangeComplete()) refreshRange();
+    });
     setCentralWidget(centre);
     connect(kfPicture_, &QToolButton::clicked, this, [this] { editor_->toggleKeyframe(false); });
     connect(kfAudio_, &QToolButton::clicked, this, [this] { editor_->toggleKeyframe(true); });
@@ -232,7 +280,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     connect(preview_, &PreviewWidget::previewSizeChanged, editor_, &EditorController::setPreviewSize);
 
     // ---- docks ----
-    auto* mediaDock = new QDockWidget("Thư viện media", this);
+    auto* mediaDock = mediaDock_ = new QDockWidget("Media", this);
     mediaDock->setObjectName("media");
     auto* mediaBox = new QWidget(mediaDock);
     auto* ml = new QVBoxLayout(mediaBox);
@@ -276,7 +324,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
             if (assets_->item(i)->data(Qt::UserRole).toString() == id) assets_->item(i)->setIcon(assetIcon(id));
     });
 
-    auto* inspectorDock = new QDockWidget("Thuộc tính", this);
+    auto* inspectorDock = inspectorDock_ = new QDockWidget("Cơ bản", this);
     inspectorDock->setObjectName("inspector");
     auto* ib = new QWidget(inspectorDock);
     auto* il = new QVBoxLayout(ib);
@@ -287,19 +335,39 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     auto* del = new QPushButton("Xóa clip (Del)", ib);
     il->addWidget(split);
     il->addWidget(del);
+    // Rotate / flip the clip (selected, or under the playhead): a portrait phone video or a photo
+    // taken sideways is set upright here.
+    auto* orientTitle = new QLabel("<b>Xoay / lật</b>", ib);
+    il->addWidget(orientTitle);
+    auto* orow = new QHBoxLayout();
+    auto orientBtn = [&](const QString& text, const QString& name, auto&& fn) {
+        auto* b = new QPushButton(text, ib);
+        b->setObjectName(name);
+        orow->addWidget(b);
+        connect(b, &QPushButton::clicked, this, std::forward<decltype(fn)>(fn));
+    };
+    orientBtn("⟲ Trái", "orientLeft", [this] { editor_->rotateClip(270); });
+    orientBtn("⟳ Phải", "orientRight", [this] { editor_->rotateClip(90); });
+    orientBtn("⇋ Ngang", "orientFlipH", [this] { editor_->flipClip(true); });
+    orientBtn("⇵ Dọc", "orientFlipV", [this] { editor_->flipClip(false); });
+    il->addLayout(orow);
+    auto* orientReset = new QPushButton("Về hướng gốc", ib);
+    orientReset->setObjectName("orientReset");
+    il->addWidget(orientReset);
+    connect(orientReset, &QPushButton::clicked, this, [this] { editor_->setClipOrientation(0, false, false); });
     il->addStretch();
     inspectorDock->setWidget(ib);
     addDockWidget(Qt::RightDockWidgetArea, inspectorDock);
     connect(split, &QPushButton::clicked, editor_, &EditorController::splitAtPlayhead);
     connect(del, &QPushButton::clicked, editor_, &EditorController::deleteSelected);
 
-    auto* looksDock = new QDockWidget("Bộ lọc màu", this);
+    auto* looksDock = looksDock_ = new QDockWidget("Bộ lọc màu", this);
     looksDock->setObjectName("looks");
     looks_ = new LooksPanel(editor_, looksDock);
     looksDock->setWidget(looks_);
     addDockWidget(Qt::RightDockWidgetArea, looksDock);
     tabifyDockWidget(inspectorDock, looksDock);
-    auto* gradeDock = new QDockWidget("Chỉnh màu", this);
+    auto* gradeDock = gradeDock_ = new QDockWidget("Màu", this);
     gradeDock->setObjectName("grade");
     grade_ = new GradePanel(editor_, gradeDock);
     gradeDock->setWidget(grade_);
@@ -315,7 +383,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     connect(grade_, &GradePanel::pickRequested, preview_, &PreviewWidget::setPickMode);
     connect(preview_, &PreviewWidget::colorPicked, grade_, &GradePanel::pickColor);
     // Zoom, rotate and reflection effects for the selected clip.
-    auto* videoFxDock = new QDockWidget("Hiệu ứng video", this);
+    auto* videoFxDock = videoFxDock_ = new QDockWidget("Hiệu ứng", this);
     videoFxDock->setObjectName("videoFx");
     videoFx_ = new VideoFxPanel(editor_, videoFxDock);
     videoFxDock->setWidget(videoFx_);
@@ -333,7 +401,7 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     transitionsDock->setWidget(transitions_);
     addDockWidget(Qt::RightDockWidgetArea, transitionsDock);
     tabifyDockWidget(coverDock, transitionsDock);
-    auto* textDock = new QDockWidget("Chữ", this);
+    auto* textDock = textDock_ = new QDockWidget("Chữ", this);
     textDock->setObjectName("text");
     text_ = new TextPanel(editor_, textDock);
     textDock->setWidget(text_);
@@ -369,13 +437,46 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     mixerDock->setWidget(mixer_);
     addDockWidget(Qt::RightDockWidgetArea, mixerDock);
     tabifyDockWidget(audioDock, mixerDock);
-    auto* toolsDock = new QDockWidget("Công cụ clip", this);
+    auto* toolsDock = new QDockWidget("Tốc độ", this);
     toolsDock->setObjectName("clipTools");
     clipTools_ = new ClipToolsPanel(editor_, toolsDock);
     toolsDock->setWidget(clipTools_);
     addDockWidget(Qt::RightDockWidgetArea, toolsDock);
     tabifyDockWidget(looksDock, toolsDock);
-    looksDock->raise();
+    // Default arrangement per the approved desktop demo: things to add on the left
+    // (Media / Âm thanh / Chữ / Sticker / Lớp phủ / Chuyển cảnh), the selected clip's
+    // settings on the right (Cơ bản / Tốc độ / Màu / Bộ lọc / Hiệu ứng / ...).
+    {
+        QDockWidget* left[] = {audioDock, textDock, stickerDock, overlayDock, transitionsDock};
+        QDockWidget* prev = mediaDock;
+        for (QDockWidget* d : left) {
+            tabifyDockWidget(prev, d);
+            prev = d;
+        }
+        QDockWidget* right[] = {toolsDock, gradeDock, looksDock, videoFxDock, coverDock,
+                                subtitleDock, mixerDock, scopesDock};
+        prev = inspectorDock;
+        for (QDockWidget* d : right) {
+            tabifyDockWidget(prev, d);
+            prev = d;
+        }
+    }
+    mediaDock->raise();
+    inspectorDock->raise();
+    setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);  // tabs on top, as in the demo
+    // Side panels scroll instead of forcing the window wider than the screen.
+    for (QDockWidget* d : {mediaDock, audioDock, textDock, stickerDock, overlayDock, transitionsDock, inspectorDock,
+                           toolsDock, gradeDock, looksDock, videoFxDock, coverDock, subtitleDock, mixerDock,
+                           scopesDock}) {
+        QWidget* content = d->widget();
+        auto* scroll = new QScrollArea(d);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scroll->setWidget(content);
+        scroll->setMinimumWidth(220);
+        d->setWidget(scroll);
+    }
     // Selecting a text, sticker, overlay or subtitle line on the timeline brings its panel forward.
     connect(editor_, &EditorController::selectionChanged, this, [this, textDock, stickerDock, overlayDock, subtitleDock] {
         const auto c = editor_->selectedContent();
@@ -413,15 +514,28 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
     timelineDock->setWidget(tlBox);
     addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
     resizeDocks({timelineDock}, {280}, Qt::Vertical);
-    resizeDocks({mediaDock, inspectorDock}, {280, 260}, Qt::Horizontal);
+    resizeDocks({mediaDock, inspectorDock}, {300, 340}, Qt::Horizontal);
 
     buildMenus();
+    // Tabbed panels: full names with scroll arrows instead of "Th…", "Bộ…".
+    QTimer::singleShot(0, this, [this] {
+        for (QTabBar* t : findChildren<QTabBar*>()) {
+            t->setElideMode(Qt::ElideNone);
+            t->setUsesScrollButtons(true);
+        }
+        // As in the demo, the library opens on Media and the clip settings on Cơ bản
+        // (a raise before the window is shown does not stick to the tab bar).
+        if (!restoredLayout_) {
+            mediaDock_->raise();
+            inspectorDock_->raise();
+        }
+    });
     // Layout as built is the default; then the user's saved layout, if any.
-    defaultState_ = saveState();
+    defaultState_ = saveState(kLayoutVersion);
     QSettings settings;
     settings.beginGroup("workspace");
     restoreGeometry(settings.value("geometry").toByteArray());
-    restoreState(settings.value("state").toByteArray());
+    restoredLayout_ = restoreState(settings.value("state").toByteArray(), kLayoutVersion);
 
     // Unfinished projects slide up at the bottom on start; they slide away once work begins.
     recent_ = new RecentStrip(this);
@@ -441,6 +555,35 @@ MainWindow::MainWindow(EditorController* editor, QWidget* parent) : QMainWindow(
         recent_->slideOut();
         editor_->openProject(QUrl::fromLocalFile(d));
     });
+    home_ = new HomePage(this);
+    home_->hide();
+    connect(home_, &HomePage::newProjectRequested, this, [this](int w, int h) {
+        if (!confirmDiscard()) return;
+        editor_->newProject("Dự án mới", w, h, 30);
+        hideHome();
+        importMedia();
+    });
+    connect(home_, &HomePage::openRequested, this, [this](const QString& path) {
+        if (!confirmDiscard()) return;
+        hideHome();
+        editor_->openProject(QUrl::fromLocalFile(path));
+    });
+    connect(home_, &HomePage::browseRequested, this, [this] {
+        if (!confirmDiscard()) return;
+        const QString d = QFileDialog::getExistingDirectory(this, "Mở project (.vstudio)");
+        if (d.isEmpty()) return;
+        hideHome();
+        editor_->openProject(QUrl::fromLocalFile(d));
+    });
+    connect(home_, &HomePage::forgetRequested, this, [this](const QString& path) {
+        editor_->forgetRecent(path);
+        showHome();
+    });
+    connect(home_, &HomePage::deleteRequested, this, [this](const QString& path) {
+        editor_->deleteProject(path);
+        showHome();
+    });
+    connect(home_, &HomePage::shortcutsRequested, this, [this] { showShortcuts(); });
     connect(editor_, &EditorController::projectChanged, this, [this] {
         refreshAssets();
         refreshState();
@@ -500,8 +643,10 @@ void MainWindow::refreshAssets() {
         const QVariantMap a = v.toMap();
         const QString id = a["id"].toString();
         const bool missing = editor_->assetMissing(id);
-        auto* it = new QListWidgetItem(assetIcon(id), QString("%1\n%2 s").arg(a["name"].toString())
-                                                          .arg(a["duration"].toDouble(), 0, 'f', 1));
+        const double secs = a["duration"].toDouble();
+        // A photo has no length of its own (it gets 5 s on the timeline): label it as a photo.
+        const QString len = secs > 0 ? QString("%1 s").arg(secs, 0, 'f', 1) : QString("Ảnh");
+        auto* it = new QListWidgetItem(assetIcon(id), QString("%1\n%2").arg(a["name"].toString(), len));
         it->setData(Qt::UserRole, id);
         it->setToolTip(missing ? "Không tìm thấy file. Nhấp đúp để tìm trong một thư mục."
                                : QString("%1  %2\nNhấp đúp để thêm vào Timeline").arg(a["type"].toString(), a["resolution"].toString()));
@@ -521,6 +666,23 @@ void MainWindow::refreshState() {
     inspector_->setText(editor_->selectedClip().isEmpty() ? "Chọn một clip trên Timeline" : "Clip đã chọn");
     refreshKeyframes();
     refreshCoverOverlay();
+    refreshRange();
+}
+
+void MainWindow::refreshRange() {
+    if (!rangeBar_) return;
+    if (auto* sc = qobject_cast<QScrollArea*>(rangeBar_->parentWidget() ? rangeBar_->parentWidget()->parentWidget() : nullptr))
+        sc->setVisible(editor_->hasRange());
+    if (!editor_->hasRange()) return;
+    auto tc = [](double t) {
+        const int m = int(t) / 60;
+        return QString("%1:%2").arg(m).arg(t - m * 60, 4, 'f', 1, QChar('0'));
+    };
+    const bool done = editor_->rangeComplete();
+    rangeInfo_->setText(done ? QString("Đoạn %1 → %2").arg(tc(editor_->rangeStart()), tc(editor_->rangeEnd()))
+                             : QString("Từ %1 · đưa playhead tới chỗ kết thúc, bấm Điểm cuối (O)").arg(tc(editor_->rangeStart())));
+    for (QToolButton* b : rangeBar_->findChildren<QToolButton*>())
+        if (b->objectName() != "rangeClear") b->setVisible(done);
 }
 
 void MainWindow::refreshCoverOverlay() {
@@ -577,6 +739,9 @@ void MainWindow::buildMenus() {
     act(file, "Dự án mới", {K::New}, [this] {
         if (confirmDiscard()) editor_->newProject("Dự án mới", 1920, 1080, 30);
     });
+    act(file, "Trang bắt đầu", {K("Ctrl+Shift+H")}, [this] {
+        if (confirmDiscard()) showHome();
+    });
     act(file, "Mở dự án…", {K::Open}, [this] {
         if (!confirmDiscard()) return;
         const QString d = QFileDialog::getExistingDirectory(this, "Mở project (.vstudio)");
@@ -622,6 +787,21 @@ void MainWindow::buildMenus() {
     act(editMenu, "Keyframe âm thanh", {K("Ctrl+Shift+K")}, [this] { editor_->toggleKeyframe(true); });
     act(editMenu, "Bỏ zoom tại playhead", {}, [this] { editor_->resetZoom(); });
     editMenu->addSeparator();
+    QAction* rangeIn = act(editMenu, "Điểm đầu đoạn (tại playhead)", {K("I")}, [this] { editor_->setRangeStart(); });
+    QAction* rangeOut = act(editMenu, "Điểm cuối đoạn (tại playhead)", {K("O")}, [this] { editor_->setRangeEnd(); });
+    act(editMenu, "Bỏ đoạn đã chọn", {K("Alt+X")}, [this] { editor_->clearRange(); });
+    editMenu->addSeparator();
+    QAction* rotR = act(editMenu, "Xoay phải 90°", {K("Ctrl+R")}, [this] { editor_->rotateClip(90); });
+    QAction* rotL = act(editMenu, "Xoay trái 90°", {K("Ctrl+Shift+R")}, [this] { editor_->rotateClip(270); });
+    QAction* flipH = act(editMenu, "Lật ngang", {}, [this] { editor_->flipClip(true); });
+    act(editMenu, "Lật dọc", {}, [this] { editor_->flipClip(false); });
+    QAction* freeze = act(editMenu, "Đóng băng khung hình (3 giây)", {}, [this] { editor_->freezeFrame(3.0); });
+    QAction* reverse = act(editMenu, "Đảo ngược clip", {}, [this] {
+        const QString c = editor_->selectedClip();
+        if (c.isEmpty()) return;
+        editor_->setReversed({c}, !editor_->clipReversed(c));
+    });
+    editMenu->addSeparator();
     act(editMenu, "Thêm track video", {K("Ctrl+Shift+V")}, [this] { editor_->addTrack(false); });
     act(editMenu, "Thêm track âm thanh", {K("Ctrl+Shift+A")}, [this] { editor_->addTrack(true); });
 
@@ -659,6 +839,56 @@ void MainWindow::buildMenus() {
 
     QMenu* help = menuBar()->addMenu("&Trợ giúp");
     act(help, "Phím tắt", {K(Qt::Key_F1), K("Ctrl+/")}, [this] { showShortcuts(); });
+
+    // The main tool row of the prototype, from the same actions (labels shortened there).
+    {
+        QAction* importAct = new QAction("Nhập", this);
+        connect(importAct, &QAction::triggered, this, [this] { importMedia(); });
+        QAction* saveAct = new QAction("Lưu", this);
+        connect(saveAct, &QAction::triggered, this, [this] {
+            const QString f = QFileDialog::getSaveFileName(this, "Lưu project", {}, "Video Studio (*.vstudio)");
+            if (!f.isEmpty()) editor_->saveProject(QUrl::fromLocalFile(f));
+        });
+        QAction* splitAct = new QAction("Tách", this);
+        splitAct->setToolTip("Tách các clip dưới playhead (S)");
+        connect(splitAct, &QAction::triggered, editor_, &EditorController::splitAtPlayhead);
+        QAction* textAct = new QAction("Chữ", this);
+        connect(textAct, &QAction::triggered, this, [this] {
+            textDock_->show();
+            textDock_->raise();
+        });
+        QAction* gradeAct = new QAction("Màu nâng cao", this);
+        connect(gradeAct, &QAction::triggered, this, [this] {
+            gradeDock_->show();
+            gradeDock_->raise();
+        });
+        rangeIn->setIconText("[ Điểm đầu");
+        rangeOut->setIconText("Điểm cuối ]");
+        rotR->setIconText("⟳ Xoay");
+        rotL->setIconText("⟲");
+        flipH->setIconText("⇋ Lật");
+        freeze->setIconText("Đóng băng");
+        reverse->setIconText("Đảo ngược");
+        undo_->setIconText("↶");
+        redo_->setIconText("↷");
+        for (QAction* a : {importAct, saveAct}) mainBar_->addAction(a);
+        mainBar_->addSeparator();
+        mainBar_->addAction(undo_);
+        mainBar_->addAction(redo_);
+        mainBar_->addSeparator();
+        for (QAction* a : {splitAct, rangeIn, rangeOut}) mainBar_->addAction(a);
+        mainBar_->addSeparator();
+        for (QAction* a : {rotL, rotR, flipH, textAct, freeze, reverse, gradeAct}) mainBar_->addAction(a);
+        auto* spacer = new QWidget(mainBar_);
+        spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        mainBar_->addWidget(spacer);
+        mainBar_->addWidget(exportBtn_);
+        for (QAction* a : mainBar_->actions()) {
+            if (a->isSeparator() || !a->toolTip().isEmpty() && a->toolTip() != a->iconText()) continue;
+            const QString keys = a->shortcut().toString(K::NativeText);
+            a->setToolTip(keys.isEmpty() ? a->text() : QString("%1 (%2)").arg(a->text(), keys));
+        }
+    }
 
     // Timeline tools reuse the same actions, so state and shortcuts stay in one place.
     zoomIn->setIconText("+");  // toolbar label; the menu keeps the full name
@@ -869,13 +1099,29 @@ void MainWindow::saveLayout() const {
     QSettings settings;
     settings.beginGroup("workspace");
     settings.setValue("geometry", saveGeometry());
-    settings.setValue("state", saveState());
+    settings.setValue("state", saveState(kLayoutVersion));
 }
 
 void MainWindow::resetLayout() {
-    restoreState(defaultState_);
+    restoreState(defaultState_, kLayoutVersion);
     for (QDockWidget* d : findChildren<QDockWidget*>()) d->show();
 }
+
+void MainWindow::showHome() {
+    recent_->slideOut();
+    home_->setProjects(editor_->recentProjects(false, 40), &EditorController::projectPoster);
+    home_->setGeometry(rect());
+    home_->show();
+    home_->raise();
+    statusBar()->hide();
+}
+
+void MainWindow::hideHome() {
+    home_->hide();
+    statusBar()->show();
+}
+
+bool MainWindow::homeShown() const { return home_ && home_->isVisible(); }
 
 void MainWindow::showRecentProjects() {
     recent_->setCards(editor_->recentProjects(true, 12), &EditorController::projectPoster);
@@ -885,6 +1131,14 @@ void MainWindow::showRecentProjects() {
 
 void MainWindow::resizeEvent(QResizeEvent* e) {
     QMainWindow::resizeEvent(e);
+    if (home_) home_->setGeometry(rect());
+    // Once the window is wide enough (and no saved layout set the widths), give the side panels
+    // about the widths of the approved demo: library on the left, clip settings on the right.
+    if (!sidePanelsFitted_ && width() >= 1200 && mediaDock_ && inspectorDock_) {
+        sidePanelsFitted_ = true;
+        if (!restoredLayout_)
+            resizeDocks({mediaDock_, inspectorDock_}, {width() * 24 / 100, width() * 23 / 100}, Qt::Horizontal);
+    }
     if (recent_) recent_->place();
 }
 

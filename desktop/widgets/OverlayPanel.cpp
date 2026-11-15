@@ -67,6 +67,24 @@ OverlayPanel::OverlayPanel(EditorController* editor, QWidget* parent) : QWidget(
     editorBox_ = new QWidget(this);
     auto* form = new QFormLayout(editorBox_);
     form->setContentsMargins(0, 0, 0, 0);
+    // Length first: an overlay usually runs over the whole video. The two ends can also be dragged
+    // freely on the Timeline, with no length limit.
+    {
+        auto* span = new QWidget(editorBox_);
+        auto* sl = new QHBoxLayout(span);
+        sl->setContentsMargins(0, 0, 0, 0);
+        auto* all = new QPushButton(tr("Cả video"), span);
+        all->setObjectName("overlaySpanAll");
+        auto* rest = new QPushButton(tr("Từ đây đến hết"), span);
+        rest->setObjectName("overlaySpanRest");
+        all->setToolTip(tr("Lớp phủ chạy từ đầu tới cuối video. Có thể kéo hai đầu trên Timeline để co giãn tự do."));
+        sl->addWidget(all);
+        sl->addWidget(rest);
+        sl->addStretch();
+        form->addRow(tr("Thời lượng"), span);
+        connect(all, &QPushButton::clicked, this, [this] { editor_->setGeneratedSpan(true); });
+        connect(rest, &QPushButton::clicked, this, [this] { editor_->setGeneratedSpan(false); });
+    }
     for (const Setting& s : kSettings) {
         auto* sl = new QSlider(Qt::Horizontal, editorBox_);
         sl->setRange(s.lo, s.hi);
@@ -95,8 +113,8 @@ OverlayPanel::OverlayPanel(EditorController* editor, QWidget* parent) : QWidget(
     rl->addWidget(color_);
     rl->addWidget(colorReset_);
     rl->addStretch();
-    rl->addWidget(full_);
     form->addRow(QString(), row);
+    form->addRow(QString(), full_);  // own row: keeps the side panel narrow
     l->addWidget(editorBox_);
 
     hoverTimer_ = new QTimer(this);

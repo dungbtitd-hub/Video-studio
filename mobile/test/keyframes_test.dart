@@ -72,6 +72,7 @@ void main() {
               state: st,
               video: video,
               hasKeys: true,
+              pictureKeys: 1,
               onToggle: (g) => log.add('toggle ${g.name}'),
               onJump: (fwd) => log.add('jump $fwd'),
               onVolume: (v) => log.add('volume ${v.toStringAsFixed(2)}'),
@@ -91,8 +92,9 @@ void main() {
           'audio_animated': aud,
         });
     await pump(state(pic: true));
-    expect(find.text('◆ Hình'), findsOneWidget);
+    expect(find.text('◆ Bỏ điểm này'), findsOneWidget); // on a key: tapping removes it
     expect(find.text('◇ Âm thanh'), findsOneWidget);
+    expect(find.textContaining('Đang ở một điểm keyframe'), findsOneWidget);
     await tester.tap(find.byKey(const Key('kf-picture')));
     await tester.tap(find.byKey(const Key('kf-audio')));
     await tester.tap(find.byKey(const Key('kf-next')));
@@ -103,11 +105,17 @@ void main() {
     await tester.drag(find.byKey(const Key('kf-volume')), const Offset(-60, 0));
     await tester.pump();
     expect(log.where((e) => e.startsWith('volume')), hasLength(1));
-    // Audio-only clip: no picture keys; outside a clip: nothing.
+    // Off a key: the next step of the guide.
+    await pump(state());
+    expect(find.text('◆ Điểm cuối'), findsOneWidget);
+    expect(find.textContaining('Bước 2'), findsOneWidget);
+    // Audio-only clip: no picture keys; the button sets sound keys.
     await pump(state(), video: false);
     log.clear();
-    await tester.tap(find.byKey(const Key('kf-picture')));
-    expect(log, isEmpty);
+    expect(find.byKey(const Key('kf-picture')), findsNothing);
+    await tester.tap(find.byKey(const Key('kf-audio')));
+    expect(log, ['toggle audio']);
+    log.clear();
     await pump(null);
     await tester.tap(find.byKey(const Key('kf-audio')));
     expect(log, isEmpty);
@@ -145,13 +153,15 @@ void main() {
         ),
       ),
     ));
-    final lanes = tester.getTopLeft(find.byType(CustomPaint).last);
-    const px = 40.0, top = TimelineView.rulerH + 4.0;
-    await tester.tapAt(lanes + const Offset(3.0 * px + 4, top + 6)); // picture diamond, near enough
+    // The playhead (0 s) is in the middle of the 800 px lanes: time t is at x = 400 + 40 t.
+    final lanes = tester.getTopLeft(find.byType(CustomPaint).last) + const Offset(400, 0);
+    const px = 40.0;
+    final top = TimelineView.laneTops(project).$1[0], h = TimelineView.laneHeight(project.tracks[0]);
+    await tester.tapAt(lanes + Offset(3.0 * px + 4, top + 6)); // picture diamond, near enough
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tapAt(lanes + const Offset(2.0 * px - 3, top + TimelineView.trackH - 10 - 6)); // audio diamond
+    await tester.tapAt(lanes + Offset(2.0 * px - 3, top + h - 6)); // audio diamond
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tapAt(lanes + const Offset(2.5 * px, top + 20)); // no key there: plain select
+    await tester.tapAt(lanes + Offset(2.5 * px, top + h / 2)); // no key there: plain select
     await tester.pump(const Duration(milliseconds: 500));
     expect(seeks, [3.0, 2.0]);
   });

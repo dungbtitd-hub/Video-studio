@@ -7,7 +7,7 @@ target_include_directories(vstudio_apple PUBLIC $<BUILD_INTERFACE:${CMAKE_CURREN
 target_compile_options(vstudio_apple PRIVATE -fobjc-arc)
 target_link_libraries(vstudio_apple PUBLIC vstudio::core
   "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework Foundation" "-framework Metal"
-  "-framework CoreImage" "-framework CoreGraphics")
+  "-framework CoreImage" "-framework CoreGraphics" "-framework ImageIO")
 target_compile_definitions(vstudio_apple PUBLIC VSTUDIO_HAS_APPLE_MEDIA=1 VSTUDIO_HAS_METAL=1)
 
 if(VSTUDIO_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")

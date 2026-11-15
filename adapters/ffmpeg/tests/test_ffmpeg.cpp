@@ -1,4 +1,5 @@
 // FFmpeg module: lazy registration, 10-bit decode, plus the shared backend conformance suite.
+#include <cstdio>
 #include <set>
 
 #include "backend_conformance.hpp"
@@ -157,4 +158,76 @@ TEST("ffmpeg: graded 10-bit footage exports as H.265 10-bit without losing level
         levels.insert(static_cast<int>(std::lround(halfToFloat(f->half[(static_cast<std::size_t>(f->height / 2) * f->width + x) * 4 + 1]) * 1023)));
     std::printf("       %zu levels after grade + H.265 10-bit\n", levels.size());
     CHECK(levels.size() > 400u);  // an 8-bit path keeps at most 256
+}
+
+namespace {
+
+// A JPEG photo: left half red, right half blue.
+std::string makePhoto() {
+    const std::string path = (vtest::conformance::workDir() / "photo.jpg").string();
+    constexpr int W = 320, H = 240;
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+    if (!codec) throw std::runtime_error("no mjpeg");
+    AVCodecContext* c = avcodec_alloc_context3(codec);
+    c->width = W;
+    c->height = H;
+    c->pix_fmt = AV_PIX_FMT_YUVJ444P;
+    c->time_base = {1, 25};
+    if (avcodec_open2(c, codec, nullptr) < 0) throw std::runtime_error("mjpeg open");
+    AVFrame* f = av_frame_alloc();
+    f->width = W;
+    f->height = H;
+    f->format = c->pix_fmt;
+    av_frame_get_buffer(f, 0);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {  // full-range BT.601: red (76,85,255), blue (29,255,107)
+            const bool left = x < W / 2;
+            f->data[0][y * f->linesize[0] + x] = left ? 76 : 29;
+            f->data[1][y * f->linesize[1] + x] = left ? 85 : 255;
+            f->data[2][y * f->linesize[2] + x] = left ? 255 : 107;
+        }
+    f->pts = 0;
+    AVPacket* pkt = av_packet_alloc();
+    avcodec_send_frame(c, f);
+    avcodec_send_frame(c, nullptr);
+    // The bare JPEG bytes, as a camera or phone writes them (a .jpg file is one JPEG image).
+    std::FILE* out = std::fopen(path.c_str(), "wb");
+    while (avcodec_receive_packet(c, pkt) == 0) {
+        std::fwrite(pkt->data, 1, static_cast<std::size_t>(pkt->size), out);
+        av_packet_unref(pkt);
+    }
+    std::fclose(out);
+    av_packet_free(&pkt);
+    av_frame_free(&f);
+    avcodec_free_context(&c);
+    return path;
+}
+
+}  // namespace
+
+TEST("ffmpeg: a JPEG photo decodes, again and again, at any time and size") {
+    ModuleRegistry r;
+    ffmpeg::registerModule(r);
+    auto b = r.best<IMediaBackend>("decode");
+    const std::string path = makePhoto();
+    std::string err;
+    auto pr = b->probe(path, &err);
+    CHECK(pr.has_value());
+    CHECK(pr->isStillImage);
+    auto d = b->createDecoder();
+    CHECK(d->open(path, &err));
+    d->setMaxOutputSize(160, 120);
+    // A photo clip asks for its picture at many times; image demuxers cannot seek back.
+    for (const double s : {0.0, 2.5, 0.0, 10.0}) {
+        auto f = d->videoFrameAt(Time::fromSeconds(s));
+        CHECK(f.has_value());
+        CHECK(f->width == 160 && f->height == 120);
+        const auto* left = &f->rgba[(60 * 160 + 20) * 4];
+        const auto* right = &f->rgba[(60 * 160 + 140) * 4];
+        CHECK(left[0] > 200 && left[2] < 60);
+        CHECK(right[2] > 200 && right[0] < 60);
+    }
+    d->setMaxOutputSize(80, 60);  // a new size re-converts the kept frame
+    auto small = d->videoFrameAt(Time::zero());
+    CHECK(small.has_value() && small->width == 80);
 }

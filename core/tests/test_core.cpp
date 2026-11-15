@@ -24,6 +24,7 @@
 #include "vstudio/fonts.hpp"
 #include "vstudio/generators.hpp"
 #include "vstudio/motion.hpp"
+#include "vstudio/orientation.hpp"
 #include "vstudio/overlays.hpp"
 #include "vstudio/stickers.hpp"
 #include "vstudio/text.hpp"
@@ -2250,4 +2251,170 @@ TEST("video effects on clips: one per group, after colour, fixed order, undoable
     const VideoFrame before = frame;
     applyClipEffects(mods, *f.ed.project().findClip(a), frame, sec(1), nullptr, {});
     CHECK(frame.rgba != before.rgba);
+}
+
+// ------------------------------------------------------------------ orientation and lanes
+
+namespace {
+
+VideoFrame numbered(int w, int h) {
+    VideoFrame f;
+    f.allocate(w, h);
+    for (int i = 0; i < w * h; ++i) {
+        f.rgba[static_cast<std::size_t>(i) * 4] = static_cast<std::uint8_t>(i);
+        f.rgba[static_cast<std::size_t>(i) * 4 + 3] = 255;
+    }
+    return f;
+}
+
+std::uint8_t at(const VideoFrame& f, int x, int y) { return f.rgba[(static_cast<std::size_t>(y) * f.width + x) * 4]; }
+
+// Is the canvas pixel covered by picture (the fake media is never black)?
+bool covered(const VideoFrame& f, int x, int y) { return f.rgba[(static_cast<std::size_t>(y) * f.width + x) * 4 + 1] > 20; }
+
+}  // namespace
+
+TEST("orientation: frames turn clockwise, flip, and come back") {
+    // 3 x 2:  0 1 2 / 3 4 5
+    VideoFrame f = numbered(3, 2);
+    orientFrame(f, {90, false, false});
+    CHECK_EQ(f.width, 2);
+    CHECK_EQ(f.height, 3);
+    // Turned clockwise: the bottom-left (3) is now top-left, the top-left (0) top-right.
+    CHECK_EQ(int(at(f, 0, 0)), 3);
+    CHECK_EQ(int(at(f, 1, 0)), 0);
+    CHECK_EQ(int(at(f, 1, 2)), 2);
+    orientFrame(f, {270, false, false});
+    CHECK(f.rgba == numbered(3, 2).rgba);
+    orientFrame(f, {180, true, false});  // 180 then mirror = flip upside down
+    CHECK_EQ(int(at(f, 0, 0)), 3);
+    CHECK_EQ(int(at(f, 2, 1)), 2);
+    // Deep frames turn too.
+    VideoFrame d = numbered(3, 2);
+    convertFrame(d, PixelFormat::RGBA16F);
+    orientFrame(d, {90, false, true});
+    CHECK(d.deep() && d.width == 2 && d.height == 3);
+    CHECK_EQ(normalizeQuarterTurn(-90), 270);
+    CHECK_EQ(normalizeQuarterTurn(450), 90);
+    CHECK_EQ(Orientation{}.key(), std::string());
+    CHECK_EQ((Orientation{90, true, false}.key()), std::string("r90h"));
+}
+
+TEST("orientation: fitFrame keeps the whole picture inside the box") {
+    VideoFrame f;
+    f.allocate(400, 100);
+    for (std::size_t i = 0; i < f.rgba.size(); i += 4) f.rgba[i] = f.rgba[i + 3] = 200;
+    const VideoFrame s = fitFrame(f, 100, 100);
+    CHECK_EQ(s.width, 100);
+    CHECK_EQ(s.height, 25);
+    CHECK_EQ(int(s.rgba[0]), 200);
+    CHECK(fitFrame(s, 200, 200).width == 100);  // already fits
+}
+
+TEST("orientation: EXIF orientation of a JPEG") {
+    const auto dir = std::filesystem::temp_directory_path() / "vs_exif_test";
+    std::filesystem::create_directories(dir);
+    // SOI, APP1 "Exif" with a little-endian TIFF header and one IFD entry: Orientation = 6.
+    const std::vector<unsigned char> jpeg = {
+        0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x22, 'E', 'x', 'i', 'f', 0, 0,   // APP1, length 34
+        'I', 'I', 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,                   // TIFF, IFD0 at 8
+        0x01, 0x00,                                                     // 1 entry
+        0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,  // 0x0112 SHORT 1 = 6
+        0x00, 0x00, 0x00, 0x00,                                         // next IFD
+        0xFF, 0xDA};
+    const auto path = (dir / "p.jpg").string();
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(jpeg.data()), static_cast<std::streamsize>(jpeg.size()));
+    CHECK(jpegExifOrientation(path) == std::optional<int>(6));
+    CHECK_EQ(fromExif(6).rotate, 90);
+    CHECK_EQ(fromExif(8).rotate, 270);
+    CHECK(fromExif(1).identity());
+    std::ofstream((dir / "x.jpg").string()) << "not a jpeg";
+    CHECK(!jpegExifOrientation((dir / "x.jpg").string()).has_value());
+    std::filesystem::remove_all(dir);
+}
+
+TEST("orientation: a phone's portrait video fills a portrait canvas; the user can turn and flip clips") {
+    Editor ed{Editor::newProject("Dọc", 360, 640, {30, 1}, "test")};
+    MediaAsset a = syntheticAsset("A", 4);  // 64 x 36 pixels...
+    a.extra["rotation"] = 90;              // ...shown upright as 36 x 64
+    const Id asset = ed.addAsset(a);
+    const Id v = ed.addTrack(TrackType::Video, "V");
+    const Id c = ed.appendClip(v, asset, sec(0), sec(4));
+    CHECK((displaySize(ed.project().assets.front()) == std::pair{36, 64}));
+    auto backend = std::make_shared<fake::Backend>();
+    MediaPool pool(backend, "");
+    {
+        Renderer r(ed.project(), pool);
+        const VideoFrame out = r.renderVideo(sec(1), 360, 640);
+        CHECK(covered(out, 180, 20));  // fills the frame: no black band at the top
+    }
+    // Turned back by the user (90 + 270 = upright file pixels): a landscape band again.
+    ed.setClipOrientation({c}, {270, false, false});
+    CHECK_EQ(clipOrientation(*ed.project().findClip(c)).rotate, 270);
+    {
+        Renderer r(ed.project(), pool);
+        const VideoFrame out = r.renderVideo(sec(1), 360, 640);
+        CHECK(!covered(out, 180, 20));
+        CHECK(covered(out, 180, 320));
+    }
+    ed.undo();
+    CHECK(clipOrientation(*ed.project().findClip(c)).identity());
+    ed.setClipOrientation({c}, {0, true, false});
+    const Project back = projectFromJson(toJson(ed.project()));
+    CHECK(clipOrientation(*back.findClip(c)).flipH);
+    ed.setClipOrientation({c}, {});
+    CHECK(!ed.project().findClip(c)->extra.contains("orient"));
+    const Id text = ed.addGeneratedClip(text::defaultTextContent("Chữ"), sec(0), sec(1));
+    CHECK_THROWS(ed.setClipOrientation({text}, {90, false, false}));  // texts have their own rotation
+}
+
+TEST("lanes: texts, stickers and overlays each get lanes of their own, never the media track") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(10));
+    const Id t1 = f.ed.addGeneratedClip(text::defaultTextContent("A"), sec(0), sec(2));
+    const Id s1 = f.ed.addGeneratedClip(stickers::defaultStickerContent("star_gold"), sec(5), sec(2));  // free time, other kind
+    const Id o1 = f.ed.addGeneratedClip(overlays::defaultOverlayContent(overlays::overlayCatalog().front().id), sec(8), sec(1));
+    const Project& p = f.ed.project();
+    const Track* tt = p.trackOfClip(t1);
+    CHECK(tt != p.trackOfClip(s1) && tt != p.trackOfClip(o1) && p.trackOfClip(s1) != p.trackOfClip(o1));
+    CHECK_EQ(trackLane(*tt), std::string("text"));
+    CHECK_EQ(trackLane(*p.trackOfClip(s1)), std::string("sticker"));
+    CHECK_EQ(trackLane(*p.trackOfClip(o1)), std::string("overlay"));
+    CHECK_EQ(trackLane(*p.findTrack(f.v1)), std::string("media"));
+    // A second text at a free time shares the text lane.
+    const Id t2 = f.ed.addGeneratedClip(text::defaultTextContent("B"), sec(6), sec(1));
+    CHECK(f.ed.project().trackOfClip(t2) == f.ed.project().trackOfClip(t1));
+    // Older projects without the mark: a track of texts only is a text lane.
+    Track old;
+    old.clips.push_back(*f.ed.project().findClip(t1));
+    CHECK_EQ(trackLane(old), std::string("text"));
+    old.clips.push_back(*f.ed.project().findClip(s1));
+    CHECK_EQ(trackLane(old), std::string("mixed"));
+    // The mark is saved.
+    const Project back = projectFromJson(toJson(f.ed.project()));
+    CHECK_EQ(trackLane(*back.trackOfClip(t1)), std::string("text"));
+}
+
+TEST("lanes: an overlay effect stretched over the whole video in one step") {
+    Fixture f;
+    f.ed.appendClip(f.v1, f.asset, sec(0), sec(10));
+    const Json snow = overlays::defaultOverlayContent(overlays::overlayCatalog().front().id);
+    const Id o1 = f.ed.addGeneratedClip(snow, sec(2), sec(3));
+    const Id o2 = f.ed.addGeneratedClip(snow, sec(6), sec(1));  // same lane, later
+    CHECK(f.ed.project().trackOfClip(o1) == f.ed.project().trackOfClip(o2));
+    const auto revision = f.ed.revision();
+    f.ed.setGeneratedClipSpan(o1, sec(0), sec(10));
+    CHECK_EQ(f.ed.revision(), revision + 1);  // one undo step
+    const Clip* c = f.ed.project().findClip(o1);
+    CHECK(c->timelineIn == sec(0) && c->timelineOut() == sec(10));
+    // Its lane was taken by o2 there: it moved to another overlay lane.
+    CHECK(f.ed.project().trackOfClip(o1) != f.ed.project().trackOfClip(o2));
+    CHECK_EQ(trackLane(*f.ed.project().trackOfClip(o1)), std::string("overlay"));
+    f.ed.undo();
+    CHECK(f.ed.project().findClip(o1)->timelineIn == sec(2));
+    CHECK(f.ed.project().trackOfClip(o1) == f.ed.project().trackOfClip(o2));
+    f.ed.setGeneratedClipSpan(o2, sec(6), sec(30));  // longer than any media: fine
+    CHECK(f.ed.project().findClip(o2)->timelineOut() == sec(30));
+    CHECK_THROWS(f.ed.setGeneratedClipSpan(o2, sec(5), sec(5)));
+    CHECK_THROWS(f.ed.setGeneratedClipSpan(f.ed.project().findTrack(f.v1)->clips.front().id, sec(0), sec(1)));
 }

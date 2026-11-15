@@ -151,6 +151,24 @@ class PreviewZoomState extends State<PreviewZoom> {
   }
 }
 
+/// What the keyframe bar tells the user to do next, from the keys the clip already has.
+/// Keys are always set at the fixed playhead: scrub the timeline under it, then tap.
+String keyframeGuide({required bool inside, required bool video, required int keys, required bool here}) {
+  if (!inside) return 'Vuốt timeline để đưa thanh playback vào clip đang chọn.';
+  if (here) {
+    return video
+        ? 'Đang ở một điểm keyframe: dùng hai ngón tay phóng to / kéo hình, hoặc kéo âm lượng. Bấm ◆ lần nữa để bỏ điểm này.'
+        : 'Đang ở một điểm keyframe: kéo âm lượng. Bấm ◆ lần nữa để bỏ điểm này.';
+  }
+  if (keys == 0) return 'Bước 1: vuốt timeline tới chỗ bắt đầu, bấm ◆ Điểm đầu.';
+  if (keys == 1) return 'Bước 2: vuốt tiếp tới chỗ kết thúc, bấm ◆ Điểm cuối, rồi chỉnh hình hoặc âm lượng ở đó.';
+  return 'Đoạn giữa các điểm ◆ chuyển dần. Chạm ◆ trên clip để nhảy tới, hoặc bấm ◆ Thêm điểm ở chỗ khác.';
+}
+
+/// Label of the main keyframe button.
+String keyframeAction({required int keys, required bool here}) =>
+    here ? '◆ Bỏ điểm này' : (keys == 0 ? '◆ Điểm đầu' : (keys == 1 ? '◆ Điểm cuối' : '◆ Thêm điểm'));
+
 class KeyframeBar extends StatefulWidget {
   const KeyframeBar({
     super.key,
@@ -160,10 +178,13 @@ class KeyframeBar extends StatefulWidget {
     required this.onToggle,
     required this.onJump,
     required this.onVolume,
+    this.pictureKeys = 0,
+    this.audioKeys = 0,
   });
   final ClipKeyState? state; // null: no clip under the playhead
   final bool video; // the clip has a picture
   final bool hasKeys; // the clip has keys to jump between
+  final int pictureKeys, audioKeys; // keys the clip has (for the step-by-step guide)
   final void Function(KeyGroup group) onToggle;
   final void Function(bool forward) onJump;
   final ValueChanged<double> onVolume; // gain, 1 = unchanged
@@ -175,66 +196,91 @@ class KeyframeBar extends StatefulWidget {
 class _KeyframeBarState extends State<KeyframeBar> {
   double? _dragging; // volume while the slider is held
 
-  Widget _key(String label, bool here, bool enabled, VoidCallback onTap, Key key) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2),
-        child: ChoiceChip(
-          key: key,
-          label: Text('${here ? '◆' : '◇'} $label', style: const TextStyle(fontSize: 12)),
-          selected: here,
-          showCheckmark: false,
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          selectedColor: VsColors.accent.withValues(alpha: 0.25),
-          onSelected: enabled ? (_) => onTap() : null,
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
     final st = widget.state;
     final ok = st != null && st.inside;
     final volume = _dragging ?? (ok ? st.volume : 1.0);
+    // The picture is the main group for video; sound alone for audio clips.
+    final picture = widget.video;
+    final keys = picture ? widget.pictureKeys : widget.audioKeys;
+    final here = ok && (picture ? st.pictureHere : st.audioHere);
     return Container(
       color: VsColors.panel,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Row(children: [
-        IconButton(
-          key: const Key('kf-prev'),
-          tooltip: 'Keyframe trước',
-          visualDensity: VisualDensity.compact,
-          icon: const Text('◀◆', style: TextStyle(fontSize: 12)),
-          onPressed: widget.hasKeys ? () => widget.onJump(false) : null,
+      padding: const EdgeInsets.fromLTRB(8, 6, 4, 0),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 2),
+          child: Text('Keyframe', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
         ),
-        _key('Hình', ok && st.pictureHere, ok && widget.video, () => widget.onToggle(KeyGroup.picture),
-            const Key('kf-picture')),
-        _key('Âm thanh', ok && st.audioHere, ok, () => widget.onToggle(KeyGroup.audio), const Key('kf-audio')),
-        IconButton(
-          key: const Key('kf-next'),
-          tooltip: 'Keyframe sau',
-          visualDensity: VisualDensity.compact,
-          icon: const Text('◆▶', style: TextStyle(fontSize: 12)),
-          onPressed: widget.hasKeys ? () => widget.onJump(true) : null,
-        ),
-        const Icon(Icons.volume_up_outlined, size: 18, color: VsColors.fg2),
-        Expanded(
-          child: Slider(
-            key: const Key('kf-volume'),
-            value: volume.clamp(0, 4).toDouble(),
-            max: 4,
-            divisions: 80,
-            onChanged: ok ? (v) => setState(() => _dragging = v) : null,
-            onChangeEnd: ok
-                ? (v) {
-                    setState(() => _dragging = null);
-                    widget.onVolume(v);
-                  }
-                : null,
+        Text(keyframeGuide(inside: ok, video: picture, keys: keys, here: here),
+            key: const Key('kf-guide'), style: const TextStyle(fontSize: 12, color: VsColors.fg2)),
+        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+          IconButton(
+            key: const Key('kf-prev'),
+            tooltip: 'Keyframe trước',
+            visualDensity: VisualDensity.compact,
+            icon: const Text('◀◆', style: TextStyle(fontSize: 12)),
+            onPressed: widget.hasKeys ? () => widget.onJump(false) : null,
           ),
-        ),
-        SizedBox(
-          width: 40,
-          child: Text('${(volume * 100).round()}%', style: const TextStyle(fontSize: 11, color: VsColors.fg2)),
-        ),
+          FilledButton.tonal(
+            key: Key(picture ? 'kf-picture' : 'kf-audio'),
+            style: FilledButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              backgroundColor: here ? VsColors.accent : VsColors.raised,
+              foregroundColor: here ? VsColors.accentInk : VsColors.fg,
+            ),
+            onPressed: ok ? () => widget.onToggle(picture ? KeyGroup.picture : KeyGroup.audio) : null,
+            child: Text(keyframeAction(keys: keys, here: here), style: const TextStyle(fontSize: 12)),
+          ),
+          if (picture)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: ChoiceChip(
+                key: const Key('kf-audio'),
+                label: Text('${ok && st.audioHere ? '◆' : '◇'} Âm thanh', style: const TextStyle(fontSize: 12)),
+                selected: ok && st.audioHere,
+                showCheckmark: false,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                selectedColor: VsColors.accent.withValues(alpha: 0.25),
+                onSelected: ok ? (_) => widget.onToggle(KeyGroup.audio) : null,
+              ),
+            ),
+          IconButton(
+            key: const Key('kf-next'),
+            tooltip: 'Keyframe sau',
+            visualDensity: VisualDensity.compact,
+            icon: const Text('◆▶', style: TextStyle(fontSize: 12)),
+            onPressed: widget.hasKeys ? () => widget.onJump(true) : null,
+          ),
+        ]),
+        // Volume on its own row: the bar also fits the narrow side panel of a foldable.
+        Row(children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 12),
+            child: Icon(Icons.volume_up_outlined, size: 18, color: VsColors.fg2),
+          ),
+          Expanded(
+            child: Slider(
+              key: const Key('kf-volume'),
+              value: volume.clamp(0, 4).toDouble(),
+              max: 4,
+              divisions: 80,
+              onChanged: ok ? (v) => setState(() => _dragging = v) : null,
+              onChangeEnd: ok
+                  ? (v) {
+                      setState(() => _dragging = null);
+                      widget.onVolume(v);
+                    }
+                  : null,
+            ),
+          ),
+          SizedBox(
+            width: 40,
+            child: Text('${(volume * 100).round()}%', style: const TextStyle(fontSize: 11, color: VsColors.fg2)),
+          ),
+        ]),
       ]),
     );
   }
